@@ -72,7 +72,6 @@ class ResolvedTool:
     risk_level: Literal["safe", "write", "destructive"] = "safe"
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["platform", "user", "auto"] = "auto"
     risk_flags: List[str] = field(default_factory=list)
     publication: Optional[PublicationDecision] = None
     publication_view: Optional[ToolPublicationView] = None
@@ -93,7 +92,6 @@ class ResolvedTool:
             "risk_level": self.risk_level,
             "idempotent": self.idempotent,
             "requires_confirmation": self.requires_confirmation,
-            "credential_scope": self.credential_scope,
             "risk_flags": list(self.risk_flags),
             "publication_view": self.publication_view.to_dict() if self.publication_view else None,
             "input_schema": self.input_schema,
@@ -158,21 +156,31 @@ class ToolResolver:
             source_kind="virtual",
             container=container,
         )
+        is_mcp_tool = str(getattr(discovered_tool, "source", "") or "").strip().lower() == "mcp"
         discovered_operation = parse_discovered_operation(
             tool_name=discovered_tool.slug,
             description=discovered_tool.description,
             input_schema=discovered_tool.input_schema,
             output_schema=discovered_tool.output_schema,
+            trust_runtime_metadata=not is_mcp_tool,
         )
         description = (
             discovered_operation.description.strip()
             if discovered_operation.description and discovered_operation.description.strip()
             else (publication.spec.description if publication else "")
         )
+        stored_risk = str(getattr(discovered_tool, "risk_level", "") or "").strip().lower()
+        if is_mcp_tool and stored_risk not in {"safe", "risky"}:
+            logger.warning(
+                "mcp_operation_unclassified",
+                extra={"provider_instance_id": str(provider.id), "tool_slug": raw_operation_name},
+            )
+            return None
         runtime_risk_level = _resolve_risk_level(
-            getattr(discovered_tool, "risk_level", None),
+            stored_risk if stored_risk in {"safe", "risky"} else getattr(discovered_tool, "risk_level", None),
             discovered_operation.risk_level,
         )
+        is_risky = runtime_risk_level != "safe"
         configured_semantics = (
             sandbox_tool_overrides.semantics.get(discovered_tool_id, {})
             if sandbox_tool_overrides is not None and discovered_tool_id
@@ -184,11 +192,11 @@ class ToolResolver:
                 "title": title,
                 "description": description,
                 "risk_level": runtime_risk_level,
-                "side_effects": discovered_operation.side_effects,
-                "idempotent": True,
-                "requires_confirmation": discovered_operation.requires_confirmation,
-                "credential_scope": discovered_operation.credential_scope,
+                "side_effects": is_risky if is_mcp_tool else discovered_operation.side_effects,
+                "idempotent": not is_risky if is_mcp_tool else True,
+                "requires_confirmation": is_risky if is_mcp_tool else discovered_operation.requires_confirmation,
             },
+            allow_risk_override=not is_mcp_tool,
         )
         return ResolvedTool(
             raw_slug=raw_operation_name,
@@ -205,7 +213,6 @@ class ToolResolver:
             side_effects=effective_semantics["side_effects"],
             idempotent=effective_semantics["idempotent"],
             requires_confirmation=effective_semantics["requires_confirmation"],
-            credential_scope=effective_semantics["credential_scope"],
             publication=publication,
             publication_view=publication_view,
             prompt_context={
@@ -234,7 +241,12 @@ class ToolResolver:
 
 
 _RISK_ORDER = {"safe": 0, "write": 1, "destructive": 2}
-def _apply_semantic_overrides(configured: Dict[str, Any], *, base: Dict[str, Any]) -> Dict[str, Any]:
+def _apply_semantic_overrides(
+    configured: Dict[str, Any],
+    *,
+    base: Dict[str, Any],
+    allow_risk_override: bool = True,
+) -> Dict[str, Any]:
     """Apply supported semantic values without weakening runtime safeguards."""
     effective = dict(base)
     for key in ("title", "description"):
@@ -251,7 +263,7 @@ def _apply_semantic_overrides(configured: Dict[str, Any], *, base: Dict[str, Any
         # cannot label an operation idempotent when its runtime contract does not.
         effective["idempotent"] = bool(base["idempotent"] and idempotent)
     risk = configured.get("risk_level")
-    if isinstance(risk, str) and risk in _RISK_ORDER:
+    if allow_risk_override and isinstance(risk, str) and risk in _RISK_ORDER:
         # Sandbox edits may tighten the risk label, but cannot downgrade the
         # discovered/runtime contract and thereby weaken credential checks.
         effective["risk_level"] = max((base["risk_level"], risk), key=_RISK_ORDER.__getitem__)
@@ -266,7 +278,7 @@ def _resolve_risk_level(
     normalized = str(discovered_risk_level or "").strip().lower().replace("-", "_")
     if normalized in {"safe", "read_only", "readonly"}:
         return "safe"
-    if normalized in {"write", "mutable", "mutating"}:
+    if normalized in {"risky", "write", "mutable", "mutating"}:
         return "write"
     if normalized in {"destructive", "dangerous"}:
         return "destructive"

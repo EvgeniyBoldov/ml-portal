@@ -49,6 +49,20 @@ class LocalProviderKind:
 
 logger = get_logger(__name__)
 
+
+def _normalize_policy_risk(value: Optional[str]) -> Optional[str]:
+    """Normalize a trusted initial classification into the platform binary enum.
+
+    MCP discovery only supplies safe/risky after the adapter policy boundary.
+    Legacy labels are mapped only for first-party local handlers.
+    """
+    normalized = str(value or "").strip().lower().replace("-", "_")
+    if normalized in {"safe", "read_only", "readonly"}:
+        return "safe"
+    if normalized in {"risky", "write", "mutable", "mutating", "destructive", "dangerous"}:
+        return "risky"
+    return None
+
 # PostgreSQL advisory lock expects signed int64.
 # Keep a stable 8-byte key within bigint range.
 _RESCAN_ADVISORY_LOCK_KEY: int = 0x746F6F6C7363616E  # "toolscan"
@@ -175,6 +189,7 @@ class ToolDiscoveryService:
                 description=tool.get("description"),
                 input_schema=tool.get("inputSchema"),
                 output_schema=tool.get("outputSchema"),
+                trust_runtime_metadata=False,
             )
             preview.append(
                 {
@@ -363,6 +378,7 @@ class ToolDiscoveryService:
                         input_schema=tool.get("inputSchema"),
                         output_schema=tool.get("outputSchema"),
                         annotations=tool.get("annotations"),
+                        trust_runtime_metadata=False,
                     )
                     await self._upsert(
                         slug=discovered.name,
@@ -475,6 +491,7 @@ class ToolDiscoveryService:
         - uq_discovered_slug_provider (slug, provider_instance_id) WHERE provider_instance_id IS NOT NULL
         - uq_discovered_local_slug_null_provider (slug) WHERE provider_instance_id IS NULL
         """
+        effective_risk = _normalize_policy_risk(risk_level)
         stmt = pg_insert(DiscoveredTool).values(
             slug=slug,
             name=name,
@@ -484,7 +501,7 @@ class ToolDiscoveryService:
             domains=domains,
             input_schema=input_schema,
             output_schema=output_schema,
-            risk_level=risk_level,
+            risk_level=effective_risk,
             is_active=True,
             last_seen_at=now,
             updated_at=now,
@@ -499,7 +516,7 @@ class ToolDiscoveryService:
                     "domains": domains,
                     "input_schema": input_schema,
                     "output_schema": output_schema,
-                    "risk_level": func.coalesce(risk_level, DiscoveredTool.risk_level),
+                    "risk_level": func.coalesce(DiscoveredTool.risk_level, effective_risk),
                     "is_active": True,
                     "last_seen_at": now,
                     "updated_at": now,
@@ -515,7 +532,7 @@ class ToolDiscoveryService:
                     "domains": domains,
                     "input_schema": input_schema,
                     "output_schema": output_schema,
-                    "risk_level": func.coalesce(risk_level, DiscoveredTool.risk_level),
+                    "risk_level": func.coalesce(DiscoveredTool.risk_level, effective_risk),
                     "is_active": True,
                     "last_seen_at": now,
                     "updated_at": now,
@@ -563,7 +580,10 @@ class ToolDiscoveryService:
 
     async def _delete_inactive_tools(self) -> int:
         """Hard-delete inactive discovered tool snapshots after each rescan."""
-        stmt = delete(DiscoveredTool).where(DiscoveredTool.is_active == False)  # noqa: E712
+        stmt = delete(DiscoveredTool).where(
+            DiscoveredTool.is_active == False,  # noqa: E712
+            DiscoveredTool.risk_level.is_(None),
+        )
         result = await self.session.execute(stmt)
         return int(result.rowcount or 0)
 

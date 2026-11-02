@@ -102,17 +102,25 @@ async def _runtime_tool_summary(
                 description=getattr(discovered_tool, "description", None),
                 input_schema=getattr(discovered_tool, "input_schema", None),
                 output_schema=getattr(discovered_tool, "output_schema", None),
+                trust_runtime_metadata=str(getattr(discovered_tool, "source", "") or "").lower() != "mcp",
             )
+            stored_risk = str(getattr(discovered_tool, "risk_level", "") or "").strip().lower()
+            if str(getattr(discovered_tool, "source", "") or "").lower() == "mcp":
+                operation_risk = stored_risk if stored_risk in {"safe", "risky"} else "unclassified"
+                risky = operation_risk == "risky"
+            else:
+                operation_risk = stored_risk if stored_risk in {"safe", "risky"} else discovered_operation.risk_level
+                risky = operation_risk not in {"safe", "read_only", "readonly"}
             runtime_operations.append(RuntimeOperationListItem(
                 operation_slug=f"collection.{collection.slug}.{capability.canonical_op_slug}",
                 operation=capability.canonical_op_slug,
                 source=str(getattr(discovered_tool, "source", "") or ""),
                 discovered_tool_slug=str(getattr(discovered_tool, "slug", "") or ""),
                 provider_instance_slug=provider.slug,
-                risk_level=discovered_operation.risk_level,
-                side_effects=discovered_operation.side_effects,
+                risk_level=operation_risk,
+                side_effects=risky if str(getattr(discovered_tool, "source", "") or "").lower() == "mcp" else discovered_operation.side_effects,
                 idempotent=True,
-                requires_confirmation=discovered_operation.requires_confirmation,
+                requires_confirmation=risky if str(getattr(discovered_tool, "source", "") or "").lower() == "mcp" else discovered_operation.requires_confirmation,
             ))
     return len(discovered_keys), len(runtime_operations), runtime_operations
 

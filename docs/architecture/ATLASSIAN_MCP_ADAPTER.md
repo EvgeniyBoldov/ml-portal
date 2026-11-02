@@ -34,11 +34,13 @@ precedence at call time.
 - Filter `tools/list` by `ATLASSIAN_MCP_ENABLED_TOOLS` and enforce the same
   allowlist at call time. An empty setting falls back to the small built-in
   read-only allowlist; it does not publish every upstream tool.
-- Add missing `inputSchema.x-runtime` metadata. Upstream `readOnlyHint=true`
-  maps to `safe`; mutating tools map to `write`; delete/remove/archive-like
-  actions map to `destructive`; unknown tools default to `destructive`. These
-  flags are also reflected in `side_effects`, `requires_confirmation`, and
-  `credential_scope=user`. Explicit upstream risk metadata is preserved.
+- Publish only the explicitly configured binary `inputSchema.x-runtime.risk_level`
+  (`safe` or `risky`) for each enabled operation. The small built-in allowlist
+  has an explicit safe classification per operation; enabling any additional
+  operation requires adding its risk descriptor. Upstream risk, credential
+  scope, side-effect, and confirmation metadata are not trusted or forwarded.
+  Credential ownership is selected by runtime from the platform's effective
+  operation risk.
 - Emit operational request logs with a Portal correlation ID, MCP method/tool,
   processing stage, duration, exception class, upstream HTTP status, and JSON-RPC
   code. Arguments, credentials, response bodies, and exception text are omitted.

@@ -2,10 +2,10 @@
 Schemas for DiscoveredTool admin API.
 """
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class DiscoveredToolListItem(BaseModel):
@@ -14,7 +14,7 @@ class DiscoveredToolListItem(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
-    risk_level: Optional[str] = None
+    risk_level: Optional[Literal["safe", "risky"]] = None
     source: str
     provider_instance_id: Optional[UUID] = None
     connector_slug: Optional[str] = None
@@ -34,7 +34,7 @@ class DiscoveredToolDetailResponse(BaseModel):
     slug: str
     name: str
     description: Optional[str] = None
-    risk_level: Optional[str] = None
+    risk_level: Optional[Literal["safe", "risky"]] = None
     source: str
     provider_instance_id: Optional[UUID] = None
     connector_slug: Optional[str] = None
@@ -96,4 +96,13 @@ class DiscoveredToolUpdateRequest(BaseModel):
         default=None,
         description="Publication container link. NULL means discovered-only capability.",
     )
-    risk_level: Optional[str] = Field(default=None, max_length=100)
+    risk_level: Optional[Literal["safe", "risky"]] = Field(default=None)
+
+    @field_validator("risk_level", mode="before")
+    @classmethod
+    def blank_risk_is_unclassified(cls, value: Any) -> Any:
+        # Keep explicit blank values from the admin form equivalent to clearing
+        # an operator classification (unclassified).
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value

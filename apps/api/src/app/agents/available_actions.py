@@ -85,7 +85,6 @@ class AvailableActionsBuilder:
                     risk_level=_normalize_risk(resolved_operation.risk_level),
                     idempotent=resolved_operation.idempotent,
                     requires_confirmation=resolved_operation.requires_confirmation,
-                    credential_scope=resolved_operation.credential_scope,
                     resource=resolved_operation.resource,
                     systems=list(
                         dict.fromkeys(

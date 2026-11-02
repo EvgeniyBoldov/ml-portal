@@ -9,12 +9,18 @@ service credentials.
 owns the shared HTTP boundary. The Atlassian adapter uses this boundary around
 its embedded upstream ASGI app. The legacy Jira and ML facade shims reuse the
 shared credential resolver and authentication profiles for their REST calls.
+The NetBox REST shim uses that same per-call credential resolver and token
+authentication profile (`Authorization: Token …`); the shared MCP-over-MCP
+gateway is not placed in front of NetBox because NetBox exposes a REST API, not
+an upstream MCP server.
 
 ## Credential flow
 
-1. Runtime resolves a credential reference from the selected data connector,
-   using the operation's existing credential scope policy. In broker mode it
-   does not decrypt or carry the secret payload. There is no provider fallback.
+1. Runtime resolves a credential reference from the selected data connector
+   using the platform-owned operation risk: risky operations require a user
+   credential; safe operations try user, tenant, then platform credentials. In
+   broker mode runtime does not decrypt or carry the secret payload. There is no
+   provider fallback.
 2. Runtime signs a short-lived `credential_access` JWT and places it inside
    `arguments.instance_context`. The request to the adapter has no HTTP
    Authorization header; its MCP session ID is separate from credentials.
@@ -65,23 +71,33 @@ raw fallback.
 
 ## Tool policy
 
+Adapter exceptions return JSON-RPC `error.data` with `request_id`, `stage`,
+and `error_type`. Runtime preserves these bounded diagnostic fields in the
+failed tool result (and therefore its trace) and the Docker log's
+`mcp_diagnostic` field. Exception text and arbitrary `error.data` contents are
+not propagated: they can contain credentials, headers, or request bodies.
+For example, a header encoding failure appears as
+`stage=upstream_request error_type=UnicodeEncodeError request_id=...`
+instead of only the generic `-32000` adapter error.
+
 `MCP_ADAPTER_ENABLED_TOOLS` is an exact comma-separated allowlist. Empty exposes
 no tools; `*` explicitly permits all. It filters tools/list and rejects direct
 calls to hidden tools before secret resolution. Upstream cursors are preserved,
 including on empty filtered pages.
 
 `MCP_ADAPTER_TOOL_DESCRIPTORS` is a JSON object keyed by upstream tool name. It
-can override title, description, annotations, and input-schema x-runtime. It
-does not rename tools or change input/output contracts. Example:
+can override title, description, and annotations, and must provide an explicit
+binary risk classification for every enabled operation. The adapter strips
+upstream runtime policy and publishes only its configured `safe` or `risky`
+value. It does not rename tools or change input/output contracts. Example:
 
 ```json
-{"model_info":{"description":"Inspect deployed model contracts","x-runtime":{"risk_level":"safe","credential_scope":"auto"}}}
+{"model_info":{"description":"Inspect deployed model contracts","x-runtime":{"risk_level":"safe"}}}
 ```
 
-Missing risk metadata is inferred conservatively: destructive hint/name first,
-then read-only/write hints; unknown operations are destructive. Explicit
-metadata is retained unless configured overrides replace it. Metadata is a
-capability description, not RBAC.
+There is no inferred or global default risk. An enabled operation without an
+explicit descriptor is a configuration error. MCP metadata cannot select
+credential ownership or override platform authorization.
 
 ## Deployment
 
@@ -121,7 +137,8 @@ target origin, response size, JSON-RPC code, duration, and safe transport error
 details such as connection errno. They never record request/response bodies,
 tool arguments, credentials, broker JWTs, prompts, model inputs, or upstream
 error text. User-facing MCP errors stay generic to prevent upstreams from
-echoing secrets. Health is available at /healthz.
+echoing secrets. NetBox records the same `x-portal-request-id` through credential
+resolution and NetBox REST requests. Health is available at /healthz.
 
 Run `make test-mcp-adapter` for the focused contract suite in the API image with
 the MCP sources mounted read-only. Tests live in `mcp/adapter/tests/test_adapter.py`,

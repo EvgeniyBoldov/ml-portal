@@ -117,7 +117,16 @@ class OperationBuilder:
 
         credential_context = None
         resolved_has_credentials = True if provider_type == "local" else provider_for_target.is_local
-        if provider_type == "mcp" and provider_for_target.is_remote:
+        # Credential ownership is selected only from the effective platform
+        # risk classification. Side-effect/confirmation descriptors do not
+        # grant MCP servers authority over credential owner scope.
+        operation_is_risky = resolution.risk_level != "safe"
+        credential_policy = (
+            "not_required" if instance.is_local
+            else "user_only" if operation_is_risky
+            else "user_tenant_platform"
+        )
+        if provider_type == "mcp" and not instance.is_local:
             if user_id is not None and tenant_id is not None:
                 # The data source owns upstream credentials. MCP is an
                 # unauthenticated transport endpoint and is never a fallback.
@@ -128,10 +137,7 @@ class OperationBuilder:
                         tenant_id=tenant_id,
                         tool_slug=operation_slug,
                         operation=operation_name,
-                        credential_scope=resolution.credential_scope,
-                        risk_level=resolution.risk_level,
-                        side_effects=resolution.side_effects,
-                        requires_confirmation=resolution.requires_confirmation,
+                        is_risky=operation_is_risky,
                     )
                 except CredentialsUnavailableError as exc:
                     logger.info(
@@ -142,7 +148,6 @@ class OperationBuilder:
                             "scope_required": exc.scope_required,
                         },
                     )
-                    return None
             logger.info(
                 "operation_credential_binding_built",
                 extra={
@@ -153,11 +158,11 @@ class OperationBuilder:
                     "credential_id": credential_context.credential_id if credential_context else None,
                     "credential_owner_type": credential_context.owner_type if credential_context else None,
                     "credential_auth_type": credential_context.auth_type if credential_context else None,
-                    "credential_scope": resolution.credential_scope,
+                    "credential_policy": credential_policy,
                     "risk_level": resolution.risk_level,
                 },
             )
-            resolved_has_credentials = credential_context is not None or provider_for_target.is_local
+            resolved_has_credentials = credential_context is not None
             if not credential_context:
                 logger.info(
                     "operation_no_credentials_proceeding",
@@ -165,7 +170,7 @@ class OperationBuilder:
                         "instance_slug": instance.slug,
                         "raw_slug": raw_operation_name,
                         "canonical_operation": operation_name,
-                        "credential_scope": resolution.credential_scope,
+                        "credential_policy": credential_policy,
                     },
                 )
         elif has_credentials is not None:
@@ -193,6 +198,7 @@ class OperationBuilder:
             mcp_tool_name=raw_operation_name if provider_type == "mcp" else None,
             timeout_s=None,
             has_credentials=resolved_has_credentials,
+            credential_policy=credential_policy if provider_type == "mcp" else "not_required",
             health_status=provider_for_target.health_status or instance.health_status,
         )
         operation = ResolvedOperation(
@@ -212,7 +218,6 @@ class OperationBuilder:
             side_effects=resolution.side_effects,
             idempotent=resolution.idempotent,
             requires_confirmation=resolution.requires_confirmation,
-            credential_scope=resolution.credential_scope,
             resource=None,
             systems=[],
             risk_flags=list(resolution.risk_flags),

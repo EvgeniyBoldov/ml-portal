@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 from uuid import uuid4
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -69,38 +70,37 @@ async def test_resume_run_reopens_paused_run_and_clears_checkpoint():
 @pytest.mark.asyncio
 async def test_request_cancel_marks_only_running_run_as_cancelling():
     run_id = uuid4()
-    run_obj = SimpleNamespace(id=run_id, status="running")
-    updated = {}
+    run_obj = SimpleNamespace(id=run_id, status="cancelling")
+    repo = SimpleNamespace(request_cancel=AsyncMock(return_value=run_obj))
+    manager = SandboxRunManager(SimpleNamespace(runs=repo))
 
-    class _RunsRepo:
-        async def get_by_id(self, _rid):
-            return run_obj
+    result = await manager.request_cancel(run_id)
 
-        async def update(self, obj, data):
-            updated["obj"] = obj
-            updated["data"] = data
-            return obj
-
-    manager = SandboxRunManager(SimpleNamespace(runs=_RunsRepo()))
-
-    await manager.request_cancel(run_id)
-
-    assert updated["obj"] is run_obj
-    assert updated["data"] == {"status": "cancelling"}
+    assert result is run_obj
+    repo.request_cancel.assert_awaited_once_with(run_id)
 
 
 @pytest.mark.asyncio
 async def test_request_cancel_is_idempotent_for_non_running_run():
     run_id = uuid4()
-    run_obj = SimpleNamespace(id=run_id, status="waiting_input")
+    repo = SimpleNamespace(request_cancel=AsyncMock(return_value=None))
+    manager = SandboxRunManager(SimpleNamespace(runs=repo))
 
-    class _RunsRepo:
-        async def get_by_id(self, _rid):
-            return run_obj
+    assert await manager.request_cancel(run_id) is None
+    repo.request_cancel.assert_awaited_once_with(run_id)
 
-        async def update(self, _obj, _data):
-            raise AssertionError("terminal/paused state must not be overwritten")
 
-    manager = SandboxRunManager(SimpleNamespace(runs=_RunsRepo()))
+@pytest.mark.asyncio
+async def test_claim_resume_rejects_non_waiting_status_before_repository():
+    repo = SimpleNamespace(claim_resume=AsyncMock(return_value=True))
+    manager = SandboxRunManager(SimpleNamespace(runs=repo))
 
-    assert await manager.request_cancel(run_id) is run_obj
+    claimed = await manager.claim_resume_run(
+        uuid4(),
+        expected_status="running",
+        expected_paused_action=None,
+        expected_paused_context=None,
+    )
+
+    assert not claimed
+    repo.claim_resume.assert_not_awaited()

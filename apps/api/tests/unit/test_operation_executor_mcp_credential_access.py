@@ -243,3 +243,19 @@ def test_merge_mcp_args_requires_and_preserves_bound_collection_slug():
 
     assert merged["collection_slug"] == "reglament"
     assert "collection_id" not in merged
+
+
+def test_mcp_adapter_diagnostic_reaches_tool_error_without_arbitrary_data():
+    import pytest
+    with pytest.raises(ValueError) as caught:
+        DirectOperationExecutor._mcp_tool_result_or_raise({'error': {
+            'code': -32000, 'message': 'MCP adapter request failed', 'data': {
+                'stage': 'upstream_request', 'error_type': 'UnicodeEncodeError',
+                'request_id': 'call-1', 'payload': 'private', 'detail': 'private',
+            },
+        }})
+    assert 'stage=upstream_request' in str(caught.value)
+    assert 'error_type=UnicodeEncodeError' in str(caught.value)
+    assert 'request_id=call-1' in str(caught.value)
+    assert 'private' not in str(caught.value)
+    assert caught.value.mcp_diagnostic in str(caught.value)

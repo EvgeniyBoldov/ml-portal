@@ -61,20 +61,12 @@ class RuntimeCredentialResolver:
         tenant_id: UUID,
         tool_slug: Optional[str] = None,
         operation: Optional[str] = None,
-        credential_scope: str = "auto",
-        risk_level: str = "safe",
-        side_effects: bool = False,
-        requires_confirmation: bool = False,
+        is_risky: bool = False,
     ) -> Optional[OperationCredentialContext]:
         if instance.is_local:
             return None
 
-        flags = OperationFlags(
-            risk_level=risk_level,  # type: ignore[arg-type]
-            side_effects=bool(side_effects),
-            requires_confirmation=bool(requires_confirmation),
-            credential_scope=credential_scope,  # type: ignore[arg-type]
-        )
+        flags = OperationFlags(is_risky=bool(is_risky))
         strategy = self.scope_resolver.resolve(flags)
         strategy_value = strategy.value
 
@@ -83,11 +75,8 @@ class RuntimeCredentialResolver:
             extra={
                 "operation_slug": operation or tool_slug or instance.slug,
                 "data_instance_id": str(instance.id),
-                "credential_scope": credential_scope,
+                "operation_risky": bool(is_risky),
                 "credential_strategy": strategy_value,
-                "risk_level": risk_level,
-                "side_effects": bool(side_effects),
-                "requires_confirmation": bool(requires_confirmation),
                 "broker_enabled": self.mcp_credential_broker_enabled,
             },
         )
@@ -189,9 +178,9 @@ class RuntimeCredentialResolver:
         tool_slug: Optional[str],
         operation: Optional[str],
     ) -> None:
-        if strategy not in {CredentialStrategy.USER_ONLY, CredentialStrategy.PLATFORM_ONLY}:
+        if strategy != CredentialStrategy.USER_ONLY:
             return
-        scope_required = "user" if strategy == CredentialStrategy.USER_ONLY else "platform"
+        scope_required = "user"
         op = str(operation or tool_slug or instance.slug)
         raise CredentialsUnavailableError(
             tool_slug=str(tool_slug or instance.slug),

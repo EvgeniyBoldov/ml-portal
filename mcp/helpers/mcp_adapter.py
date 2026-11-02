@@ -214,6 +214,26 @@ class MCPAdapter:
                         )
                         await self._respond(send, 200, _error(rpc_id, -32601, "Unknown tool"))
                         return
+                    try:
+                        self.config.policy.risk_level(tool)
+                    except ValueError:
+                        log_mcp_event(
+                            logger,
+                            outcome="failed",
+                            request_id=request_id,
+                            server=self.config.name,
+                            method=method,
+                            tool=tool,
+                            stage="tool_risk_policy",
+                            error_type="RiskClassificationMissing",
+                            rpc_code=-32603,
+                        )
+                        await self._respond(
+                            send,
+                            200,
+                            _error(rpc_id, -32603, "Tool risk classification is not configured"),
+                        )
+                        return
                     args = params.get("arguments") or {}
                     if not isinstance(args, dict):
                         raise ValueError("Invalid tool arguments")
@@ -292,7 +312,21 @@ class MCPAdapter:
                 auth_type=credential.auth_type if credential else "",
                 error_detail=safe_error_detail(exc),
             )
-            await self._respond(send, 200, _error(rpc_id, -32000, "MCP adapter request failed"))
+            # Send diagnostic metadata, never exception text: transport exceptions
+            # can contain header values, request bodies, or broker response data.
+            diagnostic = {
+                "request_id": request_id,
+                "stage": stage,
+                "error_type": type(exc).__name__,
+            }
+            if isinstance(exc, UnicodeEncodeError):
+                diagnostic["detail"] = (
+                    f"Cannot encode request value using {exc.encoding}; "
+                    "check authentication headers and data source URL"
+                )
+            response = _error(rpc_id, -32000, "MCP adapter request failed")
+            response["error"]["data"] = diagnostic
+            await self._respond(send, 200, response)
 
     async def _forward(self, request: dict[str, Any], auth: dict[str, str], request_id: str) -> dict[str, Any]:
         transport = self.transport

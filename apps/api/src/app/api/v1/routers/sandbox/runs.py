@@ -51,6 +51,7 @@ from app.services.chat_router_event_mapper import build_resume_content
 from app.services.runtime_event_logger import RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel
 from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailSubscriber
 from app.services.sandbox.runtime_runner import SandboxRuntimeCommand, sandbox_runtime_runner
+from app.services.sandbox.turn_lifecycle import SandboxTurnLifecycleService
 from app.core.config import get_settings
 
 from .helpers import check_session_owner, tenant_uuid, user_uuid
@@ -77,6 +78,7 @@ async def _sandbox_chat_context_input(
     resume: bool = False,
 ) -> tuple[str, int, object]:
     """Create/reuse a hidden chat turn and freeze its branch snapshot."""
+    await SandboxTurnLifecycleService(session).reconcile_terminal_turns(chat_id)
     turns = ChatTurnService(session)
     turn = await turns.get_by_runtime_run_id(run_id)
     if turn is None:
@@ -95,12 +97,76 @@ async def _sandbox_chat_context_input(
     return str(turn.id), snapshot.revision, snapshot
 
 
-async def _fail_sandbox_chat_turn(session: AsyncSession, *, run_id: uuid.UUID, error: str) -> None:
-    """Terminalize the hidden turn when setup fails before the runner owns it."""
-    turns = ChatTurnService(session)
-    turn = await turns.get_by_runtime_run_id(run_id)
-    if turn is not None:
-        await turns.fail_turn(turn.id, error_message=error[:2000] or "Sandbox runtime setup failed")
+async def _fail_sandbox_setup(
+    *, session_factory: Any, run_id: uuid.UUID, error: str, stream_db: Optional[AsyncSession] = None,
+) -> None:
+    """Terminalize this sandbox run if stream setup fails before runner ownership."""
+    try:
+        if stream_db is not None:
+            try:
+                await stream_db.rollback()
+            except Exception:  # noqa: BLE001
+                logger.exception("sandbox_setup_stream_rollback_failed run_id=%s", run_id)
+        async with session_factory() as terminal_db:
+            await SandboxTurnLifecycleService(terminal_db).fail_setup(run_id=run_id, error=error)
+            await terminal_db.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("sandbox_setup_terminal_persist_failed run_id=%s", run_id)
+
+
+async def _guard_sandbox_setup_stream(
+    frames: AsyncGenerator[str, None],
+    *,
+    session_factory: Any,
+    run_id: uuid.UUID,
+    state: dict[str, Any],
+) -> AsyncGenerator[str, None]:
+    """Turn pre-run setup exceptions into terminal SSE frames.
+
+    Once the independent runner starts, the SSE generator is only an observer;
+    observer disconnects must not change the run or chat turn lifecycle.
+    """
+    terminalized = False
+
+    async def terminalize(error: str) -> None:
+        nonlocal terminalized
+        if terminalized or state.get("runner_started"):
+            return
+        # Close the source generator first so its session transaction is
+        # released, then roll back explicitly before opening the terminal UoW.
+        try:
+            await frames.aclose()
+        except RuntimeError:
+            # The source may already be unwinding cancellation.
+            pass
+        await _fail_sandbox_setup(
+            session_factory=session_factory,
+            stream_db=state.get("stream_db"),
+            run_id=run_id,
+            error=error,
+        )
+        terminalized = True
+
+    try:
+        async for frame in frames:
+            yield frame
+    except asyncio.CancelledError:
+        if not state.get("runner_started"):
+            await asyncio.shield(terminalize("Sandbox setup cancelled before runner start"))
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if state.get("runner_started"):
+            raise
+        await terminalize(f"Sandbox setup failed: {exc}")
+        yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox setup failed"})
+        yield _format_sse("done", {"run_id": str(run_id)})
+    finally:
+        if not terminalized and not state.get("runner_started"):
+            await asyncio.shield(terminalize("Sandbox setup stream closed before runner start"))
+        try:
+            await frames.aclose()
+        except (RuntimeError, GeneratorExit):
+            pass
 
 
 def _format_sse(event: str, payload: dict) -> str:
@@ -166,6 +232,7 @@ async def _observe_sandbox_runner(
     llm_client: LLMClientProtocol,
     session_factory: Any,
     stream_db: AsyncSession,
+    ownership_state: Optional[dict[str, Any]] = None,
 ) -> AsyncGenerator[str, None]:
     """Stream canonical tail/journal data without owning runtime execution."""
     subscriber = RuntimeTailSubscriber(stream_key=str(run_id))
@@ -213,6 +280,8 @@ async def _observe_sandbox_runner(
             llm_client=llm_client,
             session_factory=session_factory,
         )
+        if ownership_state is not None:
+            ownership_state["runner_started"] = True
         yield _format_sse("run_started", {"run_id": str(run_id)})
         while not runner_task.done():
             try:
@@ -250,8 +319,11 @@ async def _observe_sandbox_runner(
         if listener_task is not None:
             listener_task.cancel()
             await asyncio.gather(listener_task, return_exceptions=True)
-        await subscriber.unsubscribe()
-        yield _format_sse("done", {"run_id": str(run_id)})
+        try:
+            await subscriber.unsubscribe()
+        except Exception:  # noqa: BLE001
+            logger.exception("sandbox_tail_unsubscribe_failed run_id=%s", run_id)
+    yield _format_sse("done", {"run_id": str(run_id)})
 
 def _extract_attachment_meta_from_events(events: list) -> list[dict]:
     for event in reversed(events):
@@ -370,12 +442,7 @@ async def run_sandbox(
     session_obj = await svc.get_session(session_id)
     if not session_obj or session_obj.status != "active":
         raise HTTPException(status_code=400, detail="Session is not active")
-
-    # Cleanup zombie runs
-    stale_count = await svc.fail_stale_runs(session_id)
-    if stale_count:
-        logger.info(f"[Sandbox] Cleaned up {stale_count} stale runs for session {session_id}")
-        await db.commit()
+    setup_session_factory = get_session_factory()
 
     # Resolve branch
     branch_id = data.branch_id
@@ -396,55 +463,66 @@ async def run_sandbox(
         input_artifact_ids=[str(item) for item in (data.artifact_ids or [])],
         parent_run_id=data.parent_run_id,
     )
-    await db.commit()
-    await db.refresh(run_prep.run)
-
+    run_id = run_prep.run.id
     snapshot = run_prep.snapshot
     effective_config = run_prep.effective_config
-    sandbox_run = run_prep.run
-    run_id = sandbox_run.id
-    u_uuid = user_uuid(user)
-    t_uuid = await tenant_uuid(db, user)
-    sandbox_chat_id = await _ensure_sandbox_upload_chat(
-        db,
-        owner_id=u_uuid,
-        session_id=session_id,
-    )
-    # The SSE generator uses a separate database session.  Commit the hidden
-    # sandbox chat before it can register generated artifacts against its FK.
-    await db.commit()
-    attachment_service = ChatAttachmentService(db)
-    attachment_contexts = []
 
-    if data.artifact_ids:
-        try:
-            attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
-                artifact_ids=[str(item) for item in data.artifact_ids],
-                current_artifact_ids=[str(item) for item in data.artifact_ids],
-                chat_id=str(sandbox_chat_id),
-                owner_id=str(u_uuid),
-            )
-        except ChatAttachmentNotFoundError as exc:
-            raise HTTPException(status_code=400, detail=str(exc))
-
-    # Resolve overrides
-    sandbox_resolver = RuntimeSandboxResolver()
-    overrides_summary = sandbox_resolver.describe_sandbox_overrides(effective_config)
-    if overrides_summary.get("total"):
-        logger.info(
-            "[Sandbox] Active overrides: %s",
-            json.dumps(overrides_summary, ensure_ascii=False, default=str)[:500],
+    try:
+        await db.commit()
+        await db.refresh(run_prep.run)
+        u_uuid = user_uuid(user)
+        t_uuid = await tenant_uuid(db, user)
+        sandbox_chat_id = await _ensure_sandbox_upload_chat(
+            db,
+            owner_id=u_uuid,
+            session_id=session_id,
         )
+        await db.commit()
+        # The SSE generator uses a separate database session. The hidden chat
+        # is committed before artifact registration so its FK is available.
+        attachment_service = ChatAttachmentService(db)
+        attachment_contexts = []
+        if data.artifact_ids:
+            try:
+                attachment_contexts = await attachment_service.build_runtime_artifact_contexts(
+                    artifact_ids=[str(item) for item in data.artifact_ids],
+                    current_artifact_ids=[str(item) for item in data.artifact_ids],
+                    chat_id=str(sandbox_chat_id),
+                    owner_id=str(u_uuid),
+                )
+            except ChatAttachmentNotFoundError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    # Agent slug override from tenant settings
-    agent_slug: Optional[str] = sandbox_resolver.sandbox_agent_slug(effective_config)
-    agent_version_id = sandbox_resolver.sandbox_agent_version_id(effective_config)
+        # Resolve sandbox overrides and the optional agent-version override.
+        sandbox_resolver = RuntimeSandboxResolver()
+        overrides_summary = sandbox_resolver.describe_sandbox_overrides(effective_config)
+        if overrides_summary.get("total"):
+            logger.info(
+                "[Sandbox] Active overrides: %s",
+                json.dumps(overrides_summary, ensure_ascii=False, default=str)[:500],
+            )
+        agent_slug: Optional[str] = sandbox_resolver.sandbox_agent_slug(effective_config)
+        agent_version_id = sandbox_resolver.sandbox_agent_version_id(effective_config)
+    except (asyncio.CancelledError, Exception) as exc:  # noqa: BLE001
+        cleanup = _fail_sandbox_setup(
+            session_factory=setup_session_factory,
+            stream_db=db,
+            run_id=run_id,
+            error=f"Sandbox request setup failed: {exc}",
+        )
+        if isinstance(exc, asyncio.CancelledError):
+            await asyncio.shield(cleanup)
+        else:
+            await cleanup
+        raise
 
     snapshot_id = snapshot.id
+    session_factory = setup_session_factory
+    stream_state: dict[str, Any] = {"runner_started": False, "stream_db": None}
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        session_factory = get_session_factory()
         async with session_factory() as stream_db:
+            stream_state["stream_db"] = stream_db
             runtime_sandbox_resolver = RuntimeSandboxResolver(session=stream_db)
             resolved_agent_state = None
             if agent_slug or agent_version_id:
@@ -461,16 +539,7 @@ async def run_sandbox(
                             stream_logs=True, stream_progress=True),
                         session_factory=session_factory,
                     ).error(agent_err, payload={"stage": "sandbox_agent_resolve", "agent_slug": agent_slug})
-                    try:
-                        svc_err = SandboxService(stream_db)
-                        await svc_err.finish_run(run_id, "failed", str(agent_err))
-                        await _fail_sandbox_chat_turn(stream_db, run_id=run_id, error=str(agent_err))
-                        await stream_db.commit()
-                    except Exception:
-                        pass
-                    yield _format_sse("error", {"run_id": str(run_id), "error": "Sandbox agent resolution failed"})
-                    yield _format_sse("done", {"run_id": str(run_id)})
-                    return
+                    raise
 
             if resolved_agent_state is not None:
                 sandbox_overrides = runtime_sandbox_resolver.sandbox_runtime_overrides(
@@ -505,12 +574,8 @@ async def run_sandbox(
 
             messages = [{"role": "user", "content": data.request_text}]
             chat_turn_id, expected_context_revision, context_snapshot = await _sandbox_chat_context_input(
-                stream_db,
-                chat_id=sandbox_chat_id,
-                branch_id=branch_id,
-                run_id=run_id,
-                user_id=u_uuid,
-                tenant_id=t_uuid,
+                stream_db, chat_id=sandbox_chat_id, branch_id=branch_id,
+                run_id=run_id, user_id=u_uuid, tenant_id=t_uuid,
             )
 
             pipeline_request = PipelineRequest(
@@ -542,11 +607,14 @@ async def run_sandbox(
                 llm_client=llm_client,
                 session_factory=session_factory,
                 stream_db=stream_db,
+                ownership_state=stream_state,
             ):
                 yield frame
 
     return StreamingResponse(
-        event_stream(),
+        _guard_sandbox_setup_stream(
+            event_stream(), session_factory=session_factory, run_id=run_id, state=stream_state,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -630,6 +698,15 @@ async def resume_sandbox_run(
     action = data.action.value
 
     if data.action is RuntimeResumeAction.CANCEL and (interaction is not None or str(run.status or "") != "waiting_confirmation"):
+        claimed = await svc.claim_resume_run(
+            run_id,
+            expected_status=str(run.status or ""),
+            expected_paused_action=run.paused_action if isinstance(run.paused_action, dict) else None,
+            expected_paused_context=run.paused_context if isinstance(run.paused_context, dict) else None,
+        )
+        if not claimed:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Run checkpoint changed; reload and retry.")
         await svc.finish_run(run_id, "cancelled", "Cancelled by user")
         turn = await ChatTurnService(db).get_by_runtime_run_id(run_id)
         if turn is not None:
@@ -650,6 +727,7 @@ async def resume_sandbox_run(
         return StreamingResponse(_cancel_gen(), media_type="text/event-stream")
 
     # Build checkpoint from paused state
+    expected_resume_status = str(run.status or "")
     paused_action = run.paused_action if isinstance(run.paused_action, dict) else None
     paused_context = run.paused_context if isinstance(run.paused_context, dict) else None
     effective_config = run.effective_config if isinstance(run.effective_config, dict) else {}
@@ -716,14 +794,38 @@ async def resume_sandbox_run(
                     raise HTTPException(status_code=503, detail="Не удалось подтвердить действие; повторите ответ.") from exc
 
     # The resume checkpoint is now copied in memory; clear the persisted pause
-    # state and make the same sandbox run active again.
-    await svc.resume_run(run_id)
-    await db.commit()
+    # state and atomically claim this exact checkpoint. A competing resume gets
+    # HTTP 409 and never acquires cleanup ownership for the winner's run.
+    session_factory = get_session_factory()
+    claimed = await svc.claim_resume_run(
+        run_id,
+        expected_status=expected_resume_status,
+        expected_paused_action=paused_action,
+        expected_paused_context=paused_context,
+    )
+    if not claimed:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="Run checkpoint changed; reload and retry.")
+    try:
+        await db.commit()
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(db.rollback())
+        except Exception:  # noqa: BLE001 - preserve the original cancellation
+            logger.exception("sandbox_resume_claim_rollback_failed run_id=%s", run_id)
+        raise
+    except Exception:
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001 - preserve the original commit failure
+            logger.exception("sandbox_resume_claim_rollback_failed run_id=%s", run_id)
+        raise
 
+    stream_state: dict[str, Any] = {"runner_started": False, "stream_db": None}
 
     async def event_stream() -> AsyncGenerator[str, None]:
-        session_factory = get_session_factory()
         async with session_factory() as stream_db:
+            stream_state["stream_db"] = stream_db
             runtime_sandbox_resolver = RuntimeSandboxResolver(session=stream_db)
             resolved_agent_state = None
             if resumed_agent_slug or resumed_agent_version_id:
@@ -749,15 +851,7 @@ async def resume_sandbox_run(
                         agent_err,
                         payload={"stage": "sandbox_agent_resolve", "agent_slug": resumed_agent_slug},
                     )
-                    await SandboxService(stream_db).finish_run(run_id, "failed", str(agent_err))
-                    await _fail_sandbox_chat_turn(stream_db, run_id=run_id, error=str(agent_err))
-                    await stream_db.commit()
-                    yield _format_sse(
-                        "error",
-                        {"run_id": str(run_id), "error": "Sandbox agent resolution failed"},
-                    )
-                    yield _format_sse("done", {"run_id": str(run_id)})
-                    return
+                    raise
 
             tool_ctx = ToolContext(
                 tenant_id=t_uuid,
@@ -800,13 +894,8 @@ async def resume_sandbox_run(
                 paused_context=paused_context if isinstance(paused_context, dict) else None,
             )
             chat_turn_id, expected_context_revision, context_snapshot = await _sandbox_chat_context_input(
-                stream_db,
-                chat_id=sandbox_chat_id,
-                branch_id=branch.id,
-                run_id=run_id,
-                user_id=u_uuid,
-                tenant_id=t_uuid,
-                resume=True,
+                stream_db, chat_id=sandbox_chat_id, branch_id=branch.id,
+                run_id=run_id, user_id=u_uuid, tenant_id=t_uuid, resume=True,
             )
 
             pipeline_request = PipelineRequest(
@@ -842,11 +931,14 @@ async def resume_sandbox_run(
                 llm_client=llm_client,
                 session_factory=session_factory,
                 stream_db=stream_db,
+                ownership_state=stream_state,
             ):
                 yield frame
 
     return StreamingResponse(
-        event_stream(),
+        _guard_sandbox_setup_stream(
+            event_stream(), session_factory=session_factory, run_id=run_id, state=stream_state,
+        ),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -873,7 +965,10 @@ async def cancel_sandbox_run(
         raise HTTPException(status_code=400, detail="Run is not active")
 
     if run.status == "running":
-        await svc.request_cancel(run_id)
+        cancel_requested = await svc.request_cancel(run_id)
+        if cancel_requested is None:
+            await db.rollback()
+            raise HTTPException(status_code=409, detail="Run is no longer running")
         await db.commit()
         await sandbox_runtime_runner.cancel_local(run_id)
         try:

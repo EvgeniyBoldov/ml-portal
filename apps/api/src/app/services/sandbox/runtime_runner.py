@@ -19,7 +19,7 @@ from app.services.runtime_tail_event_bus import RuntimeRunControlSubscriber, Run
 from app.services.sandbox_service import SandboxService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_context_service import ChatContextService
-from app.services.chat_turn_service import ChatTurnService
+from app.services.chat_turn_service import CHAT_TURN_HEARTBEAT_SECONDS, ChatTurnService
 
 logger = get_logger(__name__)
 
@@ -85,6 +85,10 @@ class SandboxRuntimeRunner:
         paused_payload: Optional[dict[str, Any]] = None
         cancelled = False
         control = RuntimeRunControlSubscriber(run_id=str(command.run_id))
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat(command.run_id, session_factory),
+            name=f"sandbox-chat-turn-heartbeat:{command.run_id}",
+        )
 
         try:
             await control.subscribe()
@@ -116,12 +120,14 @@ class SandboxRuntimeRunner:
                                 break
 
                             if event.type == RuntimeEventType.STOP:
-                                paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
-                                final_status = str(paused_payload["reason"])
-                                await RuntimeTailEventBus().publish(
-                                    stream_key=str(command.run_id),
-                                    payload={"type": "pause", "run_id": str(command.run_id), **paused_payload},
-                                )
+                                terminal = self._terminal_state_for_event(event)
+                                if terminal is not None:
+                                    final_status, final_error, paused_payload = terminal
+                                    if paused_payload is not None:
+                                        await RuntimeTailEventBus().publish(
+                                            stream_key=str(command.run_id),
+                                            payload={"type": "pause", "run_id": str(command.run_id), **paused_payload},
+                                        )
                             elif event.type == RuntimeEventType.DELTA:
                                 content = str(event.data.get("content") or "")
                                 if content:
@@ -130,8 +136,10 @@ class SandboxRuntimeRunner:
                                         payload={"type": "delta", "run_id": str(command.run_id), "content": content},
                                     )
                             elif event.type == RuntimeEventType.FINAL:
-                                if not final_status.startswith("waiting_"):
-                                    final_status = "completed"
+                                terminal = self._terminal_state_for_event(event)
+                                if terminal is not None:
+                                    final_status, final_error, paused_payload = terminal
+                                if final_status == "completed":
                                     await RuntimeTailEventBus().publish(
                                         stream_key=str(command.run_id),
                                         payload={
@@ -147,6 +155,7 @@ class SandboxRuntimeRunner:
                                 if terminal is not None:
                                     final_status = terminal[0].value
                                     final_error = terminal[1]
+                                    paused_payload = None
                             if await self._is_cancelling(execution_db, command.run_id):
                                 cancelled = True
                                 break
@@ -166,12 +175,23 @@ class SandboxRuntimeRunner:
             logger.exception("sandbox_runtime_runner_failed run_id=%s", command.run_id)
             final_status = "failed"
             final_error = "Sandbox runtime execution failed"
+            # A pause is provisional until the runner reaches its normal
+            # terminal write. Any later exception fails that same turn.
+            paused_payload = None
             try:
                 await self._emit_error(command=command, session_factory=session_factory, exc=exc)
             except Exception:  # noqa: BLE001
                 logger.exception("sandbox_runtime_error_journal_failed run_id=%s", command.run_id)
         finally:
-            await control.unsubscribe()
+            if not heartbeat_task.done():
+                heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
+            # Closing the pub/sub connection is best-effort cleanup. It must
+            # never prevent the durable run/chat-turn terminal write below.
+            try:
+                await control.unsubscribe()
+            except Exception:  # noqa: BLE001
+                logger.exception("sandbox_runtime_control_unsubscribe_failed run_id=%s", command.run_id)
             if cancelled:
                 final_status = "cancelled"
                 final_error = "Cancelled by user"
@@ -183,6 +203,47 @@ class SandboxRuntimeRunner:
                 error=final_error,
                 paused_payload=paused_payload,
             )
+
+    @staticmethod
+    async def _heartbeat(run_id: UUID, session_factory: Any) -> None:
+        """Keep the companion turn lease fresh while sandbox owns execution."""
+        while True:
+            await asyncio.sleep(CHAT_TURN_HEARTBEAT_SECONDS)
+            try:
+                async with session_factory() as session:
+                    active = await ChatTurnService(session).heartbeat_turn(run_id)
+                    if active is False:
+                        return
+                    if active is True:
+                        await session.commit()
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                logger.warning("sandbox_chat_turn_heartbeat_failed run_id=%s", run_id, exc_info=True)
+
+    @staticmethod
+    def _terminal_state_for_event(
+        event: RuntimeEvent,
+    ) -> Optional[tuple[str, Optional[str], Optional[dict[str, Any]]]]:
+        """Map only HITL STOP events to a waiting turn; terminal STOPs close it."""
+        if event.type == RuntimeEventType.STOP:
+            paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(dict(event.data or {}))
+            if paused_payload["reason"] in {"waiting_input", "waiting_confirmation"}:
+                return str(paused_payload["reason"]), None, paused_payload
+            if paused_payload["reason"] != "completed":
+                message = str((event.data or {}).get("message") or paused_payload["reason"])
+                return "failed", message, None
+        elif event.type == RuntimeEventType.FINAL:
+            stop_reason = str((event.data or {}).get("stop_reason") or "").strip()
+            if stop_reason and stop_reason not in {"completed", "failed"}:
+                return "failed", stop_reason, None
+
+        terminal = planner_terminal_from_event(event)
+        if terminal is None:
+            return None
+        if terminal[0].value == "stopped":
+            return "failed", terminal[1] or "Sandbox runtime stopped", None
+        return terminal[0].value, terminal[1], None
 
     @staticmethod
     async def _is_cancelling(session: Any, run_id: UUID) -> bool:

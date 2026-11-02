@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -10,10 +11,12 @@ from urllib.parse import urlparse, urlunparse
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
-from helpers.secret_broker import SecretBrokerClient, extract_credential_access
+from helpers.adapter_auth import AuthProfile, resolve_request_credential, upstream_auth_headers
+from helpers.observability import log_mcp_event, normalize_request_id, safe_error_detail, safe_target
 
 
 app = FastAPI(title="NetBox MCP Shim", version="1.0.0")
+logger = logging.getLogger("mcp.netbox")
 
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "false").lower() == "true"
 NETBOX_CA_BUNDLE = (os.environ.get("NETBOX_CA_BUNDLE") or "").strip()
@@ -123,17 +126,6 @@ def _normalize_base_url(url: str) -> str:
     return plain.rstrip("/")
 
 
-def _extract_token(payload: Dict[str, Any]) -> str:
-    for key in ("token", "api_token", "api_key", "access_token"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    raise ValueError(
-        "Resolved credential payload does not contain token "
-        "(expected one of: token, api_token, api_key, access_token)"
-    )
-
-
 def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str:
     # 1. Credential payload takes highest priority (broker may return netbox_url)
     for key in ("netbox_url", "base_url", "url"):
@@ -170,39 +162,45 @@ def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str
     )
 
 
-async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, str]:
-    # Priority 1: broker-based short-lived token (mandatory outside local/dev).
-    access = extract_credential_access(arguments)
-    if access:
-        broker = SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS)
-        resolved = await broker.resolve(access)
-        token = _extract_token(resolved.payload)
-        base_url = _extract_base_url(resolved.payload, arguments)
-        return base_url, token
-
-    # Priority 2: explicit local-development compatibility only. The API runtime
-    # never injects this payload in production-like environments.
-    instance_context = arguments.get("instance_context")
-    if isinstance(instance_context, dict):
-        creds = instance_context.get("credentials")
-        if isinstance(creds, dict):
-            try:
-                token = _extract_token(creds)
-                base_url = _extract_base_url(creds, arguments)
-                return base_url, token
-            except ValueError:
-                pass
-
-    # Priority 3: explicit token argument (dev/test only)
-    token = str(arguments.get("token") or arguments.get("api_token") or "").strip()
-    if token:
-        base_url = _extract_base_url({}, arguments)
-        return base_url, token
-
-    raise ValueError(
-        "No NetBox credentials: expected credential_access (broker), "
-        "instance_context.credentials (legacy), or explicit token argument"
+async def _resolve_runtime_access(
+    arguments: Dict[str, Any], *, request_id: str = "", tool_name: str = "",
+) -> tuple[str, str]:
+    resolved = await resolve_request_credential(
+        arguments,
+        timeout_s=BROKER_TIMEOUT_SECONDS,
+        allow_raw=os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true",
+        request_id=request_id,
+        server="netbox",
+        tool=tool_name,
     )
+    base_url = _extract_base_url(resolved.payload, arguments)
+    auth_headers = upstream_auth_headers(
+        resolved,
+        profile=AuthProfile(token_scheme="Token"),
+        tool_name=tool_name,
+        target_url=base_url,
+    )
+    authorization = auth_headers.get("Authorization", "")
+    if not authorization.startswith("Token "):
+        raise ValueError("NetBox authentication profile did not produce a Token authorization header")
+    context = arguments.get("instance_context")
+    context = context if isinstance(context, dict) else {}
+    log_mcp_event(
+        logger,
+        outcome="completed",
+        request_id=request_id,
+        server="netbox",
+        method="tools/call",
+        tool=tool_name,
+        stage="upstream_authentication",
+        target=safe_target(base_url),
+        data_instance_id=str(context.get("data_instance_id") or resolved.instance_id),
+        provider_instance_id=str(context.get("provider_instance_id") or ""),
+        credential_id=resolved.credential_id,
+        auth_type=resolved.auth_type,
+        auth_headers=",".join(sorted(auth_headers)),
+    )
+    return base_url, authorization.removeprefix("Token ")
 
 
 async def _netbox_get(
@@ -211,6 +209,8 @@ async def _netbox_get(
     token: str,
     path: str,
     params: Optional[Dict[str, Any]] = None,
+    request_id: str = "",
+    tool_name: str = "",
 ) -> Dict[str, Any]:
     headers = {
         "Authorization": f"Token {token}",
@@ -218,9 +218,27 @@ async def _netbox_get(
     }
     url = f"{base_url}{path}"
     verify: bool | str = NETBOX_CA_BUNDLE if NETBOX_CA_BUNDLE else VERIFY_SSL
+    log_mcp_event(
+        logger, outcome="started", request_id=request_id, server="netbox",
+        method="GET", tool=tool_name, stage="netbox_api_request",
+        target=safe_target(url), target_path=path,
+    )
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.get(url, headers=headers, params=params)
-    response.raise_for_status()
+    if response.is_error:
+        log_mcp_event(
+            logger, outcome="failed", request_id=request_id, server="netbox",
+            method="GET", tool=tool_name, stage="netbox_api_response",
+            target=safe_target(url), target_path=path, http_status=response.status_code,
+            error_type="NetBoxHTTPError",
+        )
+        response.raise_for_status()
+    log_mcp_event(
+        logger, outcome="completed", request_id=request_id, server="netbox",
+        method="GET", tool=tool_name, stage="netbox_api_response",
+        target=safe_target(url), target_path=path, http_status=response.status_code,
+        response_bytes=len(response.content),
+    )
     return response.json()
 
 
@@ -323,12 +341,16 @@ async def mcp_root(
     request: Request,
     response: Response,
     mcp_session_id: str | None = Header(default=None),
+    x_portal_request_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
+    request_id = normalize_request_id(x_portal_request_id)
     payload = await request.json()
     rpc_id = payload.get("id")
     method = payload.get("method")
     params = payload.get("params") or {}
 
+    stage = "request_dispatch"
+    tool_name = ""
     try:
         if method == "initialize":
             session_id = str(uuid.uuid4())
@@ -360,6 +382,7 @@ async def mcp_root(
                             "description": "Get a device by its exact name.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "name": {"type": "string", "description": "Exact device hostname as stored in NetBox"},
                                 },
@@ -376,6 +399,7 @@ async def mcp_root(
                             "description": "Search device names and descriptions by non-empty text.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "query": {"type": "string", "description": "Search string matched against device name, description"},
                                     "limit": {"type": "integer", "default": 20, "description": "Max results (1-200)"},
@@ -394,6 +418,7 @@ async def mcp_root(
                             "description": "List a page of sites with count and next-page metadata.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "limit": {"type": "integer", "default": 50, "description": "Max results"},
                                     "offset": {"type": "integer", "minimum": 0, "default": 0, "description": "Page offset"},
@@ -410,6 +435,7 @@ async def mcp_root(
                             "description": "List a page of one NetBox object type, optionally filtered. Nested attributes remain in the records.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "object_type": {"type": "string", "description": "NetBox object type, e.g. ipam.prefix or dcim.device"},
                                     "filters": {"type": "object", "description": "NetBox API query filters for this type; e.g. prefix for ipam.prefix, address for ipam.ipaddress, device for dcim.interface, site/status for dcim.device"},
@@ -429,6 +455,7 @@ async def mcp_root(
                             "description": "Search up to five NetBox object types by non-empty text. Returns matching records and per-type errors.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "q": {"type": "string", "minLength": 1, "pattern": "\\S", "description": "Non-empty text matched inside the selected object types"},
                                     "object_types": {
@@ -452,9 +479,21 @@ async def mcp_root(
             )
 
         if method == "tools/call":
-            tool_name = params.get("name")
+            tool_name = str(params.get("name") or "")
             arguments = params.get("arguments") or {}
-            base_url, token = await _resolve_runtime_access(arguments)
+            context = arguments.get("instance_context") if isinstance(arguments, dict) else None
+            context = context if isinstance(context, dict) else {}
+            log_mcp_event(
+                logger, outcome="started", request_id=request_id, server="netbox",
+                method="tools/call", tool=tool_name, stage="tool_call_received",
+                data_instance_id=str(context.get("data_instance_id") or ""),
+                provider_instance_id=str(context.get("provider_instance_id") or ""),
+            )
+            stage = "credential_resolution"
+            base_url, token = await _resolve_runtime_access(
+                arguments, request_id=request_id, tool_name=tool_name,
+            )
+            stage = "tool_execution"
 
             if tool_name == "netbox_get_device":
                 name = str(arguments.get("name") or "").strip()
@@ -465,6 +504,8 @@ async def mcp_root(
                     token=token,
                     path="/api/dcim/devices/",
                     params={"name": name, "limit": 1},
+                    request_id=request_id,
+                    tool_name=tool_name,
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -478,6 +519,8 @@ async def mcp_root(
                     token=token,
                     path="/api/dcim/devices/",
                     params={"q": query, "limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
+                    request_id=request_id,
+                    tool_name=tool_name,
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -488,6 +531,8 @@ async def mcp_root(
                     token=token,
                     path="/api/dcim/sites/",
                     params={"limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
+                    request_id=request_id,
+                    tool_name=tool_name,
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -507,6 +552,8 @@ async def mcp_root(
                     token=token,
                     path=_resolve_object_path(object_type),
                     params=params,
+                    request_id=request_id,
+                    tool_name=tool_name,
                 )
                 return _jsonrpc_ok(rpc_id, _as_tool_result(data))
 
@@ -530,6 +577,8 @@ async def mcp_root(
                             token=token,
                             path=path,
                             params=params,
+                            request_id=request_id,
+                            tool_name=tool_name,
                         )
                         results.append({"object_type": ot, "results": page.get("results", []), "count": page.get("count", 0), "next": page.get("next")})
                     except httpx.HTTPStatusError as exc:
@@ -549,15 +598,31 @@ async def mcp_root(
 
         return _jsonrpc_err(rpc_id, -32601, f"Method '{method}' not found")
     except ValueError as exc:
+        log_mcp_event(
+            logger, outcome="failed", request_id=request_id, server="netbox",
+            method=str(method), tool=tool_name, stage=stage,
+            error_type=type(exc).__name__, error_detail=safe_error_detail(exc), rpc_code=-32000,
+        )
         return _jsonrpc_ok(
             rpc_id,
             {"content": [{"type": "text", "text": str(exc)}], "isError": True},
         )
     except httpx.HTTPStatusError as exc:
+        log_mcp_event(
+            logger, outcome="failed", request_id=request_id, server="netbox",
+            method=str(method), tool=tool_name, stage=stage,
+            target=safe_target(str(exc.request.url)), target_path=exc.request.url.path,
+            http_status=exc.response.status_code, error_type=type(exc).__name__, rpc_code=-32000,
+        )
         message = f"NetBox HTTP {exc.response.status_code} at {exc.request.url.path}; query failed, not an empty result"
         return _jsonrpc_ok(
             rpc_id,
             {"content": [{"type": "text", "text": message}], "isError": True},
         )
     except Exception as exc:
+        log_mcp_event(
+            logger, outcome="failed", request_id=request_id, server="netbox",
+            method=str(method), tool=tool_name, stage=stage,
+            error_type=type(exc).__name__, error_detail=safe_error_detail(exc), rpc_code=-32603,
+        )
         raise HTTPException(status_code=500, detail=str(exc))

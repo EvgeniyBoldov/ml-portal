@@ -100,7 +100,6 @@ class OperationAction(BaseModel):
     risk_level: Literal["safe", "write", "destructive"] = "safe"
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["platform", "user", "auto"] = "auto"
     resource: Optional[str] = None
     systems: List[str] = Field(default_factory=list)
 
@@ -251,6 +250,7 @@ class ProviderExecutionTarget(BaseModel):
     mcp_tool_name: Optional[str] = None
     timeout_s: Optional[int] = None
     has_credentials: bool = False
+    credential_policy: Literal["not_required", "user_only", "user_tenant_platform"] = "user_tenant_platform"
     health_status: Optional[str] = None
 
 
@@ -279,7 +279,6 @@ class ResolvedOperation(BaseModel):
     side_effects: bool = False
     idempotent: bool = True
     requires_confirmation: bool = False
-    credential_scope: Literal["platform", "user", "auto"] = "auto"
     resource: Optional[str] = None
     systems: List[str] = Field(default_factory=list)
     return_summary: Optional[str] = None

@@ -5,6 +5,13 @@ DCBox — production-экземпляр NetBox с плагинами. MCP сох
 через `object_type`, а plugin-specific маршруты выбираются из allowlist в
 `mcp/netbox/server.py`.
 
+For each tool call, the NetBox shim resolves `instance_context.credential_access`
+through the shared `mcp/helpers/adapter_auth.py` broker client and constructs
+NetBox's `Authorization: Token` header from the resolved credential's declared
+auth type. Raw credentials are accepted only in local/dev when the shared
+adapter fallback is explicitly enabled. The runtime request ID is forwarded to
+broker and NetBox request logs; credential and token values are never logged.
+
 ## Текущие маршруты
 
 Для DCBox доступны следующие canonical object types:

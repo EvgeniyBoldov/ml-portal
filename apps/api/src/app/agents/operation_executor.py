@@ -61,6 +61,31 @@ class _UnifiedToolCall:
     target: ProviderExecutionTarget
 
 
+class MissingOperationCredentialsError(ValueError):
+    """Safe, actionable failure raised before sending an unauthenticated MCP call."""
+
+    def __init__(
+        self,
+        *,
+        operation: str,
+        data_instance_slug: str,
+        credential_policy: str,
+    ) -> None:
+        self.operation = operation
+        self.data_instance_slug = data_instance_slug
+        self.credential_policy = credential_policy
+        required_scope = (
+            "a user-owned credential"
+            if credential_policy == "user_only"
+            else "a credential owned by the user, tenant, or platform"
+        )
+        super().__init__(
+            f"Credentials are unavailable for operation '{operation}' on data instance "
+            f"'{data_instance_slug}'; this operation requires {required_scope}. "
+            "No upstream request was sent."
+        )
+
+
 class DirectOperationExecutor:
     def __init__(self, *, tool_registry: Optional["ToolRegistry"] = None) -> None:
         self._tool_registry = tool_registry or ToolRegistry.get_instance()
@@ -126,6 +151,24 @@ class DirectOperationExecutor:
         if target.provider_type == "mcp":
             try:
                 merged_args = self._merge_mcp_args(target, operation_call.arguments, ctx, binding=binding)
+            except MissingOperationCredentialsError as exc:
+                logger.warning(
+                    "runtime_mcp_tool_call_blocked_missing_credentials run_id=%s call_id=%s "
+                    "operation=%s data_instance_id=%s credential_policy=%s",
+                    run_id,
+                    call_id,
+                    exc.operation,
+                    target.data_instance_id,
+                    exc.credential_policy,
+                )
+                return ToolResult.fail(
+                    str(exc),
+                    error_code="credential_missing",
+                    operation=exc.operation,
+                    data_instance_id=target.data_instance_id,
+                    data_instance_slug=exc.data_instance_slug,
+                    required_scope=exc.credential_policy,
+                )
             except ValueError as exc:
                 credential_context = binding.credential if binding else None
                 failure_reason = {
@@ -200,7 +243,7 @@ class DirectOperationExecutor:
             logger.warning(
                 "runtime_mcp_tool_call_failed run_id=%s call_id=%s operation=%s mcp_tool=%s "
                 "provider=%s data_instance_id=%s error_type=%s http_status=%s "
-                "cause_type=%s cause_errno=%s cause_reason=%s",
+                "cause_type=%s cause_errno=%s cause_reason=%s mcp_diagnostic=%s",
                 run_id or "-",
                 call_id or "-",
                 target.operation_slug,
@@ -212,6 +255,7 @@ class DirectOperationExecutor:
                 cause_type,
                 cause_errno,
                 cause_reason,
+                getattr(exc, "mcp_diagnostic", "-"),
             )
             return ToolResult.fail(str(exc))
         result = self._tool_result_from_payload(payload)
@@ -362,7 +406,21 @@ class DirectOperationExecutor:
             message = str(error.get("message") or "MCP RPC error")
             code = error.get("code")
             suffix = f" (code {code})" if code is not None else ""
-            raise ValueError(f"MCP tool call failed{suffix}: {message}")
+            # Only propagate bounded diagnostic fields; never stringify arbitrary
+            # JSON-RPC error.data (it may contain credentials or request bodies).
+            diagnostic = error.get("data")
+            fields = {}
+            if isinstance(diagnostic, dict):
+                for key in ("stage", "error_type", "request_id"):
+                    value = diagnostic.get(key)
+                    if isinstance(value, str) and value and all(
+                        char.isascii() and (char.isalnum() or char in "_.:-") for char in value
+                    ):
+                        fields[key] = value[:120]
+            context = " ".join(f"{key}={value}" for key, value in fields.items())
+            exc = ValueError(f"MCP tool call failed{suffix}: {message}" + (f" [{context}]" if context else ""))
+            exc.mcp_diagnostic = context or "-"
+            raise exc
         if error:
             raise ValueError("MCP tool call failed: MCP RPC error")
 
@@ -517,8 +575,12 @@ class DirectOperationExecutor:
                 raise ValueError(
                     "MCP credential_access could not be issued and raw credential fallback is disabled"
                 )
-        elif self._mcp_credential_broker_required:
-            raise ValueError("MCP credential broker is required but no data-instance credential is available")
+        elif target.credential_policy != "not_required":
+            raise MissingOperationCredentialsError(
+                operation=target.mcp_tool_name or target.operation_slug,
+                data_instance_slug=target.data_instance_slug,
+                credential_policy=target.credential_policy,
+            )
 
         merged_args["instance_context"] = instance_context
 

@@ -320,12 +320,18 @@ _LOCAL_ENVIRONMENTS = frozenset({"local", "development", "dev"})
 
 
 def mcp_credential_broker_enabled(settings: Settings | None = None) -> bool:
-    """Enforce broker delivery outside local development; the toggle is dev-only."""
+    """Enable broker delivery outside local development or whenever it is required."""
     settings = settings or get_settings()
     environment = str(getattr(settings, "ENV", "production") or "production").strip().lower()
     if environment not in _LOCAL_ENVIRONMENTS:
         return True
-    return bool(getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False))
+    # A local configuration that requires broker credentials must not decrypt
+    # credentials in runtime and then fail later because the broker toggle was
+    # omitted. Required therefore implies enabled in every environment.
+    return bool(
+        getattr(settings, "MCP_CREDENTIAL_BROKER_ENABLED", False)
+        or getattr(settings, "MCP_CREDENTIAL_BROKER_REQUIRED", False)
+    )
 
 
 def mcp_credential_broker_required(settings: Settings | None = None) -> bool:

@@ -5,7 +5,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING
 
-from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, Index
+from sqlalchemy import String, Boolean, DateTime, Text, ForeignKey, Index, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -109,6 +109,10 @@ class DiscoveredTool(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "risk_level IS NULL OR risk_level IN ('safe', 'risky')",
+            name="ck_discovered_tool_policy_risk_level",
+        ),
         Index(
             "uq_discovered_local_slug_null_provider",
             "slug",

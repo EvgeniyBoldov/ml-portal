@@ -1,57 +1,26 @@
-# MCP Runtime Flags Contract
+# MCP Runtime Risk Contract
 
-Этот документ фиксирует runtime-контракт для metadata операций, публикуемых через MCP JSON Schema.
+MCP servers do not control credential ownership or platform authorization. The platform assigns an effective risk classification to each discovered operation.
 
-## JSON Schema Extension
+## Operation classification
 
-Каждая operation может задать блок `x-runtime` внутри `inputSchema`:
+The adapter policy must provide an explicit descriptor for every enabled operation:
 
 ```json
 {
-  "type": "object",
-  "properties": {},
-  "x-runtime": {
-    "risk_level": "safe|write|destructive",
-    "side_effects": false,
-    "requires_confirmation": false,
-    "credential_scope": "platform|user|auto"
-  }
+  "x-runtime": { "risk_level": "safe" }
 }
 ```
 
-## Defaults
+The only accepted values are `safe` and `risky`. The adapter strips upstream `x-runtime` authority fields and emits only this locally configured risk value. It does not infer risk from tool names or MCP annotations. An enabled operation without a descriptor is a configuration error; an unclassified operation is not published for execution until an administrator assigns its risk in the platform.
 
-Если `x-runtime` отсутствует, применяются дефолты:
+The stored `discovered_tools.risk_level` is the platform's effective classification. MCP rescans do not overwrite an existing operator classification and do not delete inactive rows that have a classification. Legacy values are normalized during migration: `safe`, `read_only`, and `readonly` become `safe`; `write`, `mutable`, `mutating`, `destructive`, and `dangerous` become `risky`; unknown values become unclassified.
 
-- `risk_level = "safe"`
-- `side_effects = false`
-- `requires_confirmation = false`
-- `credential_scope = "auto"`
+## Credential resolution
 
-Если `x-runtime` задан частично, отсутствующие поля дополняются дефолтами.
+Credential ownership is derived only from the effective platform risk:
 
-## Validation Rules
+- `risky`: credentials owned by the requesting user only.
+- `safe`: requesting user, then tenant, then platform credentials.
 
-В discovery-парсинге проверяются допустимые значения:
-
-- `risk_level`: рекомендуемые значения `safe | write | destructive`; другие строки сохраняются как исходная оценка риска, а runtime пока трактует неизвестное значение как `destructive`
-- `credential_scope`: только `platform | user | auto`
-- `side_effects`: только boolean
-- `requires_confirmation`: только boolean
-
-Недопустимые значения приводят к `MCPDiscoveryValidationError` с указанием tool/operation, чтобы discovery fail-fast на некорректном контракте.
-
-## Credential Resolution Semantics
-
-`credential_scope = "auto"` означает, что стратегия выбора credentials определяется `CredentialScopeResolver` на основе:
-
-- `risk_level`
-- `side_effects`
-- `requires_confirmation`
-
-Явные значения `platform` и `user` имеют приоритет над автоматической стратегией.
-
-Исключение для credential safety: если итоговый риск операции равен `write`,
-runtime всегда использует `USER_ONLY`, даже при явно заданном
-`credential_scope = "platform"`. Для `safe` продолжает действовать выбранный
-`credential_scope` или стратегия политики `PLATFORM_FIRST` при `auto`.
+MCP-provided `credential_scope`, `side_effects`, and `requires_confirmation` do not select credential scope. A missing required credential leaves the operation visible; invocation returns a structured `credential_missing` result naming the operation, data instance, and required owner scope before sending an upstream request.

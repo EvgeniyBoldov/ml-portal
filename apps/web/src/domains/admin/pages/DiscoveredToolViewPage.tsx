@@ -5,7 +5,7 @@ import { qk } from '@/shared/api/keys';
 import { discoveredToolsApi } from '@/shared/api/discoveredTools';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Button, Input } from '@/shared/ui';
+import { Button, Select } from '@/shared/ui';
 
 const DESCRIPTION_FIELDS = [
   { key: 'slug', type: 'code' as const, label: 'Slug', editable: false },
@@ -118,10 +118,19 @@ export function DiscoveredToolViewPage() {
           fields={[{
             key: 'risk_level',
             type: 'custom',
-            label: 'Уровень риска от MCP или администратора',
+          label: 'Классификация риска операции',
             render: (value, editable) => editable
-              ? <Input value={riskLevel} onChange={(event) => setRiskLevel(event.target.value)} placeholder="Например: read_only, destructive" />
-              : <span>{value || 'Не указан'}</span>,
+              ? <Select
+                  value={riskLevel}
+                  onChange={setRiskLevel}
+                  placeholder="Не классифицировано"
+                  options={[
+                    { value: '', label: 'Не классифицировано' },
+                    { value: 'safe', label: 'Безопасная' },
+                    { value: 'risky', label: 'Рискованная' },
+                  ]}
+                />
+              : <span>{value === 'safe' ? 'Безопасная' : value === 'risky' ? 'Рискованная' : 'Не классифицировано'}</span>,
           }]}
           data={{ risk_level: tool.risk_level || '' }}
           editable={editing}

@@ -3,10 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-import re
 from typing import Any
-
-_DESTRUCTIVE = re.compile(r"(^|_)(delete|remove|destroy|purge|revoke|archive|deactivate|drop)(_|$)", re.I)
 INTERNAL_ARGUMENTS = frozenset({
     "credential_access", "credentials", "instance_context", "collection_slug", "collection_id",
 })
@@ -18,8 +15,23 @@ class ToolPolicy:
     enabled_tools: frozenset[str] | None = frozenset()
     descriptors: dict[str, dict[str, Any]] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        if self.enabled_tools is not None:
+            for name in self.enabled_tools:
+                self.risk_level(name)
+
     def allows(self, name: str) -> bool:
         return self.enabled_tools is None or name in self.enabled_tools
+
+    def risk_level(self, name: str) -> str:
+        descriptor = self.descriptors.get(name)
+        runtime = descriptor.get("x-runtime") if isinstance(descriptor, dict) else None
+        if not isinstance(runtime, dict) or set(runtime) != {"risk_level"}:
+            raise ValueError(f"Tool '{name}' requires an explicit x-runtime.risk_level descriptor")
+        value = str(runtime.get("risk_level") or "").strip().lower()
+        if value not in {"safe", "risky"}:
+            raise ValueError(f"Tool '{name}' has invalid risk level; expected safe or risky")
+        return value
 
     def decorate(self, tool: dict[str, Any]) -> dict[str, Any]:
         result = deepcopy(tool)
@@ -33,31 +45,10 @@ class ToolPolicy:
         annotations.update(overrides.get("annotations") or {})
         result["annotations"] = annotations
         schema = dict(result.get("inputSchema") or {})
-        metadata = dict(schema.get("x-runtime") or {})
-        metadata.update(overrides.get("x-runtime") or {})
-        if not metadata.get("risk_level"):
-            if annotations.get("destructiveHint") is True or _DESTRUCTIVE.search(str(result.get("name") or "")):
-                risk = "destructive"
-            elif annotations.get("readOnlyHint") is True:
-                risk = "safe"
-            elif annotations.get("readOnlyHint") is False:
-                risk = "write"
-            else:
-                risk = "destructive"
-            metadata["risk_level"] = risk
-        if metadata["risk_level"] not in {"safe", "write", "destructive"}:
-            raise ValueError("Invalid runtime risk descriptor")
-        risky = metadata["risk_level"] != "safe"
-        metadata.setdefault("side_effects", risky)
-        metadata.setdefault("requires_confirmation", risky)
-        metadata.setdefault("idempotent", annotations.get("idempotentHint") is True)
-        metadata.setdefault("credential_scope", "user")
-        if metadata["credential_scope"] not in {"auto", "user", "platform"}:
-            raise ValueError("Invalid credential scope descriptor")
-        for key in ("side_effects", "requires_confirmation", "idempotent"):
-            if not isinstance(metadata[key], bool):
-                raise ValueError("Runtime flag descriptor must be boolean")
-        schema["x-runtime"] = metadata
+        # Provider metadata is untrusted. Publish only the local operation
+        # filter's explicit binary risk classification; never relay provider
+        # credential scope or confirmation/side-effect claims.
+        schema["x-runtime"] = {"risk_level": self.risk_level(str(tool.get("name") or ""))}
         result["inputSchema"] = schema
         return result
 

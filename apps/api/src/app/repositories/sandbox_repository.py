@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, func, update, delete, and_
+from sqlalchemy import JSON, select, func, update, delete, and_, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -284,6 +284,62 @@ class SandboxRunRepository:
         self.session.add(obj)
         await self.session.flush()
         return obj
+
+    async def claim_resume(
+        self,
+        run_id: UUID,
+        *,
+        expected_status: str,
+        expected_paused_action: Optional[dict[str, Any]],
+        expected_paused_context: Optional[dict[str, Any]],
+    ) -> bool:
+        """Atomically claim the exact paused checkpoint validated by a caller."""
+        action_match = (
+            or_(SandboxRun.paused_action.is_(None), SandboxRun.paused_action == JSON.NULL)
+            if expected_paused_action is None
+            else SandboxRun.paused_action == expected_paused_action
+        )
+        context_match = (
+            or_(SandboxRun.paused_context.is_(None), SandboxRun.paused_context == JSON.NULL)
+            if expected_paused_context is None
+            else SandboxRun.paused_context == expected_paused_context
+        )
+        stmt = (
+            update(SandboxRun)
+            .where(
+                SandboxRun.id == run_id,
+                SandboxRun.status == expected_status,
+                action_match,
+                context_match,
+            )
+            .values(
+                status="running",
+                paused_action=None,
+                paused_context=None,
+                finished_at=None,
+            )
+            .returning(SandboxRun.id)
+        )
+        result = await self.session.execute(stmt)
+        claimed = result.scalar_one_or_none() is not None
+        if claimed:
+            await self.session.flush()
+        return claimed
+
+    async def request_cancel(self, run_id: UUID) -> Optional[SandboxRun]:
+        """Atomically request cancellation only while the run is still running."""
+        stmt = (
+            update(SandboxRun)
+            .where(SandboxRun.id == run_id, SandboxRun.status == "running")
+            .values(status="cancelling")
+            .returning(SandboxRun.id)
+        )
+        result = await self.session.execute(stmt)
+        claimed_id = result.scalar_one_or_none()
+        if claimed_id is None:
+            return None
+        await self.session.flush()
+        return await self.get_by_id(run_id)
 
     async def fail_stale_runs(
         self, session_id: UUID, stale_threshold_minutes: int = 5

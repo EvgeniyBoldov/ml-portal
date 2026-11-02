@@ -1,91 +1,34 @@
-"""
-CredentialScopeResolver — single place that decides which credential scope
-cascade to apply for a given operation.
-
-Inputs: per-operation runtime flags (risk_level, side_effects,
-requires_confirmation, credential_scope).
-
-Output: one of the strategies understood by
-`CredentialSetRepository.resolve_for_instance`:
-
-    USER_ONLY, PLATFORM_ONLY, PLATFORM_FIRST.
-
-The resolver is intentionally a pure function today; it exists as a dedicated
-service so behaviour can be swapped (config-driven, policy-driven, LLM-advised)
-without touching the runtime credential resolver.
-"""
+"""Resolve credential owner strategy from platform operation risk policy."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Literal
-
-
-RiskLevel = Literal["safe", "write", "destructive"]
-CredentialScope = Literal["platform", "user", "auto"]
-
-Strategy = Literal[
-    "USER_ONLY",
-    "PLATFORM_ONLY",
-    "PLATFORM_FIRST",
-]
 
 
 class CredentialStrategy(str, Enum):
     USER_ONLY = "USER_ONLY"
+    USER_FIRST = "USER_FIRST"
+    # Kept for non-runtime compatibility callers; MCP runtime uses only the
+    # risk-based USER_ONLY / USER_FIRST strategies above.
     PLATFORM_ONLY = "PLATFORM_ONLY"
     PLATFORM_FIRST = "PLATFORM_FIRST"
 
 
 @dataclass(frozen=True, slots=True)
 class OperationFlags:
-    """Runtime contract of a single resolved operation.
-
-    Defaults match the current behaviour when no flags are known:
-    cheap, read-only, no confirmation, any credential scope.
-    """
-
-    risk_level: RiskLevel = "safe"
-    side_effects: bool = False
-    requires_confirmation: bool = False
-    credential_scope: CredentialScope = "auto"
-
-    @property
-    def is_risky(self) -> bool:
-        """Operation changes state or requires explicit human confirmation."""
-        return (
-            bool(self.side_effects)
-            or self.risk_level in ("write", "destructive")
-            or self.requires_confirmation
-        )
+    is_risky: bool = False
 
 
 class CredentialScopeResolver:
-    """Map `OperationFlags` → strict repository strategy."""
+    """Map platform-owned risk classification to a credential owner cascade.
 
-    _EXPLICIT_SCOPE_MAP: dict[str, CredentialStrategy] = {
-        "user": CredentialStrategy.USER_ONLY,
-        "platform": CredentialStrategy.PLATFORM_ONLY,
-    }
+    Risky operations require a credential owned by the current user. Safe
+    operations resolve User > Tenant > Platform. MCP descriptor metadata does
+    not participate in this decision.
+    """
 
     def resolve(self, flags: OperationFlags) -> CredentialStrategy:
-        """Return strict credential lookup strategy for the given flags.
+        return CredentialStrategy.USER_ONLY if flags.is_risky else CredentialStrategy.USER_FIRST
 
-        Rules (in order):
-        1. A `write` operation always requires user credentials.
-        2. Other explicit `credential_scope` values are honored.
-        3. "auto" + safe read-only operation → PLATFORM_FIRST.
-        4. "auto" + side effects/destructive → USER_ONLY.
-        """
-        if flags.risk_level == "write":
-            return CredentialStrategy.USER_ONLY
-        explicit = self._EXPLICIT_SCOPE_MAP.get(flags.credential_scope)
-        if explicit is not None:
-            return explicit
-        if flags.risk_level == "safe" and not flags.side_effects:
-            return CredentialStrategy.PLATFORM_FIRST
-        return CredentialStrategy.USER_ONLY
-
-    def resolve_strategy(self, flags: OperationFlags) -> Strategy:
-        """Backward-compatible adapter for old call sites."""
-        return self.resolve(flags).value  # type: ignore[return-value]
+    def resolve_strategy(self, flags: OperationFlags) -> str:
+        return self.resolve(flags).value

@@ -132,13 +132,20 @@ class CredentialRepository:
 
         Strategies:
         - USER_ONLY: only user creds
+        - USER_FIRST: user > tenant > platform (runtime safe operations)
         - PLATFORM_ONLY: only platform creds
-        - PLATFORM_FIRST: platform > tenant > user
+        - PLATFORM_FIRST: platform > tenant > user (legacy non-runtime callers)
         """
         base = [Credential.instance_id == instance_id, Credential.is_active == True]
 
         if strategy == "USER_ONLY":
             return await self._find_user(base=base, user_id=user_id)
+        elif strategy == "USER_FIRST":
+            return (
+                await self._find_user(base=base, user_id=user_id)
+                or await self._find_tenant(base=base, tenant_id=tenant_id)
+                or await self._find_platform(base=base)
+            )
         elif strategy == "PLATFORM_ONLY":
             return await self._find_platform(base=base)
         elif strategy == "PLATFORM_FIRST":

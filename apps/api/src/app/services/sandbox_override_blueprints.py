@@ -212,7 +212,6 @@ SANDBOX_BLUEPRINTS: List[Dict[str, Any]] = [
                     _field("risk_level", "Risk level", "risk_level", field_type="select", options=["safe", "write", "destructive"]),
                     _field("idempotent", "Idempotent", "idempotent", field_type="boolean"),
                     _field("requires_confirmation", "Requires confirmation", "requires_confirmation", field_type="boolean"),
-                    _field("credential_scope", "Credential scope", "credential_scope", field_type="select", editable=False, options=["auto", "user", "platform"]),
                     _field("examples", "Examples", "examples", field_type="json", editable=False),
                     _field("input_schema", "Input schema", "input_schema", field_type="json", editable=False),
                     _field("output_schema", "Output schema", "output_schema", field_type="json", editable=False),

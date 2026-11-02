@@ -55,12 +55,13 @@ def parse_discovered_operation(
     input_schema: Optional[Dict[str, Any]],
     output_schema: Optional[Dict[str, Any]],
     annotations: Optional[Dict[str, Any]] = None,
+    trust_runtime_metadata: bool = True,
 ) -> DiscoveredOperation:
     normalized_input_schema = dict(input_schema or {})
     _validate_json_schema_structure(tool_name, normalized_input_schema)
     runtime_payload = normalized_input_schema.get("x-runtime")
     reported_risk_level = None
-    if isinstance(runtime_payload, dict) and runtime_payload.get("risk_level") is not None:
+    if trust_runtime_metadata and isinstance(runtime_payload, dict) and runtime_payload.get("risk_level") is not None:
         reported_risk_level = str(runtime_payload["risk_level"]).strip() or None
     elif isinstance(annotations, dict):
         # MCP's standard annotations are boolean hints rather than a risk
@@ -69,16 +70,38 @@ def parse_discovered_operation(
             reported_risk_level = "destructive"
         elif annotations.get("readOnlyHint") is True:
             reported_risk_level = "read_only"
-    runtime_flags = _parse_runtime_flags(
-        tool_name=tool_name,
-        runtime_payload=runtime_payload,
-    )
-    normalized_input_schema["x-runtime"] = {
-        "risk_level": runtime_flags.risk_level,
-        "side_effects": runtime_flags.side_effects,
-        "requires_confirmation": runtime_flags.requires_confirmation,
-        "credential_scope": runtime_flags.credential_scope,
-    }
+    if trust_runtime_metadata:
+        runtime_flags = _parse_runtime_flags(
+            tool_name=tool_name,
+            runtime_payload=runtime_payload,
+        )
+    else:
+        # An external MCP server may describe capabilities, but it cannot
+        # select credential ownership or platform policy. Only the binary
+        # risk classification survives discovery; runtime authorization is
+        # resolved from the platform's per-operation policy later.
+        risk_level = str(
+            runtime_payload.get("risk_level") or ""
+            if isinstance(runtime_payload, dict) else ""
+        ).strip().lower()
+        trusted_risk = risk_level if risk_level in {"safe", "risky"} else None
+        normalized_input_schema.pop("x-runtime", None)
+        if trusted_risk is not None:
+            normalized_input_schema["x-runtime"] = {"risk_level": trusted_risk}
+        runtime_flags = RuntimeFlags(
+            risk_level="safe",
+            side_effects=False,
+            requires_confirmation=False,
+            credential_scope="auto",
+        )
+        reported_risk_level = trusted_risk
+    if trust_runtime_metadata:
+        normalized_input_schema["x-runtime"] = {
+            "risk_level": runtime_flags.risk_level,
+            "side_effects": runtime_flags.side_effects,
+            "requires_confirmation": runtime_flags.requires_confirmation,
+            "credential_scope": runtime_flags.credential_scope,
+        }
     return DiscoveredOperation(
         name=tool_name,
         description=str(description or ""),

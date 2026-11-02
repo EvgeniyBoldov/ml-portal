@@ -16,7 +16,6 @@ class OperationRuntimeContext(BaseModel):
     provider_instance_id: str = Field(..., min_length=1)
     provider_instance_slug: str = Field(..., min_length=1)
     has_credentials: bool = False
-    credential_scope: str = "auto"
     config: Dict[str, Any] = Field(default_factory=dict)
     provider_config: Dict[str, Any] = Field(default_factory=dict)
     domain: str = Field(..., min_length=1)

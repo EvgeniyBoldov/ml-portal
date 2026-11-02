@@ -369,6 +369,9 @@ async def mcp_root(
                             "description": "Run a read-only SQL query against the remote PostgreSQL database.",
                             "inputSchema": {
                                 "type": "object",
+                                # SQL execution can be made writable by configuration;
+                                # keep the operation under user-owned credentials.
+                                "x-runtime": {"risk_level": "risky"},
                                 "properties": {
                                     "sql": {"type": "string", "description": "Read-only SQL statement"},
                                     "limit": {"type": "integer", "description": "Row limit if SQL has no LIMIT"},
@@ -386,6 +389,7 @@ async def mcp_root(
                             "description": "Search tables, views, and columns in the remote PostgreSQL schema catalog.",
                             "inputSchema": {
                                 "type": "object",
+                                "x-runtime": {"risk_level": "safe"},
                                 "properties": {
                                     "query": {"type": "string"},
                                     "schema": {"type": "string"},

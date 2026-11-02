@@ -141,14 +141,27 @@ class SandboxRunManager:
             },
         )
 
+    async def claim_resume_run(
+        self,
+        run_id: UUID,
+        *,
+        expected_status: str,
+        expected_paused_action: Optional[Dict[str, Any]],
+        expected_paused_context: Optional[Dict[str, Any]],
+    ) -> bool:
+        """Claim a resume only if the pause checkpoint still matches."""
+        if expected_status not in {"waiting_input", "waiting_confirmation"}:
+            return False
+        return await self.host.runs.claim_resume(
+            run_id,
+            expected_status=expected_status,
+            expected_paused_action=expected_paused_action,
+            expected_paused_context=expected_paused_context,
+        )
+
     async def request_cancel(self, run_id: UUID) -> Optional[SandboxRun]:
         """Persist an explicit cancellation request for a live runner."""
-        obj = await self.host.runs.get_by_id(run_id)
-        if not obj:
-            return None
-        if obj.status != "running":
-            return obj
-        return await self.host.runs.update(obj, {"status": "cancelling"})
+        return await self.host.runs.request_cancel(run_id)
 
     async def update_run_context(
         self,

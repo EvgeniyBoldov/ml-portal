@@ -10,6 +10,16 @@ from helpers.adapter_policy import ToolPolicy
 from helpers.mcp_adapter import AdapterConfig, MCPAdapter
 
 DEFAULT_TOOLS = "jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page"
+DEFAULT_RISK_DESCRIPTORS = {
+    name: {"x-runtime": {"risk_level": "safe"}}
+    for name in (
+        "jira_search",
+        "jira_get_issue",
+        "jira_get_project_issues",
+        "confluence_search",
+        "confluence_get_page",
+    )
+}
 ENABLED_TOOLS = frozenset(
     name.strip() for name in (os.environ.get("ATLASSIAN_MCP_ENABLED_TOOLS", "").strip() or DEFAULT_TOOLS).split(",")
     if name.strip()
@@ -31,7 +41,11 @@ async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[st
 def _build_app() -> MCPAdapter:
     from mcp_atlassian.servers.main import main_mcp
     upstream = main_mcp.http_app(path="/mcp", stateless_http=True, transport="streamable-http")
-    descriptors = json.loads(os.environ.get("MCP_ADAPTER_TOOL_DESCRIPTORS") or "{}")
+    descriptors = dict(DEFAULT_RISK_DESCRIPTORS)
+    configured_descriptors = json.loads(os.environ.get("MCP_ADAPTER_TOOL_DESCRIPTORS") or "{}")
+    if not isinstance(configured_descriptors, dict):
+        raise ValueError("MCP_ADAPTER_TOOL_DESCRIPTORS must be an object keyed by tool name")
+    descriptors.update(configured_descriptors)
     return MCPAdapter(AdapterConfig(
         name="portal-atlassian-mcp-adapter",
         policy=ToolPolicy(ENABLED_TOOLS, descriptors),

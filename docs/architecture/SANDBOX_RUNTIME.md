@@ -271,16 +271,61 @@ Bad group boundaries:
 5. Resolve the same routing, policy, and execution layers.
 6. Emit the same trace primitives as production, with higher visibility.
 
+## Run and companion chat-turn lifecycle
+
+Each sandbox run owns a companion turn in the session's hidden upload chat. The
+run is authoritative for sandbox execution; the companion turn records the
+shared chat-context lifecycle. `SandboxRuntimeRunner` runs independently from
+the HTTP/SSE observer. Disconnecting an observer does not stop a started run;
+the dedicated cancel path signals the runner.
+
+Only `STOP` events with `waiting_input` or `waiting_confirmation` create a
+resumable sandbox pause. Terminal `STOP`, `ERROR`, and `FINAL` events finish the
+run and companion turn with their terminal status. If setup fails before
+ownership transfers to the runner, a persisted current run and any companion
+turn already created for it are failed when the terminal write succeeds.
+Unknown terminal reasons, including `budget_exceeded`, are recorded as failed.
+Errors discovered while preparing the stream end it with `error` and `done`;
+synchronous validation errors keep their HTTP error response after the run is
+failed.
+
+Before opening another turn in the hidden chat, sandbox reconciliation checks
+active or waiting turns against their linked run. It closes a companion turn
+only when that same `SandboxRun` is already `completed`, `failed`, or
+`cancelled`; running and genuinely paused runs continue to block a second turn.
+This also repairs an older failed run whose companion turn was incorrectly
+left waiting, when the operator next retries in that sandbox session. No rows
+are changed by a separate cleanup job.
+
+The sandbox runner refreshes the companion turn's existing 15-minute heartbeat
+lease every 30 seconds while it owns execution. A new run does not fail older
+runs solely because their `started_at` is more than five minutes old. The
+heartbeat helps identify an abandoned active turn, but sandbox execution is
+still process-local: it does not resume work after an API process crash.
+Durable sandbox job recovery and orphan cleanup require a separate mechanism.
+Terminal status persistence also depends on the database being available.
+
 Paused-run rule:
 - Text questions and boolean confirmations use the same requester-bound
   `RuntimeInteraction`, including a private checkpoint.
 - An answer resumes the same sandbox run at its requester: TurnPreflight,
   planner checkpoint or task agent. Planner/task answers bypass TurnPreflight.
-- The resume snapshot is copied and validated before the persisted transport
-  pause is cleared. A matching signed token is required for a gated operation.
+- The resume snapshot is copied and validated, then the API atomically claims
+  that exact pause by matching its status, paused action, and paused context
+  before clearing the persisted checkpoint. A competing answer or paused-run
+  cancel for an outdated checkpoint receives HTTP `409` and does not alter the
+  run owned by the successful claimant. If committing the claim fails or is
+  cancelled, the endpoint rolls back and propagates the failure without
+  terminal cleanup, since ownership was not confirmed. An ambiguous database
+  commit may still have persisted the claim; without durable per-attempt
+  ownership, such a run requires separate orphan recovery. A matching signed
+  token is required for a gated operation.
 - `{"action":"answer","pause_id":"...","response":false}` is a negative
   answer. `{"action":"cancel","pause_id":"..."}` cancels the paused run.
   The dedicated cancel endpoint handles actively running executions.
+- Active Stop atomically changes the run from `running` to `cancelling` before
+  dispatching cancellation. If the run becomes terminal first, the endpoint
+  returns HTTP `409` and leaves its terminal state intact.
 - See [Runtime Interactions](./RUNTIME_INTERACTIONS.md) for the shared contract.
 
 Snapshot rule:

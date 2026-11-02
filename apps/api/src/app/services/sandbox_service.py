@@ -417,6 +417,21 @@ class SandboxService:
     async def resume_run(self, run_id: UUID) -> Optional[SandboxRun]:
         return await self.run_manager.resume_run(run_id)
 
+    async def claim_resume_run(
+        self,
+        run_id: UUID,
+        *,
+        expected_status: str,
+        expected_paused_action: Optional[Dict[str, Any]],
+        expected_paused_context: Optional[Dict[str, Any]],
+    ) -> bool:
+        return await self.run_manager.claim_resume_run(
+            run_id,
+            expected_status=expected_status,
+            expected_paused_action=expected_paused_action,
+            expected_paused_context=expected_paused_context,
+        )
+
     async def request_cancel(self, run_id: UUID) -> Optional[SandboxRun]:
         return await self.run_manager.request_cancel(run_id)
 

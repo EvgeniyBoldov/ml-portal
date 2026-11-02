@@ -173,6 +173,8 @@ services:
     env_file: ${PROD_ENV_FILE:?PROD_ENV_FILE is required}
     environment:
       - PYTHONPATH=/app
+      - ENV=production
+      - DEBUG=false
       - MODELS_ROOT=/app/models_llm
       - MEMORY_SEARCH_BACKEND=${MEMORY_SEARCH_BACKEND:-hipporag}
       - HIPPO_WORKER_URL=${HIPPO_WORKER_URL:-http://hipporag:8080}
@@ -181,6 +183,7 @@ services:
       - DOCLING_URL=${DOCLING_URL:-http://docling:5001}
       - DOCLING_TIMEOUT_SECONDS=${DOCLING_TIMEOUT_SECONDS:-180}
       - TOOL_RESULTS_DB_URL=${TOOL_RESULTS_DB_URL:?TOOL_RESULTS_DB_URL is required}
+      - MCP_CREDENTIAL_BROKER_ENABLED=true
       - MCP_CREDENTIAL_BROKER_REQUIRED=true
       - MCP_ALLOW_RAW_CREDENTIAL_FALLBACK=false
     depends_on:

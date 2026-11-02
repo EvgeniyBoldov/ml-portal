@@ -248,6 +248,7 @@ TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
+            "x-runtime": {"risk_level": "safe"},
             "properties": {
                 "model_id": {
                     "type": "string",
@@ -305,6 +306,7 @@ TOOLS = [
         ),
         "inputSchema": {
             "type": "object",
+            "x-runtime": {"risk_level": "safe"},
             "properties": {
                 "model_id": {
                     "type": "string",

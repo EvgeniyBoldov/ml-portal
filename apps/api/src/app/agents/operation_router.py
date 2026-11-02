@@ -171,8 +171,10 @@ class OperationRouter:
                 collection_snapshot=status_snapshot,
             )
             resolved_instance.readiness = readiness
-            if readiness.credential_status == "missing":
-                result.missing.credentials.append(instance.slug)
+            # Credential absence is operation-scoped. Keep the operations in
+            # the runtime surface so the agent can call one and receive an
+            # explicit credential_missing result; do not make preflight
+            # unavailable for the entire agent.
             if not operations:
                 result.missing.tools.append(f"{instance.slug} (no operations)")
                 logger.debug("preflight_collection_completed", extra={**collection_log_context, "duration_ms": int((monotonic() - collection_started) * 1000), "operations_count": 0})
@@ -196,7 +198,6 @@ class OperationRouter:
                     collection_id=collection_id,
                     collection_slug=collection_slug,
                     has_credentials=operation.target.has_credentials,
-                    credential_scope=operation.credential_scope,
                 )
                 graph_builder.add_operation(
                     operation=operation,
@@ -286,7 +287,6 @@ class OperationRouter:
                 collection_id=None,
                 collection_slug=None,
                 has_credentials=operation.target.has_credentials,
-                credential_scope=operation.credential_scope,
             )
             graph_builder.add_operation(
                 operation=operation,
@@ -372,7 +372,6 @@ class OperationRouter:
         collection_id: Optional[str],
         collection_slug: Optional[str],
         has_credentials: bool,
-        credential_scope: str,
     ) -> Dict[str, Any]:
         return {
             "instance_id": str(instance.id),
@@ -383,7 +382,6 @@ class OperationRouter:
             "provider_instance_id": str(provider_for_execution.id),
             "provider_instance_slug": provider_for_execution.slug,
             "has_credentials": has_credentials,
-            "credential_scope": credential_scope,
             "config": instance.config or {},
             "provider_config": provider_for_execution.config or {},
             "domain": runtime_domain,

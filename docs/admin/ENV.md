@@ -179,7 +179,7 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `NGINX_PROXY_TIMEOUT` — timeout прокси.
 
 ## MCP
-- `NETBOX_URL` — URL NetBox для `netbox-mcp-custom`.
+- `NETBOX_URL` — URL NetBox для `netbox-mcp-custom`. Credentials с `auth_type=token` передаются через общий broker adapter на каждый вызов; для локальной совместимости raw credentials требуют `MCP_ADAPTER_ALLOW_RAW_CREDENTIALS=true` и `ENV=local|dev|development`.
 - `JIRA_CA_BUNDLE` — путь к CA bundle для self-hosted Jira, если используется внутренний CA.
 - `JIRA_TIMEOUT_SECONDS` — timeout запросов Atlassian Jira MCP.
 - `JIRA_MCP_MAX_RESULTS` — верхняя граница результатов Jira MCP в одном ответе.
@@ -190,8 +190,8 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `ATLASSIAN_ALLOWED_URL_DOMAINS` — comma-separated hostname allowlist для self-hosted Atlassian URL, блокируемых upstream SSRF-защитой (например, внутренний Jira/DC).
 
 ## MCP / Runtime Security
-- `MCP_CREDENTIAL_BROKER_ENABLED` — local/dev override. В production, staging и других non-local окружениях broker-flow включён принудительно, значение переменной игнорируется.
-- `MCP_CREDENTIAL_BROKER_REQUIRED` — требовать broker token в local/dev; во всех non-local окружениях требование включено принудительно.
+- `MCP_CREDENTIAL_BROKER_ENABLED` — local/dev override. В production, staging и других non-local окружениях broker-flow включён принудительно. Если `MCP_CREDENTIAL_BROKER_REQUIRED=true`, broker включается и в local/dev.
+- `MCP_CREDENTIAL_BROKER_REQUIRED` — требовать broker token в local/dev; во всех non-local окружениях требование включено принудительно. В production Compose также явно заданы `ENV=production` и `MCP_CREDENTIAL_BROKER_ENABLED=true`.
 - `MCP_ALLOW_RAW_CREDENTIAL_FALLBACK` — разрешить legacy raw credential fallback только в local/dev; в non-local окружениях он отключён принудительно.
 - `MCP_CREDENTIAL_TOKEN_TTL_SECONDS` — TTL broker access token.
 - `MCP_CREDENTIAL_BROKER_BASE_URL` — base URL credential broker endpoint.

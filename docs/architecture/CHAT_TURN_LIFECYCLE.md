@@ -27,11 +27,14 @@ and the latest safe stage activity when available. `GET
 statuses remain separate control-plane state and are not rewritten by this
 contract.
 
-The runner updates `heartbeat_at` every 30 seconds while the turn is active.
-The 15-minute lease detects a crashed API process or a dead runner; it no longer
-expires a live, long-running turn merely because `started_at` is old. Execution
-ownership is still process-local, so heartbeat does not recover work after a
-process crash. The lease is stale detection, not durable job recovery.
+The chat and sandbox runners update `heartbeat_at` every 30 seconds while they
+own an active turn. The 15-minute lease detects a crashed API process or a dead
+runner; it no longer expires a live, long-running turn merely because
+`started_at` is old. Execution ownership is still process-local, so heartbeat
+does not recover work after a process crash. The lease is stale detection, not
+durable job recovery. Sandbox reconciliation also compares an active or waiting
+companion turn with its linked `SandboxRun` and closes it when that run is
+already terminal; a live run or a real waiting checkpoint remains active.
 
 ## Stage and activity
 

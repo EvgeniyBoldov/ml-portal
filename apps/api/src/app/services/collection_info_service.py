@@ -52,11 +52,12 @@ class CollectionInfoMetadataLoader:
                 and str(getattr(item.target, "health_status", "") or "").strip()
             }
         )
-        all_have_credentials = all(
-            bool(getattr(item.target, "has_credentials", False))
-            for item in operations
-            if getattr(item, "source", None) == "mcp"
+        mcp_operations = [item for item in operations if getattr(item, "source", None) == "mcp"]
+        all_have_credentials = bool(mcp_operations) and all(
+            bool(getattr(item.target, "has_credentials", False)) for item in mcp_operations
         )
+        data_instance = getattr(collection, "data_instance", None)
+        remote_data_instance = bool(getattr(data_instance, "is_remote", False))
         if operations:
             status = "ready"
         else:
@@ -66,9 +67,10 @@ class CollectionInfoMetadataLoader:
             "schema_freshness": getattr(collection, "schema_status", None),
             "provider_health": provider_healths,
             "credential_status": (
-                "available"
-                if all_have_credentials or not any(getattr(item, "source", None) == "mcp" for item in operations)
-                else "missing"
+                "ok" if all_have_credentials
+                else "missing" if mcp_operations
+                else "unknown" if remote_data_instance
+                else "not_required"
             ),
             "operations_count": len(operations),
             "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,

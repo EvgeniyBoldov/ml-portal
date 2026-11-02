@@ -442,7 +442,10 @@ async def mcp(body: RPCRequest, response: Response, mcp_session_id: str | None =
         return ok({})
     if body.method == "tools/list":
         return ok({"tools": [{"name": name, "description": description,
-                              "inputSchema": model.model_json_schema(),
+                              "inputSchema": {
+                                  **model.model_json_schema(),
+                                  "x-runtime": {"risk_level": "safe" if readonly else "risky"},
+                              },
                               "annotations": {"readOnlyHint": readonly, "destructiveHint": False}}
                              for name, (model, description, readonly) in TOOL_MODELS.items()]})
     if body.method != "tools/call":
