@@ -8,6 +8,7 @@
 Celery Beat (schedule)
        │
        ├── probe_mcp_connectors    (every 1m)
+       ├── probe_data_connectors   (every 1m)
        ├── probe_embedding_models  (every 1m)
        ├── probe_rerank_models     (every 1m)
        ├── probe_llm_models        (every 10m)
@@ -56,6 +57,8 @@ Celery Beat (schedule)
 | Адаптер | Тип цели | Метод проверки | Timeout |
 |---|---|---|---|
 | `MCPHealthAdapter` | `ToolInstance` (connector_type=mcp) | MCP `initialize` RPC | 10s |
+| `ToolInstanceHealthService` | `ToolInstance` (data/api) | linked MCP provider `initialize` + `tools/list` | 10s |
+| `ToolInstanceHealthService` | `ToolInstance` (data/sql) | linked MCP provider + read-only `execute_sql` probe | 15s |
 | `EmbeddingHealthAdapter` | `Model` (type=embedding) | `embed_text("health check")` | — |
 | `RerankHealthAdapter` | `Model` (type=rerank) | `GET {endpoint}/health` | 10s |
 | `LLMHealthAdapter` | `Model` (type=llm) | `GET {endpoint}/health` | 10s |
@@ -83,12 +86,23 @@ Celery Beat (schedule)
 | Задача | Расписание | Очередь | Политика |
 |---|---|---|---|
 | `probe_mcp_connectors` | каждую 1 мин | `health` | `BACKOFF_POLICY_1M` |
+| `probe_data_connectors` | каждую 1 мин | `health` | `BACKOFF_POLICY_1M` |
 | `probe_embedding_models` | каждую 1 мин | `health` | `BACKOFF_POLICY_1M` |
 | `probe_rerank_models` | каждую 1 мин | `health` | `BACKOFF_POLICY_1M` |
 | `probe_llm_models` | каждые 10 мин | `health` | `BACKOFF_POLICY_10M` |
 | `rescan_discovery` | каждые 10 мин | `health` | — |
 
 Beat-расписание активируется при `BEAT=1` в env (см. `celery_app.py`).
+
+### API data instance probe
+
+`connector_subtype=api` checks require a configured API URL and linked MCP
+provider. The probe initializes that provider and fetches its current
+`tools/list`, matching the runtime capability-sync path. It does not call a
+provider tool or the external API endpoint: generic API sources have no
+universal safe read operation. A healthy result therefore confirms provider
+availability and a valid tool catalogue; source availability is confirmed only
+when a real provider operation runs.
 
 ## Distributed Lock
 

@@ -114,7 +114,14 @@ async def mcp_list_tools(
         )
         tools_response.raise_for_status()
         payload = parse_mcp_response(tools_response.text)
-        tools = payload.get("result", {}).get("tools", [])
+        if isinstance(payload.get("error"), dict):
+            code = payload["error"].get("code")
+            suffix = f" (code {code})" if isinstance(code, int) else ""
+            raise ValueError(f"MCP tools/list failed{suffix}")
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            raise ValueError("MCP tools/list response does not contain a result object")
+        tools = result.get("tools", [])
         if not isinstance(tools, list):
             raise ValueError("MCP tools/list response does not contain a tools array")
         return tools

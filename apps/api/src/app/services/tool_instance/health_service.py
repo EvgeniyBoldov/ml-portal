@@ -4,7 +4,12 @@ from urllib.parse import quote, urlparse
 
 from app.core.http.tls import outbound_http_verify
 from app.services.credential_service import CredentialService
-from app.services.mcp_jsonrpc_client import mcp_call_tool, mcp_initialize, mcp_result_error_message
+from app.services.mcp_jsonrpc_client import (
+    mcp_call_tool,
+    mcp_initialize,
+    mcp_list_tools,
+    mcp_result_error_message,
+)
 from app.services.tool_instance.types import HealthCheckResult
 
 
@@ -46,6 +51,9 @@ class ToolInstanceHealthService:
 
         if connector_type == "data" and connector_subtype == "sql":
             return await self._check_sql_connector(instance)
+
+        if connector_type == "data" and connector_subtype == "api":
+            return await self._check_api_connector(instance)
 
         url = instance.url
         if not url:
@@ -205,6 +213,60 @@ class ToolInstanceHealthService:
             status="unknown",
             message="MCP sync available, but database_name is not configured for strict verification",
             details={"provider_slug": provider.slug},
+        )
+
+    async def _check_api_connector(self, instance) -> HealthCheckResult:
+        """Check API capability sync through the data instance's MCP provider.
+
+        A generic API source has no universal read-only operation that can be
+        called safely. This verifies that the configured provider initializes
+        and returns its current tool catalogue; actual source availability is
+        verified when a provider tool is executed.
+        """
+        if not str(getattr(instance, "url", "") or "").strip():
+            return HealthCheckResult(
+                status="unhealthy",
+                message="API data connector has empty URL",
+            )
+
+        provider = getattr(instance, "access_via", None)
+        if provider is None and getattr(instance, "access_via_instance_id", None):
+            provider = await self.host.repo.get_by_id(instance.access_via_instance_id)
+        if not provider:
+            return HealthCheckResult(
+                status="unhealthy",
+                message="No MCP provider linked (access_via_instance_id is not set)",
+            )
+        if str(getattr(provider, "connector_type", "") or "").strip().lower() != "mcp":
+            return HealthCheckResult(
+                status="unhealthy",
+                message="Linked provider is not MCP connector",
+            )
+
+        provider_url = str(getattr(provider, "url", "") or "").strip()
+        if not provider_url:
+            return HealthCheckResult(
+                status="unhealthy",
+                message="Linked MCP provider has empty URL",
+            )
+
+        try:
+            tools = await mcp_list_tools(provider_url=provider_url, timeout_s=10)
+        except Exception as exc:
+            return HealthCheckResult(
+                status="unhealthy",
+                message=f"MCP tool sync unavailable: {type(exc).__name__}",
+                details={"error_type": type(exc).__name__, "provider_slug": provider.slug},
+            )
+
+        return HealthCheckResult(
+            status="healthy",
+            message=f"MCP tool sync available ({len(tools)} tools)",
+            details={
+                "provider_slug": provider.slug,
+                "discovered_tool_count": len(tools),
+                "api_endpoint_probed": False,
+            },
         )
 
     @staticmethod
