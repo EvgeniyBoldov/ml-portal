@@ -289,7 +289,7 @@ services:
   #       condition: service_healthy
   #   restart: unless-stopped
 
-  atlassian-jira-mcp:
+  atlassian-jira-legacy-mcp:
     build:
       context: .
       dockerfile: mcp/mcp_server.dockerfile
@@ -308,25 +308,48 @@ services:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
 
-  # Upstream sooperset/mcp-atlassian behind the Portal credential/risk/filter adapter.
-  atlassian-mcp:
+  # Jira-only upstream sooperset/mcp-atlassian behind the Portal adapter.
+  atlassian-jira-mcp:
     build:
       context: .
       dockerfile: mcp/mcp_server.dockerfile
       args:
         - MCP_SERVER_DIR=atlassian_adapter
     ports:
-      - "127.0.0.1:${ATLASSIAN_ADAPTER_PORT:-8017}:8080"
+      - "127.0.0.1:${ATLASSIAN_JIRA_ADAPTER_PORT:-8017}:8080"
     environment:
       - PORT=8080
       - JIRA_URL=${ATLASSIAN_JIRA_URL:-https://jira.invalid}
       - JIRA_PERSONAL_TOKEN=broker-managed-placeholder
+      - CONFLUENCE_URL=
+      - CONFLUENCE_PERSONAL_TOKEN=
+      - ALLOW_GLOBAL_CRED_FALLBACK=false
+      - READ_ONLY_MODE=false
+      - MCP_ALLOWED_URL_DOMAINS=${ATLASSIAN_ALLOWED_URL_DOMAINS:-}
+      - ATLASSIAN_MCP_ENABLED_TOOLS=${ATLASSIAN_JIRA_MCP_ENABLED_TOOLS:-jira_search,jira_get_issue,jira_get_project_issues}
+      - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
+      - ATLASSIAN_MCP_TIMEOUT_SECONDS=${ATLASSIAN_MCP_TIMEOUT_SECONDS:-120}
+    restart: unless-stopped
+
+  # Confluence-only upstream with an independent endpoint and allowlist.
+  atlassian-confluence-mcp:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        - MCP_SERVER_DIR=atlassian_adapter
+    ports:
+      - "127.0.0.1:${ATLASSIAN_CONFLUENCE_ADAPTER_PORT:-8018}:8080"
+    environment:
+      - PORT=8080
+      - JIRA_URL=
+      - JIRA_PERSONAL_TOKEN=
       - CONFLUENCE_URL=${ATLASSIAN_CONFLUENCE_URL:-https://confluence.invalid}
       - CONFLUENCE_PERSONAL_TOKEN=broker-managed-placeholder
       - ALLOW_GLOBAL_CRED_FALLBACK=false
       - READ_ONLY_MODE=false
       - MCP_ALLOWED_URL_DOMAINS=${ATLASSIAN_ALLOWED_URL_DOMAINS:-}
-      - ATLASSIAN_MCP_ENABLED_TOOLS=${ATLASSIAN_MCP_ENABLED_TOOLS:-jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page}
+      - ATLASSIAN_MCP_ENABLED_TOOLS=${ATLASSIAN_CONFLUENCE_MCP_ENABLED_TOOLS:-confluence_search,confluence_get_page}
       - MCP_SECRET_BROKER_TIMEOUT_SECONDS=${MCP_SECRET_BROKER_TIMEOUT_SECONDS:-10}
       - ATLASSIAN_MCP_TIMEOUT_SECONDS=${ATLASSIAN_MCP_TIMEOUT_SECONDS:-120}
     restart: unless-stopped

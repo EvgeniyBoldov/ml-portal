@@ -1,8 +1,18 @@
 # Atlassian MCP Adapter
 
-`atlassian-mcp` exposes the upstream [`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian)
-server through a Portal-owned MCP adapter. The upstream package version is pinned
-in `mcp/atlassian_adapter/requirements.txt`.
+`atlassian-jira-mcp` and `atlassian-confluence-mcp` expose the upstream
+[`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) through
+separate Portal-owned adapter containers. Both use the package version pinned
+in `mcp/atlassian_adapter/requirements.txt`; each container is configured for
+exactly one product and one product URL.
+
+Register two MCP provider instances in Portal, one for each service. Bind each
+data connector to its matching MCP provider through `access_via_instance_id`.
+Discovery and runtime tool sets are isolated by provider instance, so Jira
+collections resolve Jira tools and Confluence collections resolve Confluence
+tools without tool-level product metadata or additional resolver logic.
+Credentials remain scoped to the corresponding data connector and must contain
+the matching product PAT; the data connector URL takes precedence at call time.
 
 ## Adapter responsibilities
 
@@ -31,9 +41,13 @@ service credentials.
 
 ## Configuration and onboarding
 
-`ATLASSIAN_JIRA_URL` and `ATLASSIAN_CONFLUENCE_URL` configure the provider URLs.
-`ATLASSIAN_MCP_ENABLED_TOOLS` is a comma-separated allowlist of exact upstream
-tool names. Its default is `jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page`.
+`ATLASSIAN_JIRA_URL` and `ATLASSIAN_CONFLUENCE_URL` configure the respective
+provider URLs. The Jira container leaves `CONFLUENCE_URL` empty; the Confluence
+container leaves `JIRA_URL` empty. `ATLASSIAN_JIRA_MCP_ENABLED_TOOLS` and
+`ATLASSIAN_CONFLUENCE_MCP_ENABLED_TOOLS` are independent comma-separated
+allowlists of exact upstream tool names. Defaults are
+`jira_search,jira_get_issue,jira_get_project_issues` and
+`confluence_search,confluence_get_page` respectively.
 Set only tools supported by the configured Atlassian products and deployment.
 For self-hosted Atlassian instances on private networks, set
 `ATLASSIAN_ALLOWED_URL_DOMAINS` to their exact hostnames; upstream SSRF checks
@@ -47,7 +61,9 @@ instance URL is not configured globally). The adapter supports the standard
 
 ## Operations
 
-The local Compose service binds to `127.0.0.1:8017` by default (override with
-`ATLASSIAN_ADAPTER_PORT`); production deployments
-should register the service on the internal Compose network. Health is available
-at `/healthz`. The legacy `atlassian-jira-mcp` shim remains a separate service.
+The local Compose services bind to `127.0.0.1:8017` (Jira) and
+`127.0.0.1:8018` (Confluence), configurable with
+`ATLASSIAN_JIRA_ADAPTER_PORT` and `ATLASSIAN_CONFLUENCE_ADAPTER_PORT`.
+Production provider URLs should use the corresponding service names on the
+internal Compose network. Health is available at `/healthz`. The older Portal
+Jira shim remains available as `atlassian-jira-legacy-mcp`.
