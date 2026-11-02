@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 import uuid
 from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
@@ -11,9 +13,15 @@ import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
 from helpers.secret_broker import SecretBrokerClient, extract_credential_access
+from helpers.observability import (
+    UpstreamHTTPError,
+    log_mcp_event,
+    normalize_request_id,
+)
 
 
 app = FastAPI(title="ML Inference MCP Shim", version="1.0.0")
+logger = logging.getLogger("mcp.ml_inference")
 
 VERIFY_SSL = os.environ.get("VERIFY_SSL", "true").lower() == "true"
 ML_INFERENCE_CA_BUNDLE = (os.environ.get("ML_INFERENCE_CA_BUNDLE") or "").strip()
@@ -162,7 +170,7 @@ async def _facade_request(
     async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS, verify=verify) as client:
         response = await client.request(method, f"{base_url}{path}", headers=headers, params=params, json=body)
     if response.status_code >= 400:
-        raise ValueError(f"ML inference facade returned HTTP {response.status_code}")
+        raise UpstreamHTTPError(response.status_code)
     try:
         return _assert_bounded(response.json())
     except json.JSONDecodeError as exc:
@@ -283,10 +291,17 @@ async def mcp_root(
     request: Request,
     response: Response,
     mcp_session_id: str | None = Header(default=None),
+    x_portal_request_id: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    payload = await request.json()
-    rpc_id, method, params = payload.get("id"), payload.get("method"), payload.get("params") or {}
+    started = time.monotonic()
+    request_id = normalize_request_id(x_portal_request_id)
+    method = "unknown"
+    tool_name = ""
+    stage = "request_parse"
+    rpc_id: Any = None
     try:
+        payload = await request.json()
+        rpc_id, method, params = payload.get("id"), payload.get("method"), payload.get("params") or {}
         if method == "initialize":
             session_id = str(uuid.uuid4())
             SESSIONS.add(session_id)
@@ -301,24 +316,56 @@ async def mcp_root(
                 },
             )
         if not mcp_session_id or mcp_session_id not in SESSIONS:
+            log_mcp_event(
+                logger,
+                outcome="failed",
+                request_id=request_id,
+                server="ml-inference",
+                method=str(method),
+                stage="session_validation",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="SessionNotInitialized",
+                rpc_code=-32002,
+            )
             return _jsonrpc_err(rpc_id, -32002, "Session not initialized")
         if method == "tools/list":
             return _jsonrpc_ok(rpc_id, {"tools": TOOLS})
         if method != "tools/call":
+            log_mcp_event(
+                logger,
+                outcome="failed",
+                request_id=request_id,
+                server="ml-inference",
+                method=str(method),
+                stage="method_dispatch",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="MethodNotFound",
+                rpc_code=-32601,
+            )
             return _jsonrpc_err(rpc_id, -32601, f"Method not found: {method}")
 
         tool_name, arguments = params.get("name"), params.get("arguments") or {}
+        tool_name = str(tool_name or "")
+        stage = "credential_resolution"
         base_url, auth_headers = await _resolve_runtime_access(arguments)
+        stage = "facade_request"
         if tool_name == "model.info":
             model_id = arguments.get("model_id")
             if model_id is not None and str(model_id).strip():
-                data = _validate_info_response(await _facade_request(
+                raw_data = await _facade_request(
                     base_url=base_url, auth_headers=auth_headers, method="GET", path=_path_for_model(str(model_id))
-                ), model_id=str(model_id).strip())
+                )
             else:
-                data = _validate_info_response(await _facade_request(
+                raw_data = await _facade_request(
                     base_url=base_url, auth_headers=auth_headers, method="GET", path=MODELS_PATH
-                ), model_id=None)
+                )
+            stage = "response_validation"
+            normalized_model_id = (
+                str(model_id).strip()
+                if model_id is not None and str(model_id).strip()
+                else None
+            )
+            data = _validate_info_response(raw_data, model_id=normalized_model_id)
         elif tool_name == "model.predict":
             model_id = str(arguments.get("model_id") or "").strip()
             if "inputs" not in arguments:
@@ -328,13 +375,65 @@ async def mcp_root(
             _path_for_model(model_id)
             inputs = arguments["inputs"]
             body: dict[str, Any] = {"model": model_id, "input": inputs}
-            data = _validate_predict_response(await _facade_request(
+            raw_data = await _facade_request(
                 base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body
-            ))
+            )
+            stage = "response_validation"
+            data = _validate_predict_response(raw_data)
         else:
+            log_mcp_event(
+                logger,
+                outcome="failed",
+                request_id=request_id,
+                server="ml-inference",
+                method=str(method),
+                tool=tool_name,
+                stage="tool_dispatch",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="ToolNotFound",
+                rpc_code=-32601,
+            )
             return _jsonrpc_err(rpc_id, -32601, f"Unknown tool: {tool_name}")
+        log_mcp_event(
+            logger,
+            outcome="completed",
+            request_id=request_id,
+            server="ml-inference",
+            method=str(method),
+            tool=tool_name,
+            stage="completed",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return _jsonrpc_ok(rpc_id, _tool_result(data))
-    except (ValueError, httpx.HTTPError):
+    except (ValueError, httpx.HTTPError) as exc:
+        status_code = getattr(exc, "status_code", None)
+        if status_code is None:
+            status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        log_mcp_event(
+            logger,
+            outcome="failed",
+            request_id=request_id,
+            server="ml-inference",
+            method=str(method),
+            tool=tool_name,
+            stage=stage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_type=type(exc).__name__,
+            http_status=status_code,
+            rpc_code=-32000,
+        )
         return _jsonrpc_err(rpc_id, -32000, "ML inference MCP request failed")
     except Exception as exc:
+        log_mcp_event(
+            logger,
+            outcome="failed",
+            request_id=request_id,
+            server="ml-inference",
+            method=str(method),
+            tool=tool_name,
+            stage=stage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_type=type(exc).__name__,
+            rpc_code=-32603,
+        )
         raise HTTPException(status_code=500, detail="ML inference MCP internal error") from exc

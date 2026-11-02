@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
+import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -164,6 +166,12 @@ class DirectOperationExecutor:
             "Accept": "application/json, text/event-stream",
             "mcp-session-id": session_id,
         }
+        active_call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "").strip()
+        headers["x-portal-request-id"] = (
+            active_call_id
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", active_call_id)
+            else uuid.uuid4().hex
+        )
         response, attempts = await self._post_with_retry(
             client=client,
             provider_url=provider_url,

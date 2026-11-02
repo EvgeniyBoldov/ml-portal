@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from helpers.secret_broker import SecretBrokerClient, extract_credential_access
+from helpers.observability import log_mcp_event, normalize_request_id
 
 logger = logging.getLogger("mcp.atlassian.adapter")
 BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
@@ -121,10 +122,18 @@ async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[st
 
 
 async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) -> None:
+    started = time.monotonic()
+    incoming_headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
+    request_id = normalize_request_id(incoming_headers.get("x-portal-request-id"))
+    method = "unknown"
+    tool_name = ""
+    stage = "request_parse"
     try:
         request = json.loads(body or b"{}")
-        rpc_id, method, params = request.get("id"), request.get("method"), request.get("params") or {}
-        incoming_headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
+        rpc_id = request.get("id")
+        method = request.get("method")
+        params = request.get("params") or {}
+        tool_name = str(params.get("name") or "") if method == "tools/call" else ""
         response_headers: list[tuple[bytes, bytes]] = [(b"content-type", b"application/json")]
         if method == "initialize":
             now = time.monotonic()
@@ -141,10 +150,17 @@ async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) 
             await _respond(send, 200, response_headers, _ok(rpc_id, result))
             return
         session_id = incoming_headers.get("mcp-session-id")
+        stage = "session_validation"
         now = time.monotonic()
         if session_id and SESSIONS.get(session_id, 0) <= now:
             SESSIONS.pop(session_id, None)
         if not session_id or SESSIONS.get(session_id, 0) <= now:
+            log_mcp_event(
+                logger, outcome="failed", request_id=request_id, server="atlassian",
+                method=str(method), tool=tool_name, stage=stage,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="SessionNotInitialized", rpc_code=-32002,
+            )
             await _respond(send, 200, response_headers, _error(rpc_id, -32002, "Session not initialized"))
             return
         if method == "notifications/initialized":
@@ -155,15 +171,27 @@ async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) 
             return
         forward_headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
         if method == "tools/call":
-            tool_name = str(params.get("name") or "")
             if ENABLED_TOOLS and tool_name not in ENABLED_TOOLS:
+                log_mcp_event(
+                    logger, outcome="failed", request_id=request_id, server="atlassian",
+                    method=str(method), tool=tool_name, stage="tool_allowlist",
+                    duration_ms=int((time.monotonic() - started) * 1000),
+                    error_type="ToolNotAllowed", rpc_code=-32601,
+                )
                 await _respond(send, 200, response_headers, _error(rpc_id, -32601, "Unknown tool"))
                 return
+            stage = "credential_resolution"
             auth_headers, args = await _resolve_auth(params)
             forward_headers.update(auth_headers)
             public_args = {key: value for key, value in args.items() if key not in _INTERNAL_ARGUMENTS}
             request["params"]["arguments"] = public_args
         elif method != "tools/list":
+            log_mcp_event(
+                logger, outcome="failed", request_id=request_id, server="atlassian",
+                method=str(method), stage="method_dispatch",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="MethodNotFound", rpc_code=-32601,
+            )
             await _respond(send, 200, response_headers, _error(rpc_id, -32601, "Method not found"))
             return
         # Upstream stateless Streamable HTTP still requires an MCP initialize
@@ -175,6 +203,7 @@ async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) 
             "accept": "application/json, text/event-stream",
             "authorization": "Token broker-managed-placeholder",
         }
+        stage = "upstream_initialize"
         initialized = await upstream.post(
             "/mcp",
             headers=listing_headers,
@@ -185,6 +214,7 @@ async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) 
             },
         )
         initialized.raise_for_status()
+        stage = "upstream_tool_call" if method == "tools/call" else "upstream_request"
         response = await upstream.post("/mcp", headers=forward_headers if method == "tools/call" else listing_headers, json=request)
         response.raise_for_status()
         try:
@@ -194,13 +224,43 @@ async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) 
             if not data_lines:
                 raise ValueError("Upstream MCP response is not JSON or an MCP event stream")
             payload = json.loads("\n".join(data_lines))
-        if method == "tools/list" and isinstance(payload.get("result", {}).get("tools"), list):
-            tools = payload["result"]["tools"]
+        rpc_error = payload.get("error") if isinstance(payload, dict) else None
+        tool_result = (payload.get("result") or {}) if isinstance(payload, dict) else {}
+        tool_failed = bool(isinstance(rpc_error, dict) or (isinstance(tool_result, dict) and tool_result.get("isError")))
+        if method == "tools/call":
+            log_mcp_event(
+                logger,
+                outcome="failed" if tool_failed else "completed",
+                request_id=request_id,
+                server="atlassian",
+                method=str(method),
+                tool=tool_name,
+                stage=stage,
+                duration_ms=int((time.monotonic() - started) * 1000),
+                error_type="MCPToolError" if tool_failed else "",
+                http_status=response.status_code if response.status_code >= 400 else None,
+                rpc_code=rpc_error.get("code") if isinstance(rpc_error, dict) and isinstance(rpc_error.get("code"), int) else None,
+            )
+        payload_result = payload.get("result") if isinstance(payload, dict) else None
+        if method == "tools/list" and isinstance(payload_result, dict) and isinstance(payload_result.get("tools"), list):
+            tools = payload_result["tools"]
             tools = [tool for tool in tools if not ENABLED_TOOLS or tool.get("name") in ENABLED_TOOLS]
-            payload["result"]["tools"] = [_risk(tool) for tool in tools]
+            payload_result["tools"] = [_risk(tool) for tool in tools]
         await _respond(send, response.status_code, response_headers, payload)
     except Exception as exc:  # Do not expose upstream error text, which may contain credentials.
-        logger.warning("atlassian_adapter_request_failed error_type=%s", type(exc).__name__)
+        log_mcp_event(
+            logger,
+            outcome="failed",
+            request_id=request_id,
+            server="atlassian",
+            method=str(method),
+            tool=tool_name,
+            stage=stage,
+            duration_ms=int((time.monotonic() - started) * 1000),
+            error_type=type(exc).__name__,
+            http_status=getattr(getattr(exc, "response", None), "status_code", getattr(exc, "status_code", None)),
+            rpc_code=-32000,
+        )
         await _respond(send, 200, [(b"content-type", b"application/json")], _error(request.get("id") if "request" in locals() else None, -32000, "Atlassian MCP request failed"))
 
 
@@ -246,9 +306,28 @@ class Adapter:
                     await _handle(scope, body, send, upstream)
             except TimeoutError:
                 try:
-                    rpc_id = json.loads(body or b"{}").get("id")
+                    request = json.loads(body or b"{}")
+                    rpc_id = request.get("id")
+                    params = request.get("params") or {}
+                    method = str(request.get("method") or "unknown")
+                    tool_name = str(params.get("name") or "") if method == "tools/call" else ""
                 except (ValueError, AttributeError):
                     rpc_id = None
+                    method = "unknown"
+                    tool_name = ""
+                request_headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
+                log_mcp_event(
+                    logger,
+                    outcome="failed",
+                    request_id=normalize_request_id(request_headers.get("x-portal-request-id")),
+                    server="atlassian",
+                    method=method,
+                    tool=tool_name,
+                    stage="upstream_timeout",
+                    duration_ms=REQUEST_TIMEOUT_SECONDS * 1000,
+                    error_type="TimeoutError",
+                    rpc_code=-32000,
+                )
                 await _respond(send, 200, [(b"content-type", b"application/json")], _error(rpc_id, -32000, "Atlassian MCP request timed out"))
 
 

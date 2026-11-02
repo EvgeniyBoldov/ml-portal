@@ -149,6 +149,12 @@ The MCP adapter limits JSON response size. Timeouts, TLS verification and
 endpoint paths are deployment configuration, not model-specific agent
 arguments.
 
+For each MCP tool call, the adapter logs the Portal correlation ID, tool,
+processing stage, duration, exception class, and upstream HTTP status when
+available. It does not log tool arguments, credentials, response bodies, or
+exception text. The MCP response remains generic; use `x-portal-request-id` to
+correlate it with the adapter container log and runtime trace.
+
 User credentials are added through the personal account and are bound to the
 selected active remote source; the MCP adapter receives them only through the
 broker flow and never exposes the stored secret in tool output.

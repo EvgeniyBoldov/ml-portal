@@ -11,10 +11,35 @@
 .name {
   color: var(--text-secondary);
   font-size: 0.8125rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.description {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-secondary);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .fieldBadges {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
+}
+
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  margin-bottom: var(--sp-4);
+  color: var(--danger-text, var(--text-primary));
+  background: var(--danger-bg);
+  border-radius: var(--radius-md);
 }

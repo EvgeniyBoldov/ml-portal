@@ -33,11 +33,20 @@ the matching product PAT; the data connector URL takes precedence at call time.
   actions map to `destructive`; unknown tools default to `destructive`. These
   flags are also reflected in `side_effects`, `requires_confirmation`, and
   `credential_scope=user`. Explicit upstream risk metadata is preserved.
+- Emit operational request logs with a Portal correlation ID, MCP method/tool,
+  processing stage, duration, exception class, upstream HTTP status, and JSON-RPC
+  code. Arguments, credentials, response bodies, and exception text are omitted.
 
 The upstream process receives placeholder PATs at startup only so it can
 initialize toolsets and publish their schemas. `ALLOW_GLOBAL_CRED_FALLBACK=false`
 is set. Tool calls require broker credentials; the placeholders are not valid
 service credentials.
+
+Portal sends `x-portal-request-id` on each MCP tool call, using the runtime tool
+call ID. The adapter uses it to correlate its container log with the runtime
+trace. Requests from other clients receive a generated local ID. MCP callers
+continue to receive generic safe errors; operators use the correlated adapter
+log to distinguish broker, upstream transport, timeout, and protocol failures.
 
 ## Configuration and onboarding
 

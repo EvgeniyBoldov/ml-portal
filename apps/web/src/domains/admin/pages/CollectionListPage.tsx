@@ -1,13 +1,13 @@
 /**
  * CollectionListPage - Admin page for listing collections.
- * Uses EntityPageV2 and DataTable with server-side search and pagination.
+ * Uses EntityPageV2 and DataTable with server-side search and global client-side filters/sorting.
  *
  * Features:
  * - Search and filtering
  * - Status and metadata display
  * - Row navigation to collection details
  */
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { 
@@ -27,29 +27,54 @@ import { qk } from '@/shared/api/keys';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import styles from './CollectionListPage.module.css';
 
+const COLLECTION_PAGE_SIZE = 100;
+const SEARCH_DEBOUNCE_MS = 300;
+
+export async function fetchAllCollections(search: string): Promise<Collection[]> {
+  const firstPage = await collectionsApi.listAll({
+    page: 1,
+    size: COLLECTION_PAGE_SIZE,
+    include_deprecated: true,
+    search,
+  });
+  const items = [...firstPage.items];
+  const pageCount = Math.ceil(firstPage.total / COLLECTION_PAGE_SIZE);
+
+  for (let page = 2; page <= pageCount; page += 1) {
+    const result = await collectionsApi.listAll({
+      page,
+      size: COLLECTION_PAGE_SIZE,
+      include_deprecated: true,
+      search,
+    });
+    items.push(...result.items);
+  }
+
+  if (items.length !== firstPage.total) {
+    throw new Error('Не удалось загрузить полный список коллекций');
+  }
+
+  return items;
+}
+
 export function CollectionListPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const [search, setSearch] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(20);
+  const [debouncedSearch, setDebouncedSearch] = useState('');
 
-  const { data, isLoading } = useQuery({
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [search]);
+
+  const { data: collections = [], isFetching, error, refetch } = useQuery({
     queryKey: qk.collections.adminList({
-      page: currentPage,
-      size: pageSize,
       include_deprecated: true,
-      search: search.trim(),
+      search: debouncedSearch,
     }),
-    queryFn: () => collectionsApi.listAll({
-      page: currentPage,
-      size: pageSize,
-      include_deprecated: true,
-      search: search.trim(),
-    }),
+    queryFn: () => fetchAllCollections(debouncedSearch),
   });
-
-  const collections = data?.items ?? [];
 
   const reindexBatchMutation = useMutation({
     mutationFn: () => adminApi.runRagReindexBatch({ limit: 100, dry_run: false }),
@@ -67,8 +92,15 @@ export function CollectionListPage() {
   const columns: DataTableColumn<Collection>[] = [
     {
       key: 'slug',
-      label: 'SLUG / ИМЯ',
-      width: 250,
+      label: 'Название',
+      width: 220,
+      sortable: true,
+      sortValue: (row) => row.name,
+      filter: {
+        kind: 'text',
+        placeholder: 'Название или slug',
+        getValue: (row) => `${row.name} ${row.slug}`,
+      },
       render: (row) => (
         <div>
           <div className={styles.slug}>{row.slug}</div>
@@ -77,9 +109,35 @@ export function CollectionListPage() {
       ),
     },
     {
+      key: 'description',
+      label: 'ОПИСАНИЕ',
+      width: 300,
+      sortable: true,
+      filter: {
+        kind: 'text',
+        placeholder: 'Поиск в описании',
+        getValue: (row) => row.description ?? '',
+      },
+      render: (row) => (
+        <span className={styles.description} title={row.description ?? undefined}>
+          {row.description?.trim() || '—'}
+        </span>
+      ),
+    },
+    {
       key: 'lifecycle_status',
       label: 'LIFECYCLE',
       width: 150,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все статусы',
+        options: [
+          { value: 'active', label: 'Active' },
+          { value: 'deprecated', label: 'Deprecated' },
+        ],
+        getValue: (row) => row.lifecycle_status ?? 'active',
+      },
       render: (row) => (
         <LifecycleStatusBadge
           lifecycleStatus={row.lifecycle_status}
@@ -92,6 +150,19 @@ export function CollectionListPage() {
       key: 'collection_type',
       label: 'ТИП',
       width: 120,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все типы',
+        options: [
+          { value: 'document', label: 'Документы' },
+          { value: 'table', label: 'Таблицы' },
+          { value: 'sql', label: 'SQL' },
+          { value: 'api', label: 'API' },
+          { value: 'template', label: 'Шаблоны' },
+        ],
+        getValue: (row) => row.collection_type,
+      },
       render: (row) => (
         <Badge tone={row.collection_type === 'document' ? 'warn' : row.collection_type === 'table' ? 'info' : row.collection_type === 'template' ? 'success' : 'neutral'}>
           {row.collection_type === 'document' ? 'Документы' : row.collection_type === 'sql' ? 'SQL' : row.collection_type === 'api' ? 'API' : row.collection_type === 'template' ? 'Шаблоны' : 'Таблица'}
@@ -120,6 +191,7 @@ export function CollectionListPage() {
       key: 'total_rows',
       label: 'ЗАПИСЕЙ',
       width: 100,
+      sortable: true,
       render: (row) => row.total_rows?.toLocaleString() ?? '0',
     },
     {
@@ -136,6 +208,16 @@ export function CollectionListPage() {
       key: 'is_active',
       label: 'АКТИВНОСТЬ',
       width: 120,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Любой статус',
+        options: [
+          { value: 'true', label: 'Активна' },
+          { value: 'false', label: 'Неактивна' },
+        ],
+        getValue: (row) => String(row.is_active),
+      },
       render: (row) => (
         <Badge tone={row.is_active ? 'success' : 'danger'}>
           {row.is_active ? 'Активна' : 'Неактивна'}
@@ -156,7 +238,6 @@ export function CollectionListPage() {
             value={search}
             onChange={(e) => {
               setSearch(e.target.value);
-              setCurrentPage(1);
             }}
           />
           <Button
@@ -175,23 +256,24 @@ export function CollectionListPage() {
       }
     >
       <Tab title="Коллекции" layout="full">
+        {error && (
+          <div role="alert" className={styles.error}>
+            Не удалось загрузить все коллекции. Попробуйте снова.
+            <Button variant="outline" onClick={() => refetch()}>
+              Повторить
+            </Button>
+          </div>
+        )}
         <DataTable
+          key={debouncedSearch}
           columns={columns}
           data={collections}
           keyField="id"
-          loading={isLoading}
+          loading={isFetching}
           emptyText="Коллекции не найдены"
           paginated
-          serverPaginated
-          pageSize={pageSize}
-          currentPage={currentPage}
-          totalItems={data?.total ?? 0}
+          pageSize={20}
           pageSizeOptions={[20, 50, 100]}
-          onPageChange={setCurrentPage}
-          onPageSizeChange={(size) => {
-            setPageSize(size);
-            setCurrentPage(1);
-          }}
           onRowClick={(row) => navigate(`/admin/collections/${row.id}`)}
         />
       </Tab>

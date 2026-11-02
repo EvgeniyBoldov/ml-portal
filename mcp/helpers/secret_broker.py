@@ -5,6 +5,8 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from helpers.observability import BrokerHTTPError
+
 
 @dataclass
 class ResolvedCredential:
@@ -50,9 +52,9 @@ class SecretBrokerClient:
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
             response = await client.post(resolve_url, headers=headers)
         if response.status_code >= 400:
-            raise ValueError(
-                f"Secret broker resolve failed with HTTP {response.status_code}: {response.text[:300]}"
-            )
+            # Never retain or log a broker response body: it may contain
+            # credential or identity data. Preserve only the status code.
+            raise BrokerHTTPError(response.status_code)
         data = response.json()
         return ResolvedCredential(
             credential_id=str(data.get("credential_id") or ""),
