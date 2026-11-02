@@ -142,15 +142,19 @@ class MCPCredentialBrokerService:
 
         cred_id = UUID(str(claims["credential_id"]))
         credential: Credential = await self.credential_service.get_credentials(cred_id)
-        decrypted: DecryptedCredentials = await self.credential_service.get_decrypted_credentials(cred_id)
 
-        expected_provider = claims.get("provider_instance_id")
-        if expected_provider and str(credential.instance_id) != str(expected_provider):
-            raise UnauthorizedError("Credential does not belong to requested provider instance")
+        # The MCP endpoint is transport, not the owner of the upstream secret.
+        expected_instance = claims.get("data_instance_id")
+        if not expected_instance or str(credential.instance_id) != str(expected_instance):
+            raise UnauthorizedError("Credential does not belong to requested data instance")
+        if not credential.is_active:
+            raise UnauthorizedError("Credential is inactive")
 
         owner_type = str(claims.get("owner_type") or "")
         subject_user = claims.get("sub")
         subject_tenant = claims.get("tenant_id")
+        if owner_type not in {"user", "tenant", "platform"}:
+            raise UnauthorizedError("Invalid credential owner type")
         if owner_type == "user" and str(credential.owner_user_id or "") != str(subject_user or ""):
             raise UnauthorizedError("Credential owner mismatch (user)")
         if owner_type == "tenant" and str(credential.owner_tenant_id or "") != str(subject_tenant or ""):
@@ -158,6 +162,7 @@ class MCPCredentialBrokerService:
         if owner_type == "platform" and not bool(credential.owner_platform):
             raise UnauthorizedError("Credential owner mismatch (platform)")
 
+        decrypted: DecryptedCredentials = await self.credential_service.get_decrypted_credentials(cred_id)
         expected_auth_type = claims.get("auth_type")
         if expected_auth_type and str(expected_auth_type) != str(decrypted.auth_type):
             raise ValidationError("Credential auth_type mismatch")

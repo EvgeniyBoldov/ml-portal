@@ -147,6 +147,14 @@ services:
   # ---------------------------------------------------------------------------
   # MCP — ML inference facade
   # ---------------------------------------------------------------------------
+  mcp-adapter:
+    build:
+      context: .
+      dockerfile: mcp/mcp_server.dockerfile
+      args:
+        MCP_SERVER_DIR: adapter
+    image: ${IMAGE_REPOSITORY:?IMAGE_REPOSITORY is required}/mcp-adapter:${APP_IMAGE_TAG:?APP_IMAGE_TAG is required}
+
   ml-inference-mcp:
     build:
       context: .

@@ -1,354 +1,46 @@
+"""Atlassian profile of the shared Portal MCP adapter."""
 from __future__ import annotations
 
-import asyncio
 import json
-import logging
 import os
-import re
-import time
-import uuid
 from typing import Any
 
-from helpers.secret_broker import SecretBrokerClient, extract_credential_access
-from helpers.observability import log_mcp_event, normalize_request_id
+from helpers.adapter_auth import AuthProfile, data_source_url, resolve_request_credential, upstream_auth_headers
+from helpers.adapter_policy import ToolPolicy
+from helpers.mcp_adapter import AdapterConfig, MCPAdapter
 
-logger = logging.getLogger("mcp.atlassian.adapter")
-BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
-REQUEST_TIMEOUT_SECONDS = int(os.environ.get("ATLASSIAN_MCP_TIMEOUT_SECONDS", "120"))
-JIRA_URL = os.environ.get("JIRA_URL", "").strip()
-CONFLUENCE_URL = os.environ.get("CONFLUENCE_URL", "").strip()
 DEFAULT_TOOLS = "jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page"
-_configured_tools = os.environ.get("ATLASSIAN_MCP_ENABLED_TOOLS", "").strip() or DEFAULT_TOOLS
-ENABLED_TOOLS = {
-    name.strip()
-    for name in _configured_tools.split(",")
+ENABLED_TOOLS = frozenset(
+    name.strip() for name in (os.environ.get("ATLASSIAN_MCP_ENABLED_TOOLS", "").strip() or DEFAULT_TOOLS).split(",")
     if name.strip()
-}
-SESSIONS: dict[str, float] = {}
-SESSION_TTL_SECONDS = 3600
-PROTOCOL_VERSION = "2024-11-05"
-SERVER_INFO = {"name": "ml-portal-atlassian-mcp-adapter", "version": "1.0.0"}
-_DESTRUCTIVE = re.compile(r"(^|_)(delete|remove|destroy|purge|revoke|archive|deactivate|drop)(_|$)", re.I)
-_INTERNAL_ARGUMENTS = {
-    "credential_access", "instance_context", "base_url", "url", "address", "instance_url",
-    "provider_url", "data_instance_url", "jira_url", "confluence_url",
-}
-
-
-def _risk(tool: dict[str, Any]) -> dict[str, Any]:
-    schema = dict(tool.get("inputSchema") or {})
-    runtime_metadata = schema.get("x-runtime")
-    metadata = dict(runtime_metadata) if isinstance(runtime_metadata, dict) else {}
-    annotations = tool.get("annotations") or {}
-    if not metadata.get("risk_level"):
-        name = str(tool.get("name") or "")
-        if annotations.get("readOnlyHint") is True:
-            risk = "safe"
-        elif annotations.get("destructiveHint") is True or _DESTRUCTIVE.search(name):
-            risk = "destructive"
-        elif annotations.get("readOnlyHint") is False:
-            risk = "write"
-        else:
-            risk = "destructive"
-        metadata["risk_level"] = risk
-    risk = metadata["risk_level"]
-    effective_risk = risk if risk in {"safe", "write", "destructive"} else "destructive"
-    metadata.setdefault("side_effects", effective_risk != "safe")
-    metadata.setdefault("requires_confirmation", effective_risk != "safe")
-    metadata.setdefault("credential_scope", "user")
-    schema["x-runtime"] = metadata
-    tool["inputSchema"] = schema
-    return tool
-
-
-def _error(rpc_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
-
-
-def _ok(rpc_id: Any, result: Any) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
+)
+ALLOW_RAW_CREDENTIALS = os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true"
+BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
 
 
 async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
     args = params.get("arguments") or {}
-    if not isinstance(args, dict):
-        raise ValueError("Tool arguments must be an object")
-    context = args.get("instance_context") if isinstance(args.get("instance_context"), dict) else {}
-    access = extract_credential_access(args)
-    if access is not None:
-        # An explicit broker context is authoritative; a failed resolve must
-        # never silently switch to another credential in the request.
-        credential = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
-        payload = credential.payload
-        auth_type = str(credential.auth_type or "").strip().lower()
-    else:
-        payload = context.get("credentials")
-        if not isinstance(payload, dict) or not payload:
-            raise ValueError("Atlassian MCP requires credential_access or instance_context.credentials")
-        auth_type = str(context.get("auth_type") or "").strip().lower()
-    headers: dict[str, str] = {}
-    tool_name = str(params.get("name") or "")
-    product = "Confluence" if tool_name.startswith("confluence_") else "Jira"
-    token_keys = (
-        ("confluence_personal_token", "personal_token", "personal_access_token", "pat", "token")
-        if product == "Confluence"
-        else ("jira_personal_token", "personal_token", "personal_access_token", "pat", "token")
-    )
-    username = str(payload.get("username") or payload.get("email") or "").strip()
-    if not username:
-        token_keys += ("api_token",)
-    token = next((str(payload.get(key) or "").strip() for key in token_keys if payload.get(key)), "")
-    context_config = context.get("config") if isinstance(context.get("config"), dict) else {}
-    product_key = "confluence_url" if product == "Confluence" else "jira_url"
-    product_url = next((str(context.get(key) or "").strip() for key in ("data_instance_url", "instance_url") if context.get(key)), "")
-    if not product_url:
-        product_url = next((str(source.get(product_key) or "").strip() for source in (context_config, context, payload) if source.get(product_key)), "")
-    if not product_url:
-        product_url = next((str(payload.get(key) or "").strip() for key in ("base_url", "url") if payload.get(key)), "")
-    if not product_url:
-        product_url = next((str(source.get(key) or "").strip() for source in (context, context_config) for key in ("data_instance_url", "instance_url") if source.get(key)), "")
-    if not product_url:
-        product_url = CONFLUENCE_URL if product == "Confluence" else JIRA_URL
-    password = str(payload.get("password") or payload.get("api_token") or "").strip()
-    access_token = str(payload.get("access_token") or "").strip()
-    if auth_type in {"oauth", "bearer"} or (access_token and not token):
-        bearer = access_token or token
-        if not bearer:
-            raise ValueError("Resolved OAuth credential has no access token")
-        headers["Authorization"] = f"Bearer {bearer}"
-    elif username and password and (auth_type in {"basic", "api_token"} or not token):
-        import base64
-        headers["Authorization"] = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
-    elif token:
-        if product_url:
-            headers[f"X-Atlassian-{product}-Url"] = product_url
-            headers[f"X-Atlassian-{product}-Personal-Token"] = token
-        else:
-            headers["Authorization"] = f"Token {token}"
-    else:
-        raise ValueError("Resolved credential payload has no supported Atlassian credentials")
-    if product_url:
-        headers[f"X-Atlassian-{product}-Url"] = product_url
-    headers["Accept"] = "application/json, text/event-stream"
-    return headers, args
+    credential = await resolve_request_credential(args, timeout_s=BROKER_TIMEOUT_SECONDS, allow_raw=ALLOW_RAW_CREDENTIALS)
+    tool = str(params.get("name") or "")
+    return upstream_auth_headers(
+        credential, profile=AuthProfile(kind="atlassian"), tool_name=tool,
+        target_url=data_source_url(args, credential.payload, tool_name=tool),
+    ), args
 
 
-async def _handle(scope: dict[str, Any], body: bytes, send: Any, upstream: Any) -> None:
-    started = time.monotonic()
-    incoming_headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
-    request_id = normalize_request_id(incoming_headers.get("x-portal-request-id"))
-    method = "unknown"
-    tool_name = ""
-    stage = "request_parse"
-    try:
-        request = json.loads(body or b"{}")
-        rpc_id = request.get("id")
-        method = request.get("method")
-        params = request.get("params") or {}
-        tool_name = str(params.get("name") or "") if method == "tools/call" else ""
-        response_headers: list[tuple[bytes, bytes]] = [(b"content-type", b"application/json")]
-        if method == "initialize":
-            now = time.monotonic()
-            for expired in [key for key, expiry in SESSIONS.items() if expiry <= now]:
-                SESSIONS.pop(expired, None)
-            session_id = str(uuid.uuid4())
-            SESSIONS[session_id] = now + SESSION_TTL_SECONDS
-            result = {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": SERVER_INFO,
-            }
-            response_headers.append((b"mcp-session-id", session_id.encode()))
-            await _respond(send, 200, response_headers, _ok(rpc_id, result))
-            return
-        session_id = incoming_headers.get("mcp-session-id")
-        stage = "session_validation"
-        now = time.monotonic()
-        if session_id and SESSIONS.get(session_id, 0) <= now:
-            SESSIONS.pop(session_id, None)
-        if not session_id or SESSIONS.get(session_id, 0) <= now:
-            log_mcp_event(
-                logger, outcome="failed", request_id=request_id, server="atlassian",
-                method=str(method), tool=tool_name, stage=stage,
-                duration_ms=int((time.monotonic() - started) * 1000),
-                error_type="SessionNotInitialized", rpc_code=-32002,
-            )
-            await _respond(send, 200, response_headers, _error(rpc_id, -32002, "Session not initialized"))
-            return
-        if method == "notifications/initialized":
-            await _respond_empty(send, 202)
-            return
-        if method == "ping":
-            await _respond(send, 200, response_headers, _ok(rpc_id, {}))
-            return
-        forward_headers = {"content-type": "application/json", "accept": "application/json, text/event-stream"}
-        if method == "tools/call":
-            if ENABLED_TOOLS and tool_name not in ENABLED_TOOLS:
-                log_mcp_event(
-                    logger, outcome="failed", request_id=request_id, server="atlassian",
-                    method=str(method), tool=tool_name, stage="tool_allowlist",
-                    duration_ms=int((time.monotonic() - started) * 1000),
-                    error_type="ToolNotAllowed", rpc_code=-32601,
-                )
-                await _respond(send, 200, response_headers, _error(rpc_id, -32601, "Unknown tool"))
-                return
-            stage = "credential_resolution"
-            auth_headers, args = await _resolve_auth(params)
-            forward_headers.update(auth_headers)
-            public_args = {key: value for key, value in args.items() if key not in _INTERNAL_ARGUMENTS}
-            request["params"]["arguments"] = public_args
-        elif method != "tools/list":
-            log_mcp_event(
-                logger, outcome="failed", request_id=request_id, server="atlassian",
-                method=str(method), stage="method_dispatch",
-                duration_ms=int((time.monotonic() - started) * 1000),
-                error_type="MethodNotFound", rpc_code=-32601,
-            )
-            await _respond(send, 200, response_headers, _error(rpc_id, -32601, "Method not found"))
-            return
-        # Upstream stateless Streamable HTTP still requires an MCP initialize
-        # exchange before each standalone JSON-RPC request. The placeholder
-        # identity is used only to expose schemas; actual tool calls carry the
-        # per-call broker credential resolved above.
-        listing_headers = {
-            "content-type": "application/json",
-            "accept": "application/json, text/event-stream",
-            "authorization": "Token broker-managed-placeholder",
-        }
-        stage = "upstream_initialize"
-        initialized = await upstream.post(
-            "/mcp",
-            headers=listing_headers,
-            json={
-                "jsonrpc": "2.0", "id": f"adapter-init-{uuid.uuid4()}",
-                "method": "initialize",
-                "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {}, "clientInfo": SERVER_INFO},
-            },
-        )
-        initialized.raise_for_status()
-        stage = "upstream_tool_call" if method == "tools/call" else "upstream_request"
-        response = await upstream.post("/mcp", headers=forward_headers if method == "tools/call" else listing_headers, json=request)
-        response.raise_for_status()
-        try:
-            payload = response.json()
-        except ValueError:
-            data_lines = [line[5:].strip() for line in response.text.splitlines() if line.startswith("data:")]
-            if not data_lines:
-                raise ValueError("Upstream MCP response is not JSON or an MCP event stream")
-            payload = json.loads("\n".join(data_lines))
-        rpc_error = payload.get("error") if isinstance(payload, dict) else None
-        tool_result = (payload.get("result") or {}) if isinstance(payload, dict) else {}
-        tool_failed = bool(isinstance(rpc_error, dict) or (isinstance(tool_result, dict) and tool_result.get("isError")))
-        if method == "tools/call":
-            log_mcp_event(
-                logger,
-                outcome="failed" if tool_failed else "completed",
-                request_id=request_id,
-                server="atlassian",
-                method=str(method),
-                tool=tool_name,
-                stage=stage,
-                duration_ms=int((time.monotonic() - started) * 1000),
-                error_type="MCPToolError" if tool_failed else "",
-                http_status=response.status_code if response.status_code >= 400 else None,
-                rpc_code=rpc_error.get("code") if isinstance(rpc_error, dict) and isinstance(rpc_error.get("code"), int) else None,
-            )
-        payload_result = payload.get("result") if isinstance(payload, dict) else None
-        if method == "tools/list" and isinstance(payload_result, dict) and isinstance(payload_result.get("tools"), list):
-            tools = payload_result["tools"]
-            tools = [tool for tool in tools if not ENABLED_TOOLS or tool.get("name") in ENABLED_TOOLS]
-            payload_result["tools"] = [_risk(tool) for tool in tools]
-        await _respond(send, response.status_code, response_headers, payload)
-    except Exception as exc:  # Do not expose upstream error text, which may contain credentials.
-        log_mcp_event(
-            logger,
-            outcome="failed",
-            request_id=request_id,
-            server="atlassian",
-            method=str(method),
-            tool=tool_name,
-            stage=stage,
-            duration_ms=int((time.monotonic() - started) * 1000),
-            error_type=type(exc).__name__,
-            http_status=getattr(getattr(exc, "response", None), "status_code", getattr(exc, "status_code", None)),
-            rpc_code=-32000,
-        )
-        await _respond(send, 200, [(b"content-type", b"application/json")], _error(request.get("id") if "request" in locals() else None, -32000, "Atlassian MCP request failed"))
-
-
-async def _respond(send: Any, status: int, headers: list[tuple[bytes, bytes]], payload: dict[str, Any]) -> None:
-    body = json.dumps(payload, ensure_ascii=False).encode()
-    await send({"type": "http.response.start", "status": status, "headers": headers})
-    await send({"type": "http.response.body", "body": body})
-
-
-async def _respond_empty(send: Any, status: int) -> None:
-    await send({"type": "http.response.start", "status": status, "headers": []})
-    await send({"type": "http.response.body", "body": b""})
-
-
-class Adapter:
-    """HTTP MCP gateway that adds broker credentials, risk metadata and tool filtering."""
-
-    def __init__(self, app: Any) -> None:
-        self.app = app
-
-    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
-        if scope["type"] == "lifespan":
-            await self.app(scope, receive, send)
-            return
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-        if scope.get("path") == "/healthz":
-            await _respond(send, 200, [(b"content-type", b"application/json")], {"status": "ok"})
-            return
-        if scope.get("path") not in {"/", "/mcp"}:
-            await _respond(send, 404, [(b"content-type", b"application/json")], {"detail": "Not found"})
-            return
-        message = await receive()
-        body = message.get("body", b"")
-        while message.get("more_body"):
-            message = await receive()
-            body += message.get("body", b"")
-        from httpx import ASGITransport, AsyncClient
-        async with AsyncClient(transport=ASGITransport(app=self.app), base_url="http://upstream", timeout=REQUEST_TIMEOUT_SECONDS) as upstream:
-            try:
-                async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-                    await _handle(scope, body, send, upstream)
-            except TimeoutError:
-                try:
-                    request = json.loads(body or b"{}")
-                    rpc_id = request.get("id")
-                    params = request.get("params") or {}
-                    method = str(request.get("method") or "unknown")
-                    tool_name = str(params.get("name") or "") if method == "tools/call" else ""
-                except (ValueError, AttributeError):
-                    rpc_id = None
-                    method = "unknown"
-                    tool_name = ""
-                request_headers = {key.decode().lower(): value.decode() for key, value in scope.get("headers", [])}
-                log_mcp_event(
-                    logger,
-                    outcome="failed",
-                    request_id=normalize_request_id(request_headers.get("x-portal-request-id")),
-                    server="atlassian",
-                    method=method,
-                    tool=tool_name,
-                    stage="upstream_timeout",
-                    duration_ms=REQUEST_TIMEOUT_SECONDS * 1000,
-                    error_type="TimeoutError",
-                    rpc_code=-32000,
-                )
-                await _respond(send, 200, [(b"content-type", b"application/json")], _error(rpc_id, -32000, "Atlassian MCP request timed out"))
-
-
-def _build_app() -> Any:
-    # The official package exposes its FastMCP instance. Stateless mode lets the
-    # adapter own portal sessions while passing a fresh PAT on each tool call.
+def _build_app() -> MCPAdapter:
     from mcp_atlassian.servers.main import main_mcp
-    upstream_app = main_mcp.http_app(path="/mcp", stateless_http=True, transport="streamable-http")
-    return Adapter(upstream_app)
+    upstream = main_mcp.http_app(path="/mcp", stateless_http=True, transport="streamable-http")
+    descriptors = json.loads(os.environ.get("MCP_ADAPTER_TOOL_DESCRIPTORS") or "{}")
+    return MCPAdapter(AdapterConfig(
+        name="portal-atlassian-mcp-adapter",
+        policy=ToolPolicy(ENABLED_TOOLS, descriptors),
+        auth_profile=AuthProfile(kind="atlassian"),
+        timeout_s=float(os.environ.get("ATLASSIAN_MCP_TIMEOUT_SECONDS", "120")),
+        broker_timeout_s=BROKER_TIMEOUT_SECONDS,
+        allow_raw_credentials=ALLOW_RAW_CREDENTIALS,
+        discovery_headers={"Authorization": "Token broker-managed-placeholder"},
+    ), upstream_app=upstream)
 
 
 app = _build_app()

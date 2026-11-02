@@ -34,7 +34,10 @@ def test_jira_host_for_logs_excludes_path_and_query():
 
 
 def test_broker_credential_payload_uses_pat_and_never_needs_container_secret():
-    headers = jira_server._extract_auth({"pat": "short-lived-pat"})
+    from helpers.secret_broker import ResolvedCredential
+    headers = jira_server.upstream_auth_headers(ResolvedCredential(
+        "c", "d", "token", "user", {"pat": "short-lived-pat"}, 123,
+    ))
     assert headers == {"Authorization": "Bearer short-lived-pat"}
     assert jira_server._extract_base_url({"jira_url": "https://jira.example"}, {}) == "https://jira.example"
 

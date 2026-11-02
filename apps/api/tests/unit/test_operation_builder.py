@@ -8,6 +8,8 @@ import pytest
 
 from app.agents.capability_resolver import CapabilityCandidate
 from app.agents.operation_builder import OperationBuilder
+from app.agents.tool_resolver import ResolvedTool
+from app.agents.credential_resolver import CredentialsUnavailableError
 
 
 @pytest.mark.asyncio
@@ -124,3 +126,30 @@ async def test_template_builtin_is_published_as_collection_operation() -> None:
     assert operation.raw_tool_slug == "collection.template.fill"
     assert operation.result_kind == "file"
     assert operation.data_instance_slug == "template-data"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("strict", [False, True])
+async def test_mcp_operation_never_selects_provider_credentials(strict: bool) -> None:
+    resolver = AsyncMock()
+    resolver.resolve.return_value = ResolvedTool(
+        raw_slug="read", operation_name="read", published=True, title="Read",
+        description="Read", input_schema={}, output_schema={},
+    )
+    builder = OperationBuilder(tool_resolver=resolver, runtime_rbac_resolver=SimpleNamespace())
+    data = SimpleNamespace(id=uuid4(), slug="data", url="http://data", is_local=False, health_status="healthy")
+    provider = SimpleNamespace(id=uuid4(), slug="mcp", url="http://mcp", is_local=False, is_remote=True, health_status="healthy")
+    credentials = AsyncMock(return_value=None)
+    if strict:
+        credentials.side_effect = CredentialsUnavailableError(tool_slug="read", operation="read", scope_required="user", reason="missing")
+    built = await builder._build_single_operation(
+        capability=CapabilityCandidate("read", "read", "collection", SimpleNamespace(slug="read", source="mcp")),
+        instance=data, provider=provider, has_credentials=False,
+        runtime_domain="api", context_domains=None, effective_permissions=None,
+        user_id=uuid4(), tenant_id=uuid4(), seen_operation_slugs=set(),
+        resolve_execution_credentials=credentials,
+    )
+    credentials.assert_awaited_once()
+    assert credentials.await_args.args[0] is data
+    if strict:
+        assert built is None

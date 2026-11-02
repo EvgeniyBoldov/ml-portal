@@ -12,7 +12,7 @@ from urllib.parse import quote, urlparse, urlunparse
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 
-from helpers.secret_broker import SecretBrokerClient, extract_credential_access
+from helpers.adapter_auth import AuthProfile, resolve_request_credential, upstream_auth_headers
 from helpers.observability import (
     UpstreamHTTPError,
     log_mcp_event,
@@ -75,27 +75,14 @@ def _extract_base_url(payload: dict[str, Any], arguments: dict[str, Any]) -> str
     raise ValueError("No ML inference facade URL configured")
 
 
-def _extract_auth(payload: dict[str, Any]) -> dict[str, str]:
-    for key in ("token", "api_token", "access_token", "api_key"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return {"Authorization": f"Bearer {value.strip()}"}
-    return {}
-
-
 async def _resolve_runtime_access(arguments: dict[str, Any]) -> tuple[str, dict[str, str]]:
-    access = extract_credential_access(arguments)
-    if access:
-        resolved = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
-        return _extract_base_url(resolved.payload, arguments), _extract_auth(resolved.payload)
-
-    instance_context = arguments.get("instance_context")
-    if isinstance(instance_context, dict):
-        credentials = instance_context.get("credentials")
-        if isinstance(credentials, dict):
-            return _extract_base_url(credentials, arguments), _extract_auth(credentials)
-    # A facade protected by network policy/mTLS can intentionally have no token.
-    return _extract_base_url({}, arguments), {}
+    resolved = await resolve_request_credential(
+        arguments, timeout_s=BROKER_TIMEOUT_SECONDS,
+        allow_raw=os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true",
+    )
+    return _extract_base_url(resolved.payload, arguments), upstream_auth_headers(
+        resolved, profile=AuthProfile(),
+    )
 
 
 def _path_for_model(model_id: str) -> str:

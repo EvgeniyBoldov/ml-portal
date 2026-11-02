@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
@@ -12,7 +11,7 @@ from urllib.parse import quote, urlparse, urlunparse
 import httpx
 from fastapi import FastAPI, Header, Request, Response
 
-from helpers.secret_broker import SecretBrokerClient, extract_credential_access
+from helpers.adapter_auth import resolve_request_credential, upstream_auth_headers
 
 
 app = FastAPI(title="Atlassian Jira MCP Shim", version="1.0.0")
@@ -106,47 +105,12 @@ def _extract_base_url(payload: Dict[str, Any], arguments: Dict[str, Any]) -> str
     raise ValueError("No Jira base URL configured")
 
 
-def _extract_auth(payload: Dict[str, Any]) -> dict[str, str]:
-    token = next((str(payload[key]).strip() for key in ("token", "pat", "api_token", "access_token") if payload.get(key)), "")
-    if token:
-        return {"Authorization": f"Bearer {token}"}
-    username = str(payload.get("username") or "").strip()
-    password = str(payload.get("password") or "").strip()
-    if username and password:
-        encoded = base64.b64encode(f"{username}:{password}".encode()).decode()
-        return {"Authorization": f"Basic {encoded}"}
-    raise ValueError("Resolved credential payload has no Jira PAT or basic credentials")
-
-
 async def _resolve_runtime_access(arguments: Dict[str, Any]) -> tuple[str, dict[str, str]]:
-    access = extract_credential_access(arguments)
-    if access:
-        resolved = await SecretBrokerClient(timeout_s=BROKER_TIMEOUT_SECONDS).resolve(access)
-        base_url = _extract_base_url(resolved.payload, arguments)
-        auth_headers = _extract_auth(resolved.payload)
-        logger.info(
-            "jira_mcp_credentials_resolved source=broker auth_type=%s auth_scheme=%s "
-            "owner_type=%s credential_id=%s jira_host=%s",
-            resolved.auth_type or "unknown",
-            _auth_scheme(auth_headers),
-            resolved.owner_type or "unknown",
-            resolved.credential_id or "unknown",
-            _jira_host(base_url),
-        )
-        return base_url, auth_headers
-
-    instance_context = arguments.get("instance_context")
-    if isinstance(instance_context, dict) and isinstance(instance_context.get("credentials"), dict):
-        credentials = instance_context["credentials"]
-        base_url = _extract_base_url(credentials, arguments)
-        auth_headers = _extract_auth(credentials)
-        logger.warning(
-            "jira_mcp_credentials_resolved source=legacy_raw_payload auth_scheme=%s jira_host=%s",
-            _auth_scheme(auth_headers),
-            _jira_host(base_url),
-        )
-        return base_url, auth_headers
-    raise ValueError("No Jira credentials: expected broker credential_access or legacy instance_context.credentials")
+    resolved = await resolve_request_credential(
+        arguments, timeout_s=BROKER_TIMEOUT_SECONDS,
+        allow_raw=os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true",
+    )
+    return _extract_base_url(resolved.payload, arguments), upstream_auth_headers(resolved)
 
 
 def _limit(value: Any, default: int = 20) -> int:

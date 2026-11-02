@@ -21,6 +21,16 @@ def arguments(payload, auth_type="token", url="https://jira.example"):
 
 
 class RequestCredentialsTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.env_patch = patch.dict("os.environ", {"ENV": "local"})
+        self.env_patch.start()
+        self.raw_patch = patch.object(server, "ALLOW_RAW_CREDENTIALS", True)
+        self.raw_patch.start()
+
+    def tearDown(self):
+        self.raw_patch.stop()
+        self.env_patch.stop()
+
     async def test_product_pat_headers_and_data_connector_url(self):
         for tool, product in (("jira_get_issue", "Jira"), ("confluence_get_page", "Confluence")):
             with self.subTest(tool=tool):
@@ -48,30 +58,45 @@ class RequestCredentialsTests(unittest.IsolatedAsyncioTestCase):
         args = arguments({"token": "raw-secret"})
         args["instance_context"]["credential_access"] = {"token": "signed", "resolve_url": "https://broker.example"}
         resolved = SimpleNamespace(payload={"token": "broker-secret"}, auth_type="token")
-        with patch.object(server.SecretBrokerClient, "resolve", AsyncMock(return_value=resolved)):
+        with patch("helpers.adapter_auth.SecretBrokerClient.resolve", AsyncMock(return_value=resolved)):
             headers, _ = await server._resolve_auth({"name": "jira_get_issue", "arguments": args})
         self.assertEqual(headers["X-Atlassian-Jira-Personal-Token"], "broker-secret")
-        with patch.object(server.SecretBrokerClient, "resolve", AsyncMock(side_effect=ValueError("resolve failed"))):
+        with patch("helpers.adapter_auth.SecretBrokerClient.resolve", AsyncMock(side_effect=ValueError("resolve failed"))):
             with self.assertRaises(ValueError):
                 await server._resolve_auth({"name": "jira_get_issue", "arguments": args})
 
     async def test_forwarding_strips_credentials_and_isolates_requests(self):
-        import time
-        server.SESSIONS["test"] = time.monotonic() + 60
-        upstream = SimpleNamespace(post=AsyncMock(return_value=SimpleNamespace(
-            raise_for_status=lambda: None, status_code=200, json=lambda: {"result": {}},
-        )))
-        try:
+        import httpx
+        from helpers.secret_broker import ResolvedCredential
+        seen = []
+        async def upstream(request):
+            payload = json.loads(request.content)
+            if payload["method"] == "notifications/initialized":
+                return httpx.Response(202)
+            if payload["method"] == "tools/call":
+                seen.append((payload, request.headers))
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": {}})
+        gateway = server.MCPAdapter(server.AdapterConfig(
+            policy=server.ToolPolicy(frozenset({"jira_get_issue"})),
+            auth_profile=server.AuthProfile(kind="atlassian"),
+        ), transport=httpx.MockTransport(upstream))
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as client:
+            init = await client.post("/", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+            headers = {"mcp-session-id": init.headers["mcp-session-id"]}
             for secret in ("first-secret", "second-secret"):
-                body = json.dumps({"id": 1, "method": "tools/call", "params": {
-                    "name": "jira_get_issue", "arguments": arguments({"token": secret}),
-                }}).encode()
-                await server._handle({"headers": [(b"mcp-session-id", b"test")]}, body, AsyncMock(), upstream)
-                forwarded = upstream.post.call_args.kwargs
-                self.assertEqual(forwarded["headers"]["X-Atlassian-Jira-Personal-Token"], secret)
-                self.assertEqual(forwarded["json"]["params"]["arguments"], {"issue_key": "TEST-1"})
-        finally:
-            server.SESSIONS.pop("test", None)
+                resolved = ResolvedCredential("c", "d", "token", "user", {"token": secret}, 123)
+                with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock(return_value=resolved)):
+                    response = await client.post("/", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                        "name": "jira_get_issue", "arguments": arguments({"token": "must-strip"}),
+                    }})
+                self.assertIn("result", response.json())
+                payload, forwarded_headers = seen[-1]
+                self.assertEqual(forwarded_headers["X-Atlassian-Jira-Personal-Token"], secret)
+                self.assertEqual(payload["params"]["arguments"], {"issue_key": "TEST-1"})
+
+    async def test_auth_type_is_not_inferred_from_a_token_field(self):
+        with self.assertRaises(ValueError):
+            await server._resolve_auth({"name": "jira_get_issue", "arguments": arguments({"token": "must-not-use"}, "basic")})
 
 
 if __name__ == "__main__":

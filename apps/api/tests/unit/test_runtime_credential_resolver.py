@@ -92,10 +92,10 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     )
 
     assert context is not None
-    assert context.payload == {"username": "demo", "password": "secret"}
+    assert context.payload == {}
     assert context.owner_type == "platform"
     service.resolve_credential_reference.assert_awaited_once()
-    service.get_decrypted_credentials.assert_awaited_once_with(cred_id)
+    service.get_decrypted_credentials.assert_not_awaited()
     call = service.resolve_credential_reference.await_args
     assert call.kwargs["strategy"] == "PLATFORM_ONLY"
 

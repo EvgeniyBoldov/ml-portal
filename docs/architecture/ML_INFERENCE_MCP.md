@@ -139,11 +139,14 @@ data connector URL then uses `http://host.docker.internal:<published-port>`.
 Alternatively, route through an existing host reverse proxy. If the service
 moves to a different host, update only the data connector URL.
 
-The adapter uses the existing broker-first MCP credential flow. A
-broker payload may contain `ml_inference_url`/`inference_url` and one of
-`token`, `api_token`, `access_token`, or `api_key`; the token is forwarded as a
-Bearer credential. A network- or mTLS-protected facade may intentionally use
-no bearer token. Raw credentials are never returned by either tool.
+The adapter uses the [shared MCP authentication profiles](MCP_ADAPTER.md).
+Each call requires broker credential_access by default. The broker returns the
+data connector's secret and auth_type. token uses Bearer; oauth uses access_token
+as Bearer; basic uses username/password; api_key uses X-API-Key. The shim never
+infers a different scheme from payload fields or silently calls without auth.
+Broker payloads may contain ml_inference_url/inference_url. Raw credentials
+require explicit local adapter compatibility mode as documented in the shared
+contract. Raw credentials are never returned by either tool.
 
 The MCP adapter limits JSON response size. Timeouts, TLS verification and
 endpoint paths are deployment configuration, not model-specific agent

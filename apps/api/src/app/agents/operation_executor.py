@@ -274,7 +274,6 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
-        credential_delivered_by_broker = False
         request_slug = merged_args.get("collection_slug")
         binding_collection_slug = instance_info.get("collection_slug")
         if binding_collection_slug:
@@ -292,7 +291,9 @@ class DirectOperationExecutor:
             merged_args["instance_context"].update(
                 {
                     "data_instance_slug": target.data_instance_slug,
+                    "data_instance_id": target.data_instance_id,
                     "provider_instance_slug": target.provider_instance_slug,
+                    "provider_instance_id": target.provider_instance_id,
                     "config": data_config,
                     "domain": instance_info.get("domain"),
                     "data_instance_url": instance_info.get("data_instance_url"),
@@ -308,7 +309,6 @@ class DirectOperationExecutor:
                 )
                 if access_ctx:
                     merged_args["instance_context"]["credential_access"] = access_ctx
-                    credential_delivered_by_broker = True
                 elif credential_context.payload:
                     if self._mcp_credential_broker_required and not self._mcp_allow_raw_credential_fallback:
                         raise ValueError(
@@ -318,15 +318,8 @@ class DirectOperationExecutor:
                     # Backward-compatible fallback for legacy MCP servers.
                     merged_args["instance_context"]["credentials"] = credential_context.payload
 
-        data_instance_url = instance_info.get("data_instance_url") or _resolve_instance_url(data_config)
-        if data_instance_url:
-            for field_name in ("instance_url", "base_url", "url", "address"):
-                merged_args.setdefault(field_name, data_instance_url)
-
-        # A broker-issued access context is the secret-delivery boundary.  Do
-        # not additionally copy its decrypted payload into tool arguments.
-        if credential_context and credential_context.payload and not credential_delivered_by_broker:
-            _apply_credential_hints(merged_args, credential_context)
+        # Provider routing and credentials live only in instance_context.
+        # Public arguments such as url/address/token may belong to the tool.
         return merged_args
 
     @staticmethod
@@ -547,31 +540,3 @@ def _extract_mcp_text_content(content: List[Dict[str, Any]]) -> str:
 def _extract_mcp_error_message(content: List[Dict[str, Any]]) -> Optional[str]:
     text = _extract_mcp_text_content(content)
     return text or None
-
-
-def _resolve_instance_url(config: Dict[str, Any]) -> Optional[str]:
-    for field_name in ("url", "base_url", "instance_url", "address"):
-        value = config.get(field_name)
-        if isinstance(value, str) and value:
-            return value
-    return None
-
-
-def _apply_credential_hints(
-    merged_args: Dict[str, Any],
-    credential_context: OperationCredentialContext,
-) -> None:
-    payload = credential_context.payload or {}
-    merged_args.setdefault("credentials", payload)
-
-    token = payload.get("token") or payload.get("api_key") or payload.get("litellm_api_key") or payload.get("access_token")
-    if token:
-        for field_name in ("token", "api_token", "api_key", "access_token"):
-            merged_args.setdefault(field_name, token)
-
-    username = payload.get("username")
-    password = payload.get("password")
-    if isinstance(username, str) and username:
-        merged_args.setdefault("username", username)
-    if isinstance(password, str) and password:
-        merged_args.setdefault("password", password)

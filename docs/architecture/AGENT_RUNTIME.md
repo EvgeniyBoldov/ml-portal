@@ -612,6 +612,13 @@ Remote MCP tool names come from the selected provider's active discovery. The
 LLM calls these as tools; internal execution bindings and provider targets are
 not part of the model-facing payload.
 
+External HTTP MCP providers are connected through the [shared adapter](MCP_ADAPTER.md).
+In broker mode runtime resolves only a credential reference from the selected
+data instance and sends a short-lived retrieval token in instance_context.
+It does not decrypt the secret, fall back to MCP-provider credentials, or inject
+credential/endpoint aliases into public tool arguments. The adapter exchanges
+the token at the API and applies the returned auth_type on each upstream call.
+
 `memory.search` is the registered tool for document-derived LongMemory. The
 application supplies the chat scope slugs; model arguments contain only `query`
 and optional `limit`. Retrieval runs against a separate ready HippoRAG graph per

@@ -2,7 +2,8 @@
 
 `atlassian-jira-mcp` and `atlassian-confluence-mcp` expose the upstream
 [`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) through
-separate Portal-owned adapter containers. Both use the package version pinned
+separate Portal-owned adapter containers using the
+[shared HTTP MCP boundary](MCP_ADAPTER.md). Both use the package version pinned
 in `mcp/atlassian_adapter/requirements.txt`; each container is configured for
 exactly one product and one product URL.
 
@@ -11,8 +12,9 @@ data connector to its matching MCP provider through `access_via_instance_id`.
 Discovery and runtime tool sets are isolated by provider instance, so Jira
 collections resolve Jira tools and Confluence collections resolve Confluence
 tools without tool-level product metadata or additional resolver logic.
-Credentials remain scoped to the corresponding data connector and must contain
-the matching product PAT; the data connector URL takes precedence at call time.
+Credentials remain scoped to the corresponding data connector and contain the
+fields required by their explicit auth_type. The data connector URL takes
+precedence at call time.
 
 ## Adapter responsibilities
 
@@ -20,14 +22,15 @@ the matching product PAT; the data connector URL takes precedence at call time.
   stateless Streamable HTTP mode; the adapter owns the client session for one
   hour of inactivity.
 - Accept credentials per `tools/call`: resolve `credential_access` with the
-  shared secret broker when present, otherwise read the runtime-provided
-  `instance_context.credentials` and `instance_context.auth_type`. An explicit
+  shared secret broker when present, otherwise accept runtime-provided
+  `instance_context.credentials` and `instance_context.auth_type` only in the
+  explicitly enabled local compatibility mode. An explicit
   broker access context is authoritative: failed resolution never falls back
   to raw credentials. Credential material is never stored in the MCP session
   or process environment.
 - Send request-resolved Atlassian PATs using upstream's per-request authentication
   headers. Runtime-only arguments (`credential_access`, `instance_context`, and
-  injected endpoint aliases) are removed before forwarding the public tool args.
+  collection targeting fields) are removed before forwarding the public tool args.
 - Filter `tools/list` by `ATLASSIAN_MCP_ENABLED_TOOLS` and enforce the same
   allowlist at call time. An empty setting falls back to the small built-in
   read-only allowlist; it does not publish every upstream tool.
@@ -68,11 +71,14 @@ otherwise reject private destinations.
 Build and deploy the image as `mcp-atlassian`. Register its MCP endpoint as a
 provider instance, then use the existing credential broker to deliver a
 credential payload containing a Jira or Confluence PAT (and its URL when the
-instance URL is not configured globally). Runtime may also deliver the payload
-directly in `instance_context.credentials` when its raw credential delivery
-policy permits it. PAT aliases include `token`, `pat`, `personal_token`,
+instance URL is not configured globally). Local compatibility requires both
+runtime raw delivery permission and adapter
+`MCP_ADAPTER_ALLOW_RAW_CREDENTIALS=true` with `ENV=local|dev|development`.
+Authentication follows the broker-returned auth_type strictly; missing fields
+never cause a switch to a different scheme. PAT aliases for auth_type=token
+include `token`, `pat`, `personal_token`,
 `personal_access_token`, the product-specific `jira_personal_token` or
-`confluence_personal_token`, and `api_token` without a username. Basic auth
+`confluence_personal_token`, and `api_token`. Basic auth
 accepts `username`/`email` with `password`/`api_token`; OAuth accepts
 `access_token`. The data connector URL takes precedence over credential URLs.
 
@@ -84,3 +90,7 @@ The local Compose services bind to `127.0.0.1:8017` (Jira) and
 Production provider URLs should use the corresponding service names on the
 internal Compose network. Health is available at `/healthz`. The older Portal
 Jira shim remains available as `atlassian-jira-legacy-mcp`.
+
+`MCP_ADAPTER_TOOL_DESCRIPTORS` can add per-tool descriptions, annotations and
+x-runtime overrides using the shared adapter format. The same allowlist rejects
+direct hidden-tool calls before credential resolution.

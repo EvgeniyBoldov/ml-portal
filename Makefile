@@ -12,7 +12,7 @@ COMPOSE_DEV := docker compose -f docker-compose.yml
 	dev-base dev-up dev-down dev-restart dev-logs dev-ps dev-build dev-build-no-cache dev-migrate dev-beat-up dev-beat-down \
 	base-hash \
 	up down restart logs ps build build-no-cache migrate \
-	test test-api test-backend test-frontend test-unit test-integration \
+	test test-api test-backend test-frontend test-unit test-integration test-mcp-adapter \
 	test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate test-e2e test-e2e-ui \
 	update-source release-preview release-check release
 
@@ -35,6 +35,7 @@ help:
 	@echo "    make test                Backend + frontend unit and integration tests"
 	@echo "    make test-api            All API tests"
 	@echo "    make test-backend        Backend unit tests"
+	@echo "    make test-mcp-adapter    MCP adapter, profiles, broker and runtime contracts"
 	@echo "    make test-frontend       Frontend unit tests"
 	@echo "    make test-e2e            Playwright end-to-end tests"
 	@echo ""
@@ -117,6 +118,14 @@ test-api:
 
 test-backend:
 	$(COMPOSE_DEV) exec api pytest tests/unit/ -v --tb=short --maxfail=10
+
+test-mcp-adapter:
+	$(COMPOSE_DEV) run --rm --no-deps -T -v "$(CURDIR)/mcp:/app/mcp:ro" api \
+		python -m pytest --noconftest -o addopts= -q \
+		mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/test_credentials.py \
+		tests/unit/test_ml_inference_mcp_server.py tests/unit/test_atlassian_jira_mcp_server.py \
+		tests/unit/test_mcp_credential_broker_service.py tests/unit/test_runtime_credential_resolver.py \
+		tests/unit/test_operation_builder.py tests/unit/test_operation_executor_mcp_credential_access.py
 
 test-frontend:
 	$(COMPOSE_DEV) exec frontend npm run test -- --run
