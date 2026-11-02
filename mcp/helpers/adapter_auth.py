@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
 import re
 from dataclasses import dataclass
@@ -9,6 +10,12 @@ from typing import Any
 
 from helpers.observability import normalize_request_id
 from helpers.secret_broker import ResolvedCredential, SecretBrokerClient, extract_credential_access
+
+logger = logging.getLogger("mcp.adapter_auth")
+
+
+def _log_atom(value: Any) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:/@+-]", "_", str(value or "-"))[:120]
 
 
 @dataclass(frozen=True)
@@ -45,11 +52,29 @@ async def resolve_request_credential(
     request_id: str = "", server: str = "mcp", tool: str = "",
 ) -> ResolvedCredential:
     access = extract_credential_access(arguments)
+    request_id = normalize_request_id(request_id)
+    context = arguments.get("instance_context")
+    context = context if isinstance(context, dict) else {}
+    nested_access = context.get("credential_access")
+    top_level_access = arguments.get("credential_access")
+    logger.info(
+        "mcp_credential_context_received request_id=%s server=%s tool=%s access_present=%s "
+        "top_level_access_type=%s nested_access_type=%s instance_context_type=%s "
+        "token_present=%s resolve_url_present=%s data_instance_id=%s provider_instance_id=%s",
+        request_id,
+        _log_atom(server),
+        _log_atom(tool),
+        access is not None,
+        type(top_level_access).__name__ if top_level_access is not None else "missing",
+        type(nested_access).__name__ if nested_access is not None else "missing",
+        type(arguments.get("instance_context")).__name__ if arguments.get("instance_context") is not None else "missing",
+        bool(access and str(access.get("token") or "").strip()),
+        bool(access and str(access.get("resolve_url") or "").strip()),
+        _log_atom(context.get("data_instance_id")),
+        _log_atom(context.get("provider_instance_id")),
+    )
     if access is not None:
         # Broker failure must never select a different credential or raw payload.
-        request_id = normalize_request_id(request_id)
-        context = arguments.get("instance_context")
-        context = context if isinstance(context, dict) else {}
         return await SecretBrokerClient(timeout_s=timeout_s).resolve(
             access,
             request_id=request_id,
@@ -65,6 +90,16 @@ async def resolve_request_credential(
                 credential_id="", instance_id="", auth_type=str(context.get("auth_type") or ""),
                 owner_type="", payload=dict(context["credentials"]), expires_at=0,
             )
+    logger.warning(
+        "mcp_credential_context_missing request_id=%s server=%s tool=%s "
+        "top_level_access_type=%s nested_access_type=%s instance_context_type=%s",
+        request_id,
+        _log_atom(server),
+        _log_atom(tool),
+        type(top_level_access).__name__ if top_level_access is not None else "missing",
+        type(nested_access).__name__ if nested_access is not None else "missing",
+        type(arguments.get("instance_context")).__name__ if arguments.get("instance_context") is not None else "missing",
+    )
     raise ValueError("A broker credential_access context is required")
 
 

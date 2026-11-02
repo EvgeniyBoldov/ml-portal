@@ -11,6 +11,9 @@ from app.services.credential_scope_resolver import (
     OperationFlags,
 )
 from app.services.credential_service import CredentialService
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CredentialsUnavailableError(RuntimeError):
@@ -75,6 +78,20 @@ class RuntimeCredentialResolver:
         strategy = self.scope_resolver.resolve(flags)
         strategy_value = strategy.value
 
+        logger.info(
+            "runtime_credential_resolution_started",
+            extra={
+                "operation_slug": operation or tool_slug or instance.slug,
+                "data_instance_id": str(instance.id),
+                "credential_scope": credential_scope,
+                "credential_strategy": strategy_value,
+                "risk_level": risk_level,
+                "side_effects": bool(side_effects),
+                "requires_confirmation": bool(requires_confirmation),
+                "broker_enabled": self.mcp_credential_broker_enabled,
+            },
+        )
+
         if self.mcp_credential_broker_enabled:
             reference = await self.credential_service.resolve_credential_reference(
                 instance_id=instance.id,
@@ -83,6 +100,16 @@ class RuntimeCredentialResolver:
                 tenant_id=tenant_id,
             )
             if not reference:
+                logger.info(
+                    "runtime_credential_resolution_completed",
+                    extra={
+                        "operation_slug": operation or tool_slug or instance.slug,
+                        "data_instance_id": str(instance.id),
+                        "credential_strategy": strategy_value,
+                        "credential_found": False,
+                        "broker_enabled": True,
+                    },
+                )
                 self._raise_if_strict_missing(
                     strategy=strategy,
                     instance=instance,
@@ -90,6 +117,19 @@ class RuntimeCredentialResolver:
                     operation=operation,
                 )
                 return None
+            logger.info(
+                "runtime_credential_resolution_completed",
+                extra={
+                    "operation_slug": operation or tool_slug or instance.slug,
+                    "data_instance_id": str(instance.id),
+                    "credential_strategy": strategy_value,
+                    "credential_found": True,
+                    "credential_id": str(reference.credential_id),
+                    "credential_owner_type": reference.owner_type,
+                    "credential_auth_type": reference.auth_type,
+                    "broker_enabled": True,
+                },
+            )
             return OperationCredentialContext(
                 auth_type=reference.auth_type,
                 payload={},
@@ -104,6 +144,16 @@ class RuntimeCredentialResolver:
             tenant_id=tenant_id,
         )
         if not decrypted:
+            logger.info(
+                "runtime_credential_resolution_completed",
+                extra={
+                    "operation_slug": operation or tool_slug or instance.slug,
+                    "data_instance_id": str(instance.id),
+                    "credential_strategy": strategy_value,
+                    "credential_found": False,
+                    "broker_enabled": False,
+                },
+            )
             self._raise_if_strict_missing(
                 strategy=strategy,
                 instance=instance,
@@ -111,6 +161,19 @@ class RuntimeCredentialResolver:
                 operation=operation,
             )
             return None
+        logger.info(
+            "runtime_credential_resolution_completed",
+            extra={
+                "operation_slug": operation or tool_slug or instance.slug,
+                "data_instance_id": str(instance.id),
+                "credential_strategy": strategy_value,
+                "credential_found": True,
+                "credential_id": str(decrypted.credential_id),
+                "credential_owner_type": decrypted.owner_type,
+                "credential_auth_type": decrypted.auth_type,
+                "broker_enabled": False,
+            },
+        )
         return OperationCredentialContext(
             auth_type=decrypted.auth_type,
             payload=decrypted.payload,

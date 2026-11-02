@@ -143,6 +143,20 @@ class OperationBuilder:
                         },
                     )
                     return None
+            logger.info(
+                "operation_credential_binding_built",
+                extra={
+                    "operation_slug": operation_slug,
+                    "data_instance_id": str(instance.id),
+                    "provider_instance_id": str(provider_for_target.id),
+                    "credential_present": credential_context is not None,
+                    "credential_id": credential_context.credential_id if credential_context else None,
+                    "credential_owner_type": credential_context.owner_type if credential_context else None,
+                    "credential_auth_type": credential_context.auth_type if credential_context else None,
+                    "credential_scope": resolution.credential_scope,
+                    "risk_level": resolution.risk_level,
+                },
+            )
             resolved_has_credentials = credential_context is not None or provider_for_target.is_local
             if not credential_context:
                 logger.info(

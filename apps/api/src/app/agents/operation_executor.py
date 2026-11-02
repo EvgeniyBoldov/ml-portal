@@ -127,15 +127,31 @@ class DirectOperationExecutor:
             try:
                 merged_args = self._merge_mcp_args(target, operation_call.arguments, ctx, binding=binding)
             except ValueError as exc:
+                credential_context = binding.credential if binding else None
+                failure_reason = {
+                    "MCP credential broker is required but no data-instance credential is available": "credential_missing",
+                    "MCP credential_access could not be issued and raw credential fallback is disabled": "broker_access_not_issued",
+                }.get(str(exc), "argument_validation_or_broker_error")
                 logger.warning(
                     "runtime_mcp_tool_call_failed run_id=%s call_id=%s operation=%s provider=%s "
-                    "data_instance_id=%s stage=credential_argument_build error_type=%s",
+                    "data_instance_id=%s stage=credential_argument_build error_type=%s failure_reason=%s "
+                    "credential_present=%s credential_id_present=%s credential_id=%s auth_type=%s owner_type=%s "
+                    "broker_enabled=%s broker_required=%s raw_fallback_allowed=%s",
                     run_id,
                     call_id,
                     operation_call.tool_name,
                     target.provider_instance_slug or "-",
                     target.data_instance_id or "-",
                     type(exc).__name__,
+                    failure_reason,
+                    credential_context is not None,
+                    bool(credential_context and credential_context.credential_id),
+                    credential_context.credential_id if credential_context else "-",
+                    credential_context.auth_type if credential_context else "-",
+                    credential_context.owner_type if credential_context else "-",
+                    self._mcp_credential_broker_enabled,
+                    self._mcp_credential_broker_required,
+                    self._mcp_allow_raw_credential_fallback,
                 )
                 return ToolResult.fail(str(exc))
             call = _UnifiedToolCall(
@@ -272,9 +288,14 @@ class DirectOperationExecutor:
             "mcp-session-id": session_id,
         }
         headers["x-portal-request-id"] = request_id
+        instance_context = call.arguments.get("instance_context")
+        instance_context = instance_context if isinstance(instance_context, dict) else {}
+        credential_access = instance_context.get("credential_access")
+        credential_access = credential_access if isinstance(credential_access, dict) else {}
         logger.info(
             "runtime_mcp_http_request_started request_id=%s run_id=%s stage=tools_call "
-            "provider=%s provider_instance_id=%s data_instance_id=%s operation=%s mcp_tool=%s target=%s",
+            "provider=%s provider_instance_id=%s data_instance_id=%s operation=%s mcp_tool=%s target=%s "
+            "credential_access_present=%s credential_id=%s auth_type=%s owner_type=%s",
             request_id,
             str(ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "-"),
             target.provider_instance_slug or "-",
@@ -283,6 +304,10 @@ class DirectOperationExecutor:
             target.operation_slug,
             call.name,
             _safe_url_origin(provider_url),
+            bool(credential_access.get("token")),
+            credential_access.get("credential_id") or "-",
+            credential_access.get("auth_type") or instance_context.get("auth_type") or "-",
+            credential_access.get("owner_type") or "-",
         )
         response, attempts = await self._post_with_retry(
             client=client,
@@ -406,6 +431,8 @@ class DirectOperationExecutor:
         instance_info = binding.context.model_dump()
         data_config = binding.context.config or {}
         credential_context = binding.credential
+        run_id = str(ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "-")
+        call_id = str(ctx.extra.get("runtime_active_tool_call_id") or "-")
         request_slug = merged_args.get("collection_slug")
         binding_collection_slug = instance_info.get("collection_slug")
         if binding_collection_slug:
@@ -418,38 +445,82 @@ class DirectOperationExecutor:
                 )
         merged_args.pop("collection_id", None)
 
-        merged_args.setdefault("instance_context", {})
-        if isinstance(merged_args["instance_context"], dict):
-            merged_args["instance_context"].update(
-                {
-                    "data_instance_slug": target.data_instance_slug,
-                    "data_instance_id": target.data_instance_id,
-                    "provider_instance_slug": target.provider_instance_slug,
-                    "provider_instance_id": target.provider_instance_id,
-                    "config": data_config,
-                    "domain": instance_info.get("domain"),
-                    "data_instance_url": instance_info.get("data_instance_url"),
-                    "provider_url": instance_info.get("provider_url"),
-                }
+        supplied_context = merged_args.get("instance_context")
+        context_was_malformed = supplied_context is not None and not isinstance(supplied_context, dict)
+        instance_context = dict(supplied_context) if isinstance(supplied_context, dict) else {}
+        supplied_internal_fields = {
+            "top_level_credential_access": "credential_access" in merged_args,
+            "top_level_credentials": "credentials" in merged_args,
+            "nested_credential_access": "credential_access" in instance_context,
+            "nested_credentials": "credentials" in instance_context,
+        }
+        for key in ("credential_access", "credentials"):
+            merged_args.pop(key, None)
+            instance_context.pop(key, None)
+        # auth_type is runtime-owned metadata too; never trust a caller-provided value.
+        instance_context.pop("auth_type", None)
+        if context_was_malformed or any(supplied_internal_fields.values()):
+            logger.warning(
+                "runtime_mcp_untrusted_credential_arguments_sanitized run_id=%s call_id=%s operation=%s "
+                "data_instance_id=%s context_was_malformed=%s top_level_access_present=%s "
+                "top_level_credentials_present=%s nested_access_present=%s nested_credentials_present=%s",
+                run_id,
+                call_id,
+                target.operation_slug,
+                target.data_instance_id or "-",
+                context_was_malformed,
+                supplied_internal_fields["top_level_credential_access"],
+                supplied_internal_fields["top_level_credentials"],
+                supplied_internal_fields["nested_credential_access"],
+                supplied_internal_fields["nested_credentials"],
             )
-            if credential_context:
-                merged_args["instance_context"]["auth_type"] = credential_context.auth_type
-                access_ctx = self._build_mcp_credential_access_context(
-                    target=target,
-                    credential_context=credential_context,
-                    ctx=ctx,
+
+        instance_context.update(
+            {
+                "data_instance_slug": target.data_instance_slug,
+                "data_instance_id": target.data_instance_id,
+                "provider_instance_slug": target.provider_instance_slug,
+                "provider_instance_id": target.provider_instance_id,
+                "config": data_config,
+                "domain": instance_info.get("domain"),
+                "data_instance_url": instance_info.get("data_instance_url"),
+                "provider_url": instance_info.get("provider_url"),
+            }
+        )
+        if credential_context:
+            instance_context["auth_type"] = credential_context.auth_type
+            access_ctx = self._build_mcp_credential_access_context(
+                target=target,
+                credential_context=credential_context,
+                ctx=ctx,
+            )
+            if access_ctx:
+                instance_context["credential_access"] = access_ctx
+                logger.info(
+                    "runtime_mcp_credential_access_built run_id=%s call_id=%s operation=%s "
+                    "data_instance_id=%s provider_instance_id=%s credential_id=%s auth_type=%s "
+                    "owner_type=%s broker_enabled=%s access_token_present=true",
+                    run_id,
+                    call_id,
+                    target.operation_slug,
+                    target.data_instance_id or "-",
+                    target.provider_instance_id or "-",
+                    credential_context.credential_id or "-",
+                    credential_context.auth_type or "-",
+                    credential_context.owner_type or "-",
+                    self._mcp_credential_broker_enabled,
                 )
-                if access_ctx:
-                    merged_args["instance_context"]["credential_access"] = access_ctx
-                elif self._mcp_allow_raw_credential_fallback and credential_context.payload:
-                    # Explicitly local-only legacy mode.
-                    merged_args["instance_context"]["credentials"] = credential_context.payload
-                else:
-                    raise ValueError(
-                        "MCP credential_access could not be issued and raw credential fallback is disabled"
-                    )
-            elif self._mcp_credential_broker_required:
-                raise ValueError("MCP credential broker is required but no data-instance credential is available")
+            elif self._mcp_allow_raw_credential_fallback and credential_context.payload:
+                # Explicitly local-only legacy mode.
+                instance_context["credentials"] = credential_context.payload
+            else:
+                raise ValueError(
+                    "MCP credential_access could not be issued and raw credential fallback is disabled"
+                )
+        elif self._mcp_credential_broker_required:
+            raise ValueError("MCP credential broker is required but no data-instance credential is available")
+
+        merged_args["instance_context"] = instance_context
 
         # Provider routing and credentials live only in instance_context.
         # Public arguments such as url/address/token may belong to the tool.
