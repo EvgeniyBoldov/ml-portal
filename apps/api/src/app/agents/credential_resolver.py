@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Optional
 from uuid import UUID
 
@@ -14,6 +15,11 @@ from app.services.credential_service import CredentialService
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _log_resolution(event: str, *, fields: dict[str, object]) -> None:
+    # The console formatter prints only message; retain structured fields too.
+    logger.info("%s %s", event, json.dumps(fields, sort_keys=True), extra=fields)
 
 
 class CredentialsUnavailableError(RuntimeError):
@@ -38,8 +44,8 @@ class RuntimeCredentialResolver:
     """Resolves execution credentials for runtime operations.
 
     Strategy selection is delegated to `CredentialScopeResolver` so that
-    risk-aware scope cascades (user-first for risky ops, platform-first for
-    read-only ones) can evolve without touching this resolver.
+    risk-aware scope cascades (user-only for risky ops, user/tenant/platform for
+    safe ones) can evolve without touching this resolver.
     """
 
     def __init__(
@@ -70,14 +76,18 @@ class RuntimeCredentialResolver:
         strategy = self.scope_resolver.resolve(flags)
         strategy_value = strategy.value
 
-        logger.info(
+        _log_resolution(
             "runtime_credential_resolution_started",
-            extra={
+            fields={
                 "operation_slug": operation or tool_slug or instance.slug,
                 "data_instance_id": str(instance.id),
                 "operation_risky": bool(is_risky),
                 "credential_strategy": strategy_value,
                 "broker_enabled": self.mcp_credential_broker_enabled,
+                "user_id": str(user_id),
+                "tenant_id": str(tenant_id),
+                "required_delivery": "credential_access",
+                "credential_source": "data_instance",
             },
         )
 
@@ -89,9 +99,9 @@ class RuntimeCredentialResolver:
                 tenant_id=tenant_id,
             )
             if not reference:
-                logger.info(
+                _log_resolution(
                     "runtime_credential_resolution_completed",
-                    extra={
+                    fields={
                         "operation_slug": operation or tool_slug or instance.slug,
                         "data_instance_id": str(instance.id),
                         "credential_strategy": strategy_value,
@@ -106,9 +116,9 @@ class RuntimeCredentialResolver:
                     operation=operation,
                 )
                 return None
-            logger.info(
+            _log_resolution(
                 "runtime_credential_resolution_completed",
-                extra={
+                fields={
                     "operation_slug": operation or tool_slug or instance.slug,
                     "data_instance_id": str(instance.id),
                     "credential_strategy": strategy_value,
@@ -133,9 +143,9 @@ class RuntimeCredentialResolver:
             tenant_id=tenant_id,
         )
         if not decrypted:
-            logger.info(
+            _log_resolution(
                 "runtime_credential_resolution_completed",
-                extra={
+                fields={
                     "operation_slug": operation or tool_slug or instance.slug,
                     "data_instance_id": str(instance.id),
                     "credential_strategy": strategy_value,
@@ -150,9 +160,9 @@ class RuntimeCredentialResolver:
                 operation=operation,
             )
             return None
-        logger.info(
+        _log_resolution(
             "runtime_credential_resolution_completed",
-            extra={
+            fields={
                 "operation_slug": operation or tool_slug or instance.slug,
                 "data_instance_id": str(instance.id),
                 "credential_strategy": strategy_value,

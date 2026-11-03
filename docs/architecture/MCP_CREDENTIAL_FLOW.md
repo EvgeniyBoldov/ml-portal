@@ -72,6 +72,35 @@ names, target origin, response status, duration, and sanitized transport error
 details. They must not include JWTs, secret values, request or response bodies,
 tool arguments, prompts, or model inputs.
 
+### Diagnosing credential selection and delivery
+
+API console logs expose resolution metadata in the message as well as structured
+fields, so the default message-only formatter retains it. Search for:
+
+- `runtime_credential_resolution_started/completed`: operation, selected data
+  instance, user/tenant context, risk-derived strategy, broker mode, and selected
+  credential ID, owner type and authentication type.
+- `credential_scope_lookup_started` / `credential_scope_candidate`: allowed
+  scope order and each attempted scope. Only active credentials on the selected
+  data instance and matching owner qualify. `owner_context_missing` means there
+  is no user/tenant identity to search; `no_active_credential_for_instance_and_owner`
+  means no row passed those filters. Selection stops at the first match; lower
+  priority scopes and unrelated owners are not enumerated.
+- `operation_credential_binding_built`: data/provider binding, selected credential
+  metadata and expected owner policy.
+- `runtime_mcp_credential_delivery_policy`: environment and configured versus
+  effective broker/fallback flags; only presence flags for broker URL settings.
+- `runtime_mcp_credential_access_not_issued`: run/tool-call correlation, selected
+  credential metadata and `broker_disabled` or `credential_id_missing`. A selected
+  credential followed by `broker_disabled` is a delivery configuration failure;
+  it does not indicate that the upstream service rejected its secret.
+
+These are operator diagnostics, not user-facing progress or a credential dump.
+They never include credential payloads, encrypted payloads, broker tokens or
+configuration contents. In non-local environments the current runtime forces
+broker delivery; a disabled effective broker warrants checking the running image
+version and the configured environment.
+
 ## Why This Exists
 
 This is the binding mechanism between tool execution and secure secret delivery.

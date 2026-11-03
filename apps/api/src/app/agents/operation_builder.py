@@ -149,7 +149,14 @@ class OperationBuilder:
                         },
                     )
             logger.info(
-                "operation_credential_binding_built",
+                "operation_credential_binding_built operation=%s data_instance_id=%s provider_instance_id=%s "
+                "credential_present=%s credential_id=%s owner_type=%s auth_type=%s policy=%s risk_level=%s",
+                operation_slug, instance.id, provider_for_target.id,
+                credential_context is not None,
+                credential_context.credential_id if credential_context else "-",
+                credential_context.owner_type if credential_context else "-",
+                credential_context.auth_type if credential_context else "-",
+                credential_policy, resolution.risk_level,
                 extra={
                     "operation_slug": operation_slug,
                     "data_instance_id": str(instance.id),

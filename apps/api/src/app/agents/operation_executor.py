@@ -100,6 +100,21 @@ class DirectOperationExecutor:
         self._mcp_credential_broker_enabled = mcp_credential_broker_enabled(settings)
         self._mcp_credential_broker_required = mcp_credential_broker_required(settings)
         self._mcp_allow_raw_credential_fallback = mcp_raw_credential_fallback_allowed(settings)
+        logger.info(
+            "runtime_mcp_credential_delivery_policy environment=%s configured_broker_enabled=%s "
+            "configured_broker_required=%s configured_raw_fallback=%s effective_broker_enabled=%s "
+            "effective_broker_required=%s effective_raw_fallback=%s broker_base_url_present=%s "
+            "broker_resolve_path_present=%s",
+            settings.ENV,
+            settings.MCP_CREDENTIAL_BROKER_ENABLED,
+            settings.MCP_CREDENTIAL_BROKER_REQUIRED,
+            settings.MCP_ALLOW_RAW_CREDENTIAL_FALLBACK,
+            self._mcp_credential_broker_enabled,
+            self._mcp_credential_broker_required,
+            self._mcp_allow_raw_credential_fallback,
+            bool(settings.MCP_CREDENTIAL_BROKER_BASE_URL),
+            bool(settings.MCP_CREDENTIAL_BROKER_RESOLVE_PATH),
+        )
 
     async def aclose(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
@@ -570,6 +585,11 @@ class DirectOperationExecutor:
                 )
             elif self._mcp_allow_raw_credential_fallback and credential_context.payload:
                 # Explicitly local-only legacy mode.
+                logger.warning(
+                    "runtime_mcp_raw_credential_fallback_used run_id=%s call_id=%s "
+                    "operation=%s credential_id=%s",
+                    run_id, call_id, target.operation_slug, credential_context.credential_id or "-",
+                )
                 instance_context["credentials"] = credential_context.payload
             else:
                 raise ValueError(
@@ -614,9 +634,27 @@ class DirectOperationExecutor:
         credential_context: OperationCredentialContext,
         ctx: ToolContext,
     ) -> Optional[Dict[str, Any]]:
-        if not self._mcp_credential_broker_enabled:
-            return None
-        if not credential_context.credential_id:
+        reason = (
+            "broker_disabled" if not self._mcp_credential_broker_enabled
+            else "credential_id_missing" if not credential_context.credential_id
+            else None
+        )
+        if reason:
+            logger.warning(
+                "runtime_mcp_credential_access_not_issued run_id=%s call_id=%s operation=%s "
+                "data_instance_id=%s provider_instance_id=%s user_id=%s tenant_id=%s "
+                "credential_id=%s auth_type=%s owner_type=%s policy=%s "
+                "broker_enabled=%s broker_required=%s raw_fallback_allowed=%s "
+                "payload_present=%s expected_delivery=credential_access reason=%s",
+                ctx.extra.get("run_id") or ctx.extra.get("runtime_run_id") or "-",
+                ctx.extra.get("runtime_active_tool_call_id") or "-",
+                target.operation_slug, target.data_instance_id, target.provider_instance_id,
+                ctx.user_id, ctx.tenant_id, credential_context.credential_id or "-",
+                credential_context.auth_type, credential_context.owner_type,
+                target.credential_policy, self._mcp_credential_broker_enabled,
+                self._mcp_credential_broker_required, self._mcp_allow_raw_credential_fallback,
+                bool(credential_context.payload), reason,
+            )
             return None
 
         access_ctx = MCPCredentialBrokerService.issue_access_context(

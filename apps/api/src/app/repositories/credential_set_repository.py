@@ -8,6 +8,9 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.credential_set import Credential
+from app.core.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class CredentialRepository:
@@ -138,22 +141,46 @@ class CredentialRepository:
         """
         base = [Credential.instance_id == instance_id, Credential.is_active == True]
 
-        if strategy == "USER_ONLY":
-            return await self._find_user(base=base, user_id=user_id)
-        elif strategy == "USER_FIRST":
-            return (
-                await self._find_user(base=base, user_id=user_id)
-                or await self._find_tenant(base=base, tenant_id=tenant_id)
-                or await self._find_platform(base=base)
+        scopes = {
+            "USER_ONLY": ("user",),
+            "USER_FIRST": ("user", "tenant", "platform"),
+            "PLATFORM_ONLY": ("platform",),
+            "PLATFORM_FIRST": ("platform", "tenant", "user"),
+        }.get(strategy, ())
+        logger.info(
+            "credential_scope_lookup_started data_instance_id=%s user_id=%s tenant_id=%s "
+            "strategy=%s allowed_scopes=%s active_required=true provider_fallback=false",
+            instance_id, user_id, tenant_id, strategy, ",".join(scopes) or "none",
+        )
+        for scope in scopes:
+            if scope == "user":
+                credential = await self._find_user(base=base, user_id=user_id)
+                owner_present = user_id is not None
+            elif scope == "tenant":
+                credential = await self._find_tenant(base=base, tenant_id=tenant_id)
+                owner_present = tenant_id is not None
+            else:
+                credential = await self._find_platform(base=base)
+                owner_present = True
+            reason = (
+                "selected" if credential is not None
+                else "owner_context_missing" if not owner_present
+                else "no_active_credential_for_instance_and_owner"
             )
-        elif strategy == "PLATFORM_ONLY":
-            return await self._find_platform(base=base)
-        elif strategy == "PLATFORM_FIRST":
-            return (
-                await self._find_platform(base=base)
-                or await self._find_tenant(base=base, tenant_id=tenant_id)
-                or await self._find_user(base=base, user_id=user_id)
+            logger.info(
+                "credential_scope_candidate data_instance_id=%s user_id=%s tenant_id=%s "
+                "strategy=%s scope=%s credential_id=%s auth_type=%s reason=%s",
+                instance_id, user_id, tenant_id, strategy, scope,
+                getattr(credential, "id", "-"), getattr(credential, "auth_type", "-"), reason,
             )
+            if credential is not None:
+                return credential
+        logger.info(
+            "credential_scope_lookup_failed data_instance_id=%s user_id=%s tenant_id=%s "
+            "strategy=%s reason=%s",
+            instance_id, user_id, tenant_id, strategy,
+            "no_matching_active_credential" if scopes else "unsupported_strategy",
+        )
         return None
 
     async def _find_user(self, *, base, user_id: Optional[UUID]) -> Optional[Credential]:
