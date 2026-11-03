@@ -122,7 +122,7 @@ test-backend:
 test-mcp-adapter:
 	$(COMPOSE_DEV) run --rm --no-deps -T -v "$(CURDIR)/mcp:/app/mcp:ro" api \
 		python -m pytest --noconftest -o addopts= -q \
-		mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/test_credentials.py \
+		mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/ \
 		tests/unit/test_ml_inference_mcp_server.py tests/unit/test_atlassian_jira_mcp_server.py \
 		tests/unit/test_mcp_credential_broker_service.py tests/unit/test_runtime_credential_resolver.py \
 		tests/unit/test_operation_builder.py tests/unit/test_operation_executor_mcp_credential_access.py

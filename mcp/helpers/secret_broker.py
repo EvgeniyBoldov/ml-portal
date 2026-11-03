@@ -27,6 +27,7 @@ class ResolvedCredential:
     owner_type: str
     payload: Dict[str, Any]
     expires_at: int
+    source_url: str = ""
 
 
 def extract_credential_access(arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -172,6 +173,7 @@ class SecretBrokerClient:
             owner_type=str(data.get("owner_type") or ""),
             payload=dict(data.get("payload") or {}),
             expires_at=int(data.get("expires_at") or 0),
+            source_url=str(data.get("source_url") or ""),
         )
         log_mcp_event(
             logger,

@@ -183,11 +183,10 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `JIRA_CA_BUNDLE` — путь к CA bundle для self-hosted Jira, если используется внутренний CA.
 - `JIRA_TIMEOUT_SECONDS` — timeout запросов Atlassian Jira MCP.
 - `JIRA_MCP_MAX_RESULTS` — верхняя граница результатов Jira MCP в одном ответе.
-- `ATLASSIAN_JIRA_URL` / `ATLASSIAN_CONFLUENCE_URL` — URL Jira и Confluence соответственно; для них запускаются отдельные adapter MCP services. Креды приходят на каждый вызов через broker access либо `instance_context.credentials` согласно runtime-политике передачи.
+- URL Jira/Confluence задаются в источниках данных Portal. Adapter получает подтверждённый `source_url` вместе с credentials через broker на каждый вызов. `ATLASSIAN_JIRA_URL`, `ATLASSIAN_CONFLUENCE_URL` и `ATLASSIAN_ALLOWED_URL_DOMAINS` для adapter не нужны. API и adapter используют одинаковые `MCP_CREDENTIAL_BROKER_BASE_URL` / `MCP_CREDENTIAL_BROKER_RESOLVE_PATH` для адреса самого Portal broker; это не адреса источников.
 - `ATLASSIAN_JIRA_MCP_ENABLED_TOOLS` / `ATLASSIAN_CONFLUENCE_MCP_ENABLED_TOOLS` — независимые comma-separated allowlists инструментов соответствующих mcp-atlassian services.
 - `ATLASSIAN_MCP_TIMEOUT_SECONDS` — timeout обращения адаптера к upstream MCP.
 - `ATLASSIAN_JIRA_ADAPTER_PORT` / `ATLASSIAN_CONFLUENCE_ADAPTER_PORT` — локальные host ports adapter services (по умолчанию `8017` и `8018`).
-- `ATLASSIAN_ALLOWED_URL_DOMAINS` — comma-separated hostname allowlist для self-hosted Atlassian URL, блокируемых upstream SSRF-защитой (например, внутренний Jira/DC).
 
 ## MCP / Runtime Security
 - `MCP_CREDENTIAL_BROKER_ENABLED` — local/dev override. В production, staging и других non-local окружениях broker-flow включён принудительно. Если `MCP_CREDENTIAL_BROKER_REQUIRED=true`, broker включается и в local/dev.

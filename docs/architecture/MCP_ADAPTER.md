@@ -42,8 +42,10 @@ and never replays tools/call. It supports HTTP POST MCP tools, not stdio,
 legacy SSE transports, resources/prompts/subscriptions, or env-only credentials.
 
 Discovery uses no data credentials. The upstream must expose its schema surface
-without service credentials. Embedded Atlassian uses its existing non-secret
-placeholder for discovery. An upstream requiring credentials even for discovery
+without service credentials. Embedded Atlassian exposes native schemas without
+source configuration or placeholder credentials; its
+[broker-bound integration](ATLASSIAN_MCP_ADAPTER.md) creates the source client
+only for tools/call. An upstream requiring credentials even for discovery
 needs an additional discovery integration; do not store a permanent discovery
 secret in adapter env.
 
@@ -51,9 +53,9 @@ secret in adapter env.
 
 | Credential auth_type | Standard | Atlassian |
 | --- | --- | --- |
-| token | Configured header/scheme; default Authorization: Bearer | Product-specific X-Atlassian-…-Personal-Token |
-| basic | Basic from username/email and password/api_token | Basic plus product URL header |
-| oauth / bearer | Bearer from access_token/token | Bearer plus product URL header |
+| token | Configured header/scheme; default Authorization: Bearer | Broker-bound native PAT client |
+| basic | Basic from username/email and password/api_token | Broker-bound native Basic client |
+| oauth / bearer | Bearer from access_token/token | Bearer on the broker-bound client |
 | api_key | Configured header; default X-API-Key | Same explicit API-key header; upstream must support it |
 
 Aliases choose the value within the declared scheme, never another scheme. A
@@ -63,7 +65,8 @@ name (confluence_… or Jira); the data connector URL takes precedence. Generic
 upstreams can receive that URL via `MCP_ADAPTER_TARGET_URL_HEADER`. Profiles
 cannot make an unmodified upstream understand arbitrary credential arguments.
 
-Broker delivery is mandatory by default. Explicit local compatibility requires
+The embedded Atlassian adapter requires the broker in every environment.
+For generic HTTP adapters, broker delivery is mandatory by default. Explicit local compatibility requires
 both `MCP_ADAPTER_ALLOW_RAW_CREDENTIALS=true` and `ENV=local|dev|development`;
 it accepts instance_context.credentials with an explicit auth_type. A supplied
 broker context always wins, including when resolution fails. Production rejects

@@ -1,98 +1,116 @@
 # Atlassian MCP Adapter
 
-`atlassian-jira-mcp` and `atlassian-confluence-mcp` expose the upstream
-[`sooperset/mcp-atlassian`](https://github.com/sooperset/mcp-atlassian) through
-separate Portal-owned adapter containers using the
-[shared HTTP MCP boundary](MCP_ADAPTER.md). Both use the package version pinned
-in `mcp/atlassian_adapter/requirements.txt`; each container is configured for
-exactly one product and one product URL.
+`atlassian-jira-mcp` and `atlassian-confluence-mcp` expose native tools from the
+pinned `mcp-atlassian==0.23.1` package through Portal's shared HTTP MCP boundary.
+Each provider has its own operation allowlist. Data connectors retain their
+URLs and credentials and link to the provider through `access_via_instance_id`.
 
-Register two MCP provider instances in Portal, one for each service. Bind each
-data connector to its matching MCP provider through `access_via_instance_id`.
-Discovery and runtime tool sets are isolated by provider instance, so Jira
-collections resolve Jira tools and Confluence collections resolve Confluence
-tools without tool-level product metadata or additional resolver logic.
-Credentials remain scoped to the corresponding data connector and contain the
-fields required by their explicit auth_type. The data connector URL takes
-precedence at call time.
+## Broker-bound source configuration
 
-## Adapter responsibilities
+For each `tools/call`, the adapter exchanges the short-lived credential reference
+at the configured Portal broker. The broker validates the signed data-instance
+binding, credential activation, owner and authentication type, and the continued
+availability of the data instance. Its additive `source_url` response field comes
+from that instance's persisted `url`, alongside the credential payload.
 
-- Issue the Portal-required `mcp-session-id` on `initialize`. Upstream runs in
-  stateless Streamable HTTP mode; the adapter owns the client session for one
-  hour of inactivity.
-- Accept credentials per `tools/call`: resolve `credential_access` with the
-  shared secret broker when present, otherwise accept runtime-provided
-  `instance_context.credentials` and `instance_context.auth_type` only in the
-  explicitly enabled local compatibility mode. An explicit
-  broker access context is authoritative: failed resolution never falls back
-  to raw credentials. Credential material is never stored in the MCP session
-  or process environment.
-- Send request-resolved Atlassian PATs using upstream's per-request authentication
-  headers. Runtime-only arguments (`credential_access`, `instance_context`, and
-  collection targeting fields) are removed before forwarding the public tool args.
-- Filter `tools/list` by `ATLASSIAN_MCP_ENABLED_TOOLS` and enforce the same
-  allowlist at call time. An empty setting falls back to the small built-in
-  read-only allowlist; it does not publish every upstream tool.
-- Publish only the explicitly configured binary `inputSchema.x-runtime.risk_level`
-  (`safe` or `risky`) for each enabled operation. The small built-in allowlist
-  has an explicit safe classification per operation; enabling any additional
-  operation requires adding its risk descriptor. Upstream risk, credential
-  scope, side-effect, and confirmation metadata are not trusted or forwarded.
-  Credential ownership is selected by runtime from the platform's effective
-  operation risk.
-- Emit operational request logs with a Portal correlation ID, MCP method/tool,
-  processing stage, duration, exception class, upstream HTTP status, and JSON-RPC
-  code. Arguments, credentials, response bodies, and exception text are omitted.
+The Atlassian adapter requires this broker-confirmed URL. URLs in public tool
+arguments, `instance_context`, credential payloads and container environment do
+not override it. A mismatched data-instance ID or a missing broker source URL
+fails before creating a client. An older broker must be upgraded before deploying
+the new adapter. Generic MCP adapters and the legacy Jira shim retain their
+existing contracts.
 
-The upstream process receives placeholder PATs at startup only so it can
-initialize toolsets and publish their schemas. `ALLOW_GLOBAL_CRED_FALLBACK=false`
-is set. The placeholders are not valid service credentials. Tool calls require
-request credentials in either supported form.
+The adapter accepts references only to the configured Portal broker endpoint,
+using the API's existing `MCP_CREDENTIAL_BROKER_BASE_URL` and
+`MCP_CREDENTIAL_BROKER_RESOLVE_PATH` settings. A caller cannot supply a different
+resolve endpoint to manufacture a trusted source. These are control-plane
+settings, not Jira/Confluence endpoints. Atlassian runtime requires the broker;
+raw credentials are not an alternative path.
 
-Portal sends `x-portal-request-id` on each MCP tool call, using the runtime tool
-call ID. The adapter uses it to correlate its container log with the runtime
-trace. Requests from other clients receive a generated local ID. MCP callers
-continue to receive generic safe errors; operators use the correlated adapter
-log to distinguish broker, upstream transport, timeout, and protocol failures.
+## Native tool integration
 
-## Configuration and onboarding
+`source_runtime.py` creates a native Jira/Confluence config and fetcher for the
+current call and supplies it through the upstream's request-scoped fetcher
+boundary. Both PAT and Basic use the same broker-confirmed source, including its
+context path. Jira `/rest/api/2`, `/rest/api/3`, and `/rest/api` suffixes are
+normalized to a service root; Confluence REST suffixes are normalized similarly.
 
-`ATLASSIAN_JIRA_URL` and `ATLASSIAN_CONFLUENCE_URL` configure the respective
-provider URLs. The Jira container leaves `CONFLUENCE_URL` empty; the Confluence
-container leaves `JIRA_URL` empty. `ATLASSIAN_JIRA_MCP_ENABLED_TOOLS` and
-`ATLASSIAN_CONFLUENCE_MCP_ENABLED_TOOLS` are independent comma-separated
-allowlists of exact upstream tool names. Defaults are
+The embedded server mounts native Jira/Confluence tools with their existing
+read-only/toolset filters. Portal's broker authentication replaces the native
+public HTTP header/environment authentication middleware. In particular, Basic
+no longer clones an environment-configured client, and private registered
+sources are not rejected merely because their DNS points to a private address.
+Discovery publishes schemas without any source URL, placeholder PAT or global
+service configuration. The adapter's explicit operation allowlist still filters
+`tools/list` and rejects hidden direct calls before credential resolution.
+
+Each fetcher has its own SDK HTTP session. `SourceBoundAdapter` permits outbound
+requests only to that source's origin and context path. Redirects are rejected
+before another request is made; tool-supplied URLs cannot move credentials to
+another host, port, scheme or context path. HTTP(S) source URLs may not contain
+userinfo, query parameters or fragments. TLS verification remains enabled by
+default. No `.netrc`, process proxy settings, global credential client or mutable
+URL allowlist can replace the selected source or authentication.
+
+A context variable associates the client with the current in-process upstream
+exchange. Parallel calls do not share clients. After completion, failure or
+cancellation the context is reset and the SDK session is closed. MCP session
+state contains only an opaque ID and expiry, never a fetcher or credential.
+
+Authentication follows the broker-returned `auth_type`:
+
+| Type | Jira/Confluence HTTP authentication |
+| --- | --- |
+| `token` | Native PAT client; `Authorization: Bearer …` |
+| `basic` | Native Basic client using username/email and password/api_token |
+| `oauth` / `bearer` | Broker-supplied bearer header on the bound client; no global OAuth fallback |
+| `api_key` | Explicit `X-API-Key` header on the bound client |
+
+Token aliases are `jira_personal_token` / `confluence_personal_token`, `token`,
+`pat`, `personal_token`, `personal_access_token`, and `api_token`. An invalid
+credential never causes a switch to another authentication scheme.
+
+## Configuration and deployment
+
+Register the provider endpoints at their internal service addresses. The local
+ports remain `ATLASSIAN_JIRA_ADAPTER_PORT` (8017) and
+`ATLASSIAN_CONFLUENCE_ADAPTER_PORT` (8018); health is available at `/healthz`.
+
+`ATLASSIAN_JIRA_MCP_ENABLED_TOOLS` and `ATLASSIAN_CONFLUENCE_MCP_ENABLED_TOOLS`
+are comma-separated allowlists. Defaults are
 `jira_search,jira_get_issue,jira_get_project_issues` and
-`confluence_search,confluence_get_page` respectively.
-Set only tools supported by the configured Atlassian products and deployment.
-For self-hosted Atlassian instances on private networks, set
-`ATLASSIAN_ALLOWED_URL_DOMAINS` to their exact hostnames; upstream SSRF checks
-otherwise reject private destinations.
+`confluence_search,confluence_get_page`. Every enabled operation needs an
+explicit safe/risky descriptor; the built-in defaults have safe descriptors.
+`MCP_ADAPTER_TOOL_DESCRIPTORS` can provide further descriptions and risk metadata.
 
-Build and deploy the image as `mcp-atlassian`. Register its MCP endpoint as a
-provider instance, then use the existing credential broker to deliver a
-credential payload containing a Jira or Confluence PAT (and its URL when the
-instance URL is not configured globally). Local compatibility requires both
-runtime raw delivery permission and adapter
-`MCP_ADAPTER_ALLOW_RAW_CREDENTIALS=true` with `ENV=local|dev|development`.
-Authentication follows the broker-returned auth_type strictly; missing fields
-never cause a switch to a different scheme. PAT aliases for auth_type=token
-include `token`, `pat`, `personal_token`,
-`personal_access_token`, the product-specific `jira_personal_token` or
-`confluence_personal_token`, and `api_token`. Basic auth
-accepts `username`/`email` with `password`/`api_token`; OAuth accepts
-`access_token`. The data connector URL takes precedence over credential URLs.
+Source endpoint variables `ATLASSIAN_JIRA_URL`, `ATLASSIAN_CONFLUENCE_URL` and
+`ATLASSIAN_ALLOWED_URL_DOMAINS` are no longer part of the Portal adapter
+configuration. Set URLs on data connectors instead. No endpoint or credential
+placeholders are needed to initialize the embedded tool server.
 
-## Operations
+Deploy the API with the new broker response first, then rebuild/deploy the
+`mcp-atlassian` image. Existing broker consumers ignore the additive field.
 
-The local Compose services bind to `127.0.0.1:8017` (Jira) and
-`127.0.0.1:8018` (Confluence), configurable with
-`ATLASSIAN_JIRA_ADAPTER_PORT` and `ATLASSIAN_CONFLUENCE_ADAPTER_PORT`.
-Production provider URLs should use the corresponding service names on the
-internal Compose network. Health is available at `/healthz`. The older Portal
-Jira shim remains available as `atlassian-jira-legacy-mcp`.
+## Diagnostics and validation
 
-`MCP_ADAPTER_TOOL_DESCRIPTORS` can add per-tool descriptions, annotations and
-x-runtime overrides using the shared adapter format. The same allowlist rejects
-direct hidden-tool calls before credential resolution.
+`mcp_authentication_request` records the declared scheme, credential ID, Basic
+username, known credential-field presence and masked transport header metadata.
+`atlassian_source_client_bound` records the actual source origin/product chosen
+for the native SDK. `auth_middleware` records the in-process source binding and
+response status. Passwords, PATs, API tokens, encoded Basic values, broker JWTs,
+request/response bodies and arbitrary tool arguments are not logged.
+
+The source-runtime suite runs the real pinned server, its native tools and SDKs,
+with only broker/Jira HTTP mocked. It covers discovery without service ENV,
+parallel PAT/Basic source isolation, declared external schemes, normalization,
+private sources, rejected caller endpoints, broker endpoint trust, redirects,
+transport bounds and cancellation cleanup. Run it with the shared adapter tests:
+
+```bash
+pip install -r mcp/atlassian_adapter/requirements-test.txt
+python -m pytest --noconftest -o addopts= -q \
+  mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/
+```
+
+The dedicated CI job installs the pinned upstream, checks adapter startup and
+runs this suite on Python 3.11, matching the MCP image.

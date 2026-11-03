@@ -2,13 +2,14 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Any
 
-from helpers.observability import normalize_request_id
+from helpers.observability import normalize_request_id, safe_target
 from helpers.secret_broker import ResolvedCredential, SecretBrokerClient, extract_credential_access
 
 logger = logging.getLogger("mcp.adapter_auth")
@@ -50,6 +51,7 @@ def _header(name: str, value: str) -> dict[str, str]:
 async def resolve_request_credential(
     arguments: dict[str, Any], *, timeout_s: int = 10, allow_raw: bool = False,
     request_id: str = "", server: str = "mcp", tool: str = "",
+    trusted_broker_url: str | None = None,
 ) -> ResolvedCredential:
     access = extract_credential_access(arguments)
     request_id = normalize_request_id(request_id)
@@ -74,6 +76,8 @@ async def resolve_request_credential(
         _log_atom(context.get("provider_instance_id")),
     )
     if access is not None:
+        if trusted_broker_url is not None and access.get("resolve_url") != trusted_broker_url:
+            raise ValueError("Credential reference does not target the configured Portal broker")
         # Broker failure must never select a different credential or raw payload.
         return await SecretBrokerClient(timeout_s=timeout_s).resolve(
             access,
@@ -162,3 +166,43 @@ def data_source_url(arguments: dict[str, Any], payload: dict[str, Any], *, tool_
             if isinstance(value, str) and value.strip():
                 return value.strip().rstrip("/")
     return ""
+
+
+def log_authentication_request(
+    credential: ResolvedCredential, *, profile: AuthProfile, headers: dict[str, str],
+    request_id: str, tool_name: str, target_url: str,
+) -> None:
+    """Allowlisted auth metadata and a masked preview, never arbitrary payloads."""
+    product = "confluence" if tool_name.startswith("confluence_") else "jira"
+    aliases = {
+        "token": (f"{product}_personal_token", "token", "pat", "personal_token", "personal_access_token", "api_token"),
+        "basic": ("username", "email", "password", "api_token"),
+        "oauth": ("access_token", "token"),
+        "bearer": ("access_token", "token"),
+        "api_key": ("api_key",),
+    }.get(credential.auth_type.strip().lower(), ())
+    fields_present = {
+        key: isinstance(credential.payload.get(key), str) and bool(credential.payload[key])
+        for key in aliases
+    }
+    preview = {}
+    for name, value in headers.items():
+        if name.lower() == "authorization":
+            # Scheme is chosen by the adapter, never take arbitrary text from a token.
+            scheme = value.partition(" ")[0]
+            preview[name] = f"{scheme} ***" if scheme in {"Basic", "Bearer", "Token"} else "***"
+        elif name.lower() in {"x-atlassian-jira-url", "x-atlassian-confluence-url"}:
+            preview[name] = safe_target(value)
+        else:
+            preview[name] = "***"
+    username = "-"
+    if credential.auth_type.strip().lower() == "basic":
+        username = _log_atom(_value(credential.payload, "username", "email"))
+    logger.info(
+        "mcp_authentication_request request_id=%s tool=%s credential_id=%s profile=%s "
+        "auth_type=%s target=%s username=%s credential_fields_present=%s "
+        "headers=%s auth_in_body=false",
+        normalize_request_id(request_id), _log_atom(tool_name), _log_atom(credential.credential_id),
+        _log_atom(profile.kind), _log_atom(credential.auth_type), safe_target(target_url), username,
+        json.dumps(fields_present, sort_keys=True), json.dumps(preview, sort_keys=True),
+    )

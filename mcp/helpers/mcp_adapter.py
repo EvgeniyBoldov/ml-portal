@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 import json
 import logging
@@ -12,8 +14,9 @@ import uuid
 
 import httpx
 
-from helpers.adapter_auth import AuthProfile, data_source_url, resolve_request_credential, upstream_auth_headers
+from helpers.adapter_auth import AuthProfile, data_source_url, log_authentication_request, resolve_request_credential, upstream_auth_headers
 from helpers.adapter_policy import INTERNAL_ARGUMENTS, ToolPolicy
+from helpers.secret_broker import ResolvedCredential
 from helpers.observability import (
     log_mcp_event,
     normalize_request_id,
@@ -118,6 +121,7 @@ class MCPAdapter:
         rpc_id: Any = None
         method, tool, stage = "unknown", "", "request_parse"
         credential = None
+        forward_headers: dict[str, str] = {}
         data_instance_id = ""
         provider_instance_id = ""
         target_url = self.config.upstream_url
@@ -242,18 +246,16 @@ class MCPAdapter:
                     data_instance_id = str(context.get("data_instance_id") or "")
                     provider_instance_id = str(context.get("provider_instance_id") or "")
                     stage = "credential_resolution"
-                    credential = await resolve_request_credential(
-                        args, timeout_s=self.config.broker_timeout_s,
-                        allow_raw=self.config.allow_raw_credentials,
-                        request_id=request_id,
-                        server=self.config.name,
-                        tool=tool,
-                    )
-                    target_url = data_source_url(args, credential.payload, tool_name=tool)
+                    credential = await self._resolve_credential(args, request_id, tool)
+                    target_url = self._source_url(args, credential, tool)
                     stage = "upstream_authentication"
                     forward_headers = upstream_auth_headers(
                         credential, profile=self.config.auth_profile, tool_name=tool,
                         target_url=target_url,
+                    )
+                    log_authentication_request(
+                        credential, profile=self.config.auth_profile, headers=forward_headers,
+                        request_id=request_id, tool_name=tool, target_url=target_url,
                     )
                     log_mcp_event(
                         logger,
@@ -274,7 +276,8 @@ class MCPAdapter:
                         key: value for key, value in args.items() if key not in INTERNAL_ARGUMENTS
                     }}}
                 stage = "upstream_request"
-                payload = await self._forward(request, forward_headers, request_id)
+                async with self._upstream_context(credential, tool):
+                    payload = await self._forward(request, forward_headers, request_id)
                 if method == "tools/list":
                     stage = "tool_descriptors"
                     payload = self.config.policy.filter_result(payload)
@@ -310,6 +313,7 @@ class MCPAdapter:
                 provider_instance_id=provider_instance_id,
                 credential_id=credential.credential_id if credential else "",
                 auth_type=credential.auth_type if credential else "",
+                auth_headers=",".join(sorted(forward_headers)),
                 error_detail=safe_error_detail(exc),
             )
             # Send diagnostic metadata, never exception text: transport exceptions
@@ -327,6 +331,24 @@ class MCPAdapter:
             response = _error(rpc_id, -32000, "MCP adapter request failed")
             response["error"]["data"] = diagnostic
             await self._respond(send, 200, response)
+
+    async def _resolve_credential(
+        self, arguments: dict[str, Any], request_id: str, tool: str,
+    ) -> ResolvedCredential:
+        return await resolve_request_credential(
+            arguments, timeout_s=self.config.broker_timeout_s,
+            allow_raw=self.config.allow_raw_credentials, request_id=request_id,
+            server=self.config.name, tool=tool,
+        )
+
+    def _source_url(self, arguments: dict[str, Any], credential: ResolvedCredential, tool: str) -> str:
+        return data_source_url(arguments, credential.payload, tool_name=tool)
+
+    @asynccontextmanager
+    async def _upstream_context(
+        self, credential: ResolvedCredential | None, tool: str,
+    ) -> AsyncIterator[None]:
+        yield
 
     async def _forward(self, request: dict[str, Any], auth: dict[str, str], request_id: str) -> dict[str, Any]:
         transport = self.transport

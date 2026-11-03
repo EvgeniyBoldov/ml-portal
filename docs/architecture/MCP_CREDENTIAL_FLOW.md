@@ -25,6 +25,10 @@ credential delivery is an explicit local-only compatibility mode.
 3. Runtime issues a short-lived signed retrieval token without decrypting the secret.
 4. MCP adapter exchanges that token for the data instance's secret for this call.
 5. The adapter authenticates to the upstream using the returned auth_type.
+   The broker also returns `source_url` from the bound active data instance.
+   The embedded Atlassian adapter requires this field for its per-call native
+   client and does not accept a caller-selected source URL or broker endpoint.
+   See [Atlassian MCP Adapter](ATLASSIAN_MCP_ADAPTER.md).
 
 ## Properties
 

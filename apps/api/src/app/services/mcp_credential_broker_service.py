@@ -33,6 +33,7 @@ class ResolvedMCPCredential:
     owner_type: str
     payload: Dict[str, Any]
     expires_at: int
+    source_url: str = ""
 
 
 class MCPCredentialBrokerService:
@@ -162,6 +163,10 @@ class MCPCredentialBrokerService:
         if owner_type == "platform" and not bool(credential.owner_platform):
             raise UnauthorizedError("Credential owner mismatch (platform)")
 
+        source = await self.credential_service.instance_repo.get_by_id(credential.instance_id)
+        if source is None or not source.is_active:
+            raise UnauthorizedError("Credential data instance is unavailable")
+
         decrypted: DecryptedCredentials = await self.credential_service.get_decrypted_credentials(cred_id)
         expected_auth_type = claims.get("auth_type")
         if expected_auth_type and str(expected_auth_type) != str(decrypted.auth_type):
@@ -174,4 +179,5 @@ class MCPCredentialBrokerService:
             owner_type=decrypted.owner_type,
             payload=decrypted.payload,
             expires_at=int(claims.get("exp") or 0),
+            source_url=str(source.url or ""),
         )

@@ -29,6 +29,7 @@ class MCPCredentialResolveResponse(BaseModel):
     owner_type: str
     payload: Dict[str, Any]
     expires_at: int
+    source_url: str = ""
 
 
 @router.post("/resolve", response_model=MCPCredentialResolveResponse)
@@ -84,4 +85,5 @@ async def resolve_mcp_credential(
         owner_type=resolved.owner_type,
         payload=resolved.payload,
         expires_at=resolved.expires_at,
+        source_url=resolved.source_url,
     )

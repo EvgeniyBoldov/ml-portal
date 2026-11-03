@@ -7,6 +7,26 @@ on:
     branches: [ main, develop ]
 
 jobs:
+  atlassian-adapter-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    - name: Install pinned Atlassian upstream and test dependencies
+      run: pip install -r mcp/atlassian_adapter/requirements-test.txt
+    - name: Check embedded adapter startup
+      run: python -c 'from atlassian_adapter.server import app; assert app.upstream_app is not None'
+      env:
+        PYTHONPATH: mcp
+    - name: Test shared adapter and broker-bound native tools
+      run: >-
+        python -m pytest --noconftest -o addopts= -o asyncio_default_fixture_loop_scope=function -q
+        mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/
+      env:
+        PYTHONPATH: mcp
+
   backend-tests:
     runs-on: ubuntu-latest
     

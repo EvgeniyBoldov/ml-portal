@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
-from typing import Any
 
-from helpers.adapter_auth import AuthProfile, data_source_url, resolve_request_credential, upstream_auth_headers
+from helpers.adapter_auth import AuthProfile
 from helpers.adapter_policy import ToolPolicy
 from helpers.mcp_adapter import AdapterConfig, MCPAdapter
+from atlassian_adapter.source_runtime import PortalAtlassianAdapter, build_upstream_app
 
 DEFAULT_TOOLS = "jira_search,jira_get_issue,jira_get_project_issues,confluence_search,confluence_get_page"
 DEFAULT_RISK_DESCRIPTORS = {
@@ -24,36 +25,29 @@ ENABLED_TOOLS = frozenset(
     name.strip() for name in (os.environ.get("ATLASSIAN_MCP_ENABLED_TOOLS", "").strip() or DEFAULT_TOOLS).split(",")
     if name.strip()
 )
-ALLOW_RAW_CREDENTIALS = os.environ.get("MCP_ADAPTER_ALLOW_RAW_CREDENTIALS", "false").lower() == "true"
 BROKER_TIMEOUT_SECONDS = int(os.environ.get("MCP_SECRET_BROKER_TIMEOUT_SECONDS", "10"))
 
 
-async def _resolve_auth(params: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any]]:
-    args = params.get("arguments") or {}
-    credential = await resolve_request_credential(args, timeout_s=BROKER_TIMEOUT_SECONDS, allow_raw=ALLOW_RAW_CREDENTIALS)
-    tool = str(params.get("name") or "")
-    return upstream_auth_headers(
-        credential, profile=AuthProfile(kind="atlassian"), tool_name=tool,
-        target_url=data_source_url(args, credential.payload, tool_name=tool),
-    ), args
-
-
 def _build_app() -> MCPAdapter:
-    from mcp_atlassian.servers.main import main_mcp
-    upstream = main_mcp.http_app(path="/mcp", stateless_http=True, transport="streamable-http")
+    from atlassian_adapter.diagnostics import AtlassianAuthDiagnostics
+
+    # Uvicorn configures its own loggers; explicitly enable our safe diagnostics.
+    for name in ("mcp.adapter", "mcp.adapter_auth", "mcp.credential_broker", "mcp.atlassian_auth"):
+        logging.getLogger(name).setLevel(logging.INFO)
+    upstream = AtlassianAuthDiagnostics(build_upstream_app())
     descriptors = dict(DEFAULT_RISK_DESCRIPTORS)
     configured_descriptors = json.loads(os.environ.get("MCP_ADAPTER_TOOL_DESCRIPTORS") or "{}")
     if not isinstance(configured_descriptors, dict):
         raise ValueError("MCP_ADAPTER_TOOL_DESCRIPTORS must be an object keyed by tool name")
     descriptors.update(configured_descriptors)
-    return MCPAdapter(AdapterConfig(
+    return PortalAtlassianAdapter(AdapterConfig(
         name="portal-atlassian-mcp-adapter",
         policy=ToolPolicy(ENABLED_TOOLS, descriptors),
-        auth_profile=AuthProfile(kind="atlassian"),
+        auth_profile=AuthProfile(),
         timeout_s=float(os.environ.get("ATLASSIAN_MCP_TIMEOUT_SECONDS", "120")),
         broker_timeout_s=BROKER_TIMEOUT_SECONDS,
-        allow_raw_credentials=ALLOW_RAW_CREDENTIALS,
-        discovery_headers={"Authorization": "Token broker-managed-placeholder"},
+        allow_raw_credentials=False,
+        discovery_headers={},
     ), upstream_app=upstream)
 
 

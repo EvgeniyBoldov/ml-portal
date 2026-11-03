@@ -111,7 +111,7 @@ async def initialize(client):
 @pytest.mark.asyncio
 async def test_gateway_filters_listing_enriches_descriptors_and_blocks_direct_hidden_calls():
     seen = []
-    policy = ToolPolicy(frozenset({"read"}), {"read": {"description": "Curated description", "x-runtime": {"credential_scope": "auto"}}})
+    policy = ToolPolicy(frozenset({"read"}), {"read": {"description": "Curated description", "x-runtime": {"risk_level": "safe"}}})
     gateway = MCPAdapter(AdapterConfig(policy=policy), transport=upstream_transport(seen, paginated=True))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as c:
         headers = await initialize(c)
@@ -121,7 +121,7 @@ async def test_gateway_filters_listing_enriches_descriptors_and_blocks_direct_hi
         tool = result["tools"][0]
         assert tool["description"] == "Curated description"
         assert tool["inputSchema"]["x-runtime"]["risk_level"] == "safe"
-        assert tool["inputSchema"]["x-runtime"]["credential_scope"] == "auto"
+        assert tool["inputSchema"]["x-runtime"] == {"risk_level": "safe"}
         before = len(seen)
         with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock()) as resolver:
             r = await c.post("/", headers=headers, json={"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {"name": "delete"}})
@@ -133,7 +133,7 @@ async def test_gateway_filters_listing_enriches_descriptors_and_blocks_direct_hi
 @pytest.mark.asyncio
 async def test_gateway_broker_credentials_are_isolated_between_concurrent_users():
     seen = []
-    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}))), transport=upstream_transport(seen))
+    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "safe"}}})), transport=upstream_transport(seen))
     async def resolve(args, **kwargs):
         await asyncio.sleep(0)
         return credential(token=args["instance_context"]["credential_access"]["token"])
@@ -158,7 +158,7 @@ async def test_gateway_broker_credentials_are_isolated_between_concurrent_users(
 @pytest.mark.asyncio
 async def test_gateway_broker_failure_never_calls_upstream_or_exposes_exception():
     seen = []
-    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}))), transport=upstream_transport(seen))
+    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "safe"}}})), transport=upstream_transport(seen))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as c:
         headers = await initialize(c)
         with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock(side_effect=ValueError("secret-from-broker"))):
@@ -172,7 +172,7 @@ async def test_gateway_broker_failure_never_calls_upstream_or_exposes_exception(
 async def test_gateway_sanitizes_upstream_rpc_errors_and_never_replays_call():
     seen = []
     # Fail only the tool request, after a successful initialize.
-    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}))), transport=upstream_transport(seen, error=True))
+    gateway = MCPAdapter(AdapterConfig(policy=ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "safe"}}})), transport=upstream_transport(seen, error=True))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as c:
         headers = await initialize(c)
         with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock(return_value=credential(token="secret"))):
@@ -182,10 +182,10 @@ async def test_gateway_sanitizes_upstream_rpc_errors_and_never_replays_call():
     assert sum(body["method"] == "tools/call" for body, _ in seen) == 1
 
 
-def test_empty_policy_is_closed_and_destructive_hint_wins_over_read_only():
+def test_empty_policy_is_closed_and_risk_is_explicit():
     assert not ToolPolicy().allows("read")
-    tool = ToolPolicy().decorate({"name": "read", "annotations": {"readOnlyHint": True, "destructiveHint": True}})
-    assert tool["inputSchema"]["x-runtime"]["risk_level"] == "destructive"
+    tool = ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "risky"}}}).decorate({"name": "read", "annotations": {"readOnlyHint": True, "destructiveHint": True}})
+    assert tool["inputSchema"]["x-runtime"]["risk_level"] == "risky"
 
 
 def test_sse_notifications_are_ignored_when_selecting_response():

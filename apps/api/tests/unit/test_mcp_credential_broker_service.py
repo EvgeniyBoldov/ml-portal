@@ -35,6 +35,9 @@ async def test_mcp_broker_accepts_only_bound_data_credentials(
         owner_type="platform",
     )
     svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, url="https://data.example"),
+    )
     svc.credential_service.get_credentials = AsyncMock(return_value=SimpleNamespace(
         id=credential_id, instance_id=instance_id,
         owner_platform=True, owner_user_id=None, owner_tenant_id=None, is_active=True,
@@ -77,6 +80,9 @@ async def test_mcp_credential_broker_issue_and_resolve_roundtrip():
     )
 
     svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, url="https://data.example"),
+    )
     svc.credential_service.get_credentials = AsyncMock(
         return_value=SimpleNamespace(
             id=credential_id,
@@ -126,6 +132,9 @@ async def test_mcp_credential_broker_rejects_owner_mismatch():
     )
 
     svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, url="https://data.example"),
+    )
     svc.credential_service.get_credentials = AsyncMock(
         return_value=SimpleNamespace(
             id=credential_id,
@@ -159,10 +168,57 @@ async def test_mcp_broker_rejects_revoked_credential_before_decryption():
         auth_type="token", owner_type="platform",
     )
     svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, url="https://data.example"),
+    )
     svc.credential_service.get_credentials = AsyncMock(return_value=SimpleNamespace(
         id=credential_id, instance_id=data_id, is_active=False, owner_platform=True,
     ))
     svc.credential_service.get_decrypted_credentials = AsyncMock()
     with pytest.raises(UnauthorizedError, match="inactive"):
         await svc.resolve_access_token(access.token)
+    svc.credential_service.get_decrypted_credentials.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_broker_returns_source_url_from_bound_active_instance():
+    data_id, credential_id = uuid4(), uuid4()
+    svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(
+        return_value=SimpleNamespace(is_active=True, url="https://data.example"),
+    )
+    svc.decode_access_token = lambda _: {
+        "credential_id": str(credential_id), "data_instance_id": str(data_id),
+        "owner_type": "platform", "auth_type": "token", "exp": 123,
+    }
+    svc.credential_service.get_credentials = AsyncMock(return_value=SimpleNamespace(
+        id=credential_id, instance_id=data_id, is_active=True, owner_platform=True,
+    ))
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(return_value=SimpleNamespace(
+        id=data_id, is_active=True, url="https://jira.internal/jira/rest/api/2",
+    ))
+    svc.credential_service.get_decrypted_credentials = AsyncMock(return_value=DecryptedCredentials(
+        auth_type="token", payload={"token": "secret", "jira_url": "https://wrong.example"},
+        credential_id=credential_id, owner_type="platform",
+    ))
+    result = await svc.resolve_access_token("signed")
+    assert result.source_url == "https://jira.internal/jira/rest/api/2"
+    svc.credential_service.instance_repo.get_by_id.assert_awaited_once_with(data_id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", [None, SimpleNamespace(is_active=False, url="https://jira.internal")])
+async def test_broker_rejects_unavailable_source_before_decryption(source):
+    data_id, credential_id = uuid4(), uuid4()
+    svc = MCPCredentialBrokerService(session=SimpleNamespace())
+    svc.decode_access_token = lambda _: {
+        "credential_id": str(credential_id), "data_instance_id": str(data_id), "owner_type": "platform",
+    }
+    svc.credential_service.get_credentials = AsyncMock(return_value=SimpleNamespace(
+        id=credential_id, instance_id=data_id, is_active=True, owner_platform=True,
+    ))
+    svc.credential_service.instance_repo.get_by_id = AsyncMock(return_value=source)
+    svc.credential_service.get_decrypted_credentials = AsyncMock()
+    with pytest.raises(UnauthorizedError, match="data instance is unavailable"):
+        await svc.resolve_access_token("signed")
     svc.credential_service.get_decrypted_credentials.assert_not_awaited()
