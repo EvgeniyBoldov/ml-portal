@@ -119,9 +119,18 @@ async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,
             saved = data.pop("_stored_result")
             return ToolResult.ok(data, stored_result=saved, workspace_view=True)
         if call.tool_name == "result.describe":
-            data = await workspace.describe(**args, **scope)
+            data = await workspace.describe(
+                **args,
+                context_budget_tokens=ctx.extra.get("runtime_tool_result_context_budget_tokens"),
+                **scope,
+            )
         elif call.tool_name == "result.read":
-            data = await workspace.read(**args, **scope)
+            data = await workspace.read(
+                **args,
+                context_budget_tokens=ctx.extra.get("runtime_tool_result_context_budget_tokens"),
+                context_model=ctx.extra.get("runtime_tool_result_context_model"),
+                **scope,
+            )
         else:
             async def load() -> dict[str, Any]:
                 settings = get_settings()

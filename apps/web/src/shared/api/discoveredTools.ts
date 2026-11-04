@@ -10,6 +10,8 @@ export interface DiscoveredToolListItem {
   name: string;
   description: string | null;
   risk_level: string | null;
+  result_delivery: 'direct' | 'store';
+  has_observed_data_schema: boolean;
   source: string;
   provider_instance_id: string | null;
   connector_slug: string | null;
@@ -24,6 +26,7 @@ export interface DiscoveredToolListItem {
 export interface DiscoveredToolDetail extends DiscoveredToolListItem {
   input_schema: Record<string, unknown> | null;
   output_schema: Record<string, unknown> | null;
+  observed_data_schema: Record<string, unknown> | null;
 }
 
 export interface RescanResponse {
@@ -34,6 +37,7 @@ export interface RescanResponse {
 export interface DiscoveredToolUpdateRequest {
   tool_id?: string | null;
   risk_level?: string | null;
+  result_delivery?: 'direct' | 'store';
 }
 
 export interface McpProbeToolItem {

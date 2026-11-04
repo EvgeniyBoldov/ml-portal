@@ -1154,6 +1154,17 @@ class AgentToolRuntime(BaseRuntime):
                     pending_logical_llm_call_id = logical_llm_call_id
                     continue
                 operation_calls_total_ref = [loop_state.tool_calls_total]
+                result_context_budget, result_context_model = await self._tool_results_context_budget(
+                    model=gen.model,
+                    messages=llm_messages,
+                    raw_response=raw_response,
+                    raw_response_dict=raw_response_dict,
+                    tool_calls=parsed.tool_calls,
+                    tools_payload=tools_payload,
+                    tool_choice=("required" if loop_state.force_tool_choice else "auto") if tools_payload else None,
+                    response_format=native_completion_format,
+                    native_tool_calling=native_tool_calling,
+                )
                 for operation_call in parsed.tool_calls:
                     # Log intent before executing each tool
                     await ctx.log_intent(
@@ -1181,6 +1192,8 @@ class AgentToolRuntime(BaseRuntime):
                         loop_state=loop_state,
                         operation_results_for_context=operation_results_for_context,
                         operation_calls_total_ref=operation_calls_total_ref,
+                        result_context_budget_tokens=result_context_budget,
+                        result_context_model=result_context_model,
                         remaining_wall_time_ms=(
                             policy.max_wall_time_ms
                             - ((time.time() - loop_state.start_time) * 1000)
@@ -1364,6 +1377,62 @@ class AgentToolRuntime(BaseRuntime):
             )
             await run_session.finish("failed", str(e))
 
+    async def _tool_results_context_budget(
+        self,
+        *,
+        model: Optional[str],
+        messages: List[Dict[str, Any]],
+        raw_response: str,
+        raw_response_dict: Optional[Dict[str, Any]],
+        tool_calls: List[Any],
+        tools_payload: Optional[List[Dict[str, Any]]],
+        tool_choice: Optional[str],
+        response_format: Optional[Dict[str, Any]],
+        native_tool_calling: bool,
+    ) -> tuple[int, Optional[str]]:
+        """Allocate one shared, model-aware input budget across this result batch."""
+        from app.adapters.impl.llm_context import DEFAULT_CONTEXT_WINDOW, inspect_context
+
+        provider_model = model
+        context_window = DEFAULT_CONTEXT_WINDOW
+        client = self.llm.raw_client
+        resolver = getattr(client, "_connection_resolver", None)
+        if resolver is not None:
+            try:
+                connection = await resolver.resolve(model)
+                provider_model = connection.provider_model_name
+                context_window = int(connection.context_window_tokens or DEFAULT_CONTEXT_WINDOW)
+            except Exception:
+                logger.warning("Could not resolve LLM context window for tool result allocation", exc_info=True)
+        if native_tool_calling and raw_response_dict is not None:
+            raw_tool_calls = (((raw_response_dict.get("choices") or [{}])[0].get("message") or {}).get("tool_calls") or [])
+            pending_messages: List[Dict[str, Any]] = [*deepcopy(messages), {
+                "role": "assistant", "content": raw_response or None, "tool_calls": raw_tool_calls,
+            }]
+            pending_messages.extend(build_tool_result_messages(
+                [(call, "") for call in tool_calls], raw_tool_calls,
+            ))
+        else:
+            pending_messages = [*deepcopy(messages),
+                {"role": "assistant", "content": raw_response},
+                {"role": "user", "content": build_tool_results_message([(call, "") for call in tool_calls])},
+            ]
+
+        request: Dict[str, Any] = {"model": provider_model, "messages": pending_messages}
+        if tools_payload:
+            request["tools"] = tools_payload
+            request["tool_choice"] = tool_choice or "auto"
+        if response_format:
+            request["response_format"] = response_format
+        allocation = inspect_context(request, context_window)
+        # The outbound allocator applies INPUT_SAFETY_FACTOR to the *whole*
+        # request estimate. Divide the remaining raw capacity by that factor
+        # so added tool results still fit after the allocator's safety margin.
+        from app.adapters.impl.llm_context import INPUT_SAFETY_FACTOR
+        remaining = max(0, allocation.max_output_tokens - allocation.minimum_output_tokens)
+        batch_budget = int(remaining / INPUT_SAFETY_FACTOR)
+        return batch_budget // max(1, len(tool_calls)), provider_model
+
     async def _execute_single_operation_call(
         self,
         *,
@@ -1380,6 +1449,8 @@ class AgentToolRuntime(BaseRuntime):
         loop_state: AgentLoopState,
         operation_results_for_context: List[tuple],
         operation_calls_total_ref: List[int],
+        result_context_budget_tokens: int,
+        result_context_model: Optional[str],
         remaining_wall_time_ms: float,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Execute one operation call: budget check → tool → SSE events → logging → collect."""
@@ -1455,7 +1526,11 @@ class AgentToolRuntime(BaseRuntime):
         })
 
         previous_tool_budget = ctx.extra.get("runtime_tool_call_budget")
+        previous_result_budget = ctx.extra.get("runtime_tool_result_context_budget_tokens")
+        previous_result_model = ctx.extra.get("runtime_tool_result_context_model")
         ctx.extra["runtime_tool_call_budget"] = (operation_calls_total_ref, policy.max_tool_calls_total)
+        ctx.extra["runtime_tool_result_context_budget_tokens"] = result_context_budget_tokens
+        ctx.extra["runtime_tool_result_context_model"] = result_context_model
         try:
             effective_timeout_s = self._effective_tool_timeout_s(
                 configured_timeout_ms=policy.tool_timeout_ms,
@@ -1481,6 +1556,45 @@ class AgentToolRuntime(BaseRuntime):
                 ctx.extra.pop("runtime_tool_call_budget", None)
             else:
                 ctx.extra["runtime_tool_call_budget"] = previous_tool_budget
+            if previous_result_budget is None:
+                ctx.extra.pop("runtime_tool_result_context_budget_tokens", None)
+            else:
+                ctx.extra["runtime_tool_result_context_budget_tokens"] = previous_result_budget
+            if previous_result_model is None:
+                ctx.extra.pop("runtime_tool_result_context_model", None)
+            else:
+                ctx.extra["runtime_tool_result_context_model"] = previous_result_model
+
+        resolved_operation, _ = self.tools._find_operation(
+            operation_call.tool_name, operation_call.arguments, available_operations,
+        )
+        if resolved_operation is not None and resolved_operation.result_delivery is not None:
+            result.delivery = "stored" if resolved_operation.result_delivery == "store" else "direct"
+
+        if (result.success and resolved_operation is not None
+                and resolved_operation.discovered_tool_id and resolved_operation.observed_data_schema is None):
+            try:
+                from app.services.observed_tool_schema import (
+                    infer_data_schema,
+                    save_observed_schema_if_missing,
+                )
+                session_factory = ctx.get_runtime_deps().session_factory
+                if session_factory is not None:
+                    discovered_tool_id = UUID(resolved_operation.discovered_tool_id)
+                    observed_schema = infer_data_schema(result.data)
+                    async with session_factory() as schema_session:
+                        async with schema_session.begin():
+                            await save_observed_schema_if_missing(
+                                schema_session,
+                                discovered_tool_id=discovered_tool_id,
+                                schema=observed_schema,
+                            )
+            except Exception:
+                logger.exception(
+                    "observed_tool_data_schema_save_failed discovered_tool_id=%s tool=%s",
+                    resolved_operation.discovered_tool_id,
+                    operation_call.tool_name,
+                )
 
         redacted_result_data = None
         root_run_id = str(ctx.extra.get("runtime_root_run_id") or "").strip()
@@ -1514,7 +1628,7 @@ class AgentToolRuntime(BaseRuntime):
                     operation=operation_call.tool_name, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
                     task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
                     agent_execution_id=str(run_session.run_id or "") or None)
-                resolved, _ = self.tools._find_operation(operation_call.tool_name, operation_call.arguments, available_operations)
+                resolved = resolved_operation
                 source_tool = (resolved.target.mcp_tool_name
                     or resolved.target.handler_slug or resolved.raw_tool_slug or operation_call.tool_name) if resolved else operation_call.tool_name
                 if resolved and (resolved.source == "mcp" or source_tool in {"collection_search", "collection.search"}):
@@ -1553,6 +1667,8 @@ class AgentToolRuntime(BaseRuntime):
             operation_slug=operation_call.tool_name,
             evidence_call_id=operation_call.id if result.success else None,
             stored_result=stored_result if isinstance(stored_result, dict) else None,
+            context_budget_tokens=result_context_budget_tokens,
+            context_model=result_context_model,
         )
         event_result_id = (
             stored_result.get("result_id") if isinstance(stored_result, dict)

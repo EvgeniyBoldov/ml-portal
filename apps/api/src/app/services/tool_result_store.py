@@ -418,6 +418,7 @@ class ToolResultStore:
         text_path: str = "",
         text_offset: int = 0,
         text_limit: int = 1500,
+        response_budget_bytes: int | None = None,
         group_by: str = "",
         filter_path: str = "",
         equals: str | int | float | bool | None = None,
@@ -440,12 +441,12 @@ class ToolResultStore:
             raise ToolResultStoreError("Result not found or no longer available")
         payload_type = str(row["payload_type"] or "null")
         if mode == "overview":
-            return await self._overview(result_id, run_id, tenant_id, user_id, payload_type, row)
+            return await self._overview(result_id, run_id, tenant_id, user_id, payload_type, row, response_budget_bytes)
         if mode == "project":
-            return await self._project(result_id, run_id, tenant_id, user_id, paths or [], row)
+            return await self._project(result_id, run_id, tenant_id, user_id, paths or [], row, response_budget_bytes)
         if mode == "text":
             return await self._text(result_id, run_id, tenant_id, user_id,
-                                    text_path, text_offset, text_limit, row)
+                                    text_path, text_offset, text_limit, row, response_budget_bytes)
         if not array_path:
             raise ToolResultStoreError("array_path is required for select and aggregate; use '$' for a root array")
         filter_active = equals_provided or equals is not None
@@ -462,18 +463,18 @@ class ToolResultStore:
         if mode == "select":
             return await self._select(
                 result_id, run_id, tenant_id, user_id, array_path, fields or [],
-                filter_path, equals, filter_active, safe_offset, safe_limit,
+                filter_path, equals, filter_active, safe_offset, safe_limit, response_budget_bytes,
             )
         if mode == "aggregate":
             return await self._aggregate(
                 result_id, run_id, tenant_id, user_id, array_path, group_by,
-                filter_path, equals, filter_active,
+                filter_path, equals, filter_active, response_budget_bytes,
             )
         raise ToolResultStoreError("Unsupported analysis mode")
 
     async def _project(
         self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
-        paths: list[str], source_row: Any,
+        paths: list[str], source_row: Any, response_budget_bytes: int | None = None,
     ) -> dict[str, Any]:
         if len(paths) > 20:
             raise ToolResultStoreError("Too many paths; select at most 20")
@@ -490,7 +491,7 @@ class ToolResultStore:
         """)
         values: dict[str, Any] = {}
         missing_paths: list[str] = []
-        size_limit = _response_value_budget()
+        size_limit = _response_value_budget(response_budget_bytes)
         used = 0
         async with get_tool_results_engine().connect() as connection:
             for path, path_segments in segments:
@@ -521,11 +522,13 @@ class ToolResultStore:
     async def _text(
         self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
         path: str, offset: int, limit: int, source_row: Any,
+        response_budget_bytes: int | None = None,
     ) -> dict[str, Any]:
         path_segments = _path_segments(path)
         settings = get_settings()
         safe_offset = max(0, min(int(offset), settings.TOOL_RESULTS_MAX_PAYLOAD_BYTES))
-        safe_limit = max(1, min(int(limit), 2000, _response_value_budget()))
+        budget = _response_value_budget(response_budget_bytes)
+        safe_limit = max(1, min(int(limit), budget))
         statement = text("""
             SELECT jsonb_typeof(payload #> CAST(:path AS text[])) AS value_type,
                    length(payload #>> CAST(:path AS text[])) AS text_length,
@@ -547,7 +550,9 @@ class ToolResultStore:
             raise ToolResultStoreError("text_path must reference a string")
         length = int(item["text_length"])
         chunk = str(item["chunk"] or "")
-        while len(json.dumps(chunk, ensure_ascii=False)) > _response_value_budget():
+        while len(json.dumps(chunk, ensure_ascii=False).encode("utf-8")) > budget:
+            if len(chunk) <= 1:
+                raise ToolResultStoreError("No text chunk fits the remaining context budget; increase text_limit or free context")
             chunk = chunk[:max(1, len(chunk) // 2)]
         next_offset = safe_offset + len(chunk)
         return {
@@ -573,7 +578,9 @@ class ToolResultStore:
                 "tenant_id": tenant_id, "user_id": user_id,
             })).mappings().first()
 
-    async def _overview(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID, payload_type: str, source_row: Any) -> dict[str, Any]:
+    async def _overview(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
+                        payload_type: str, source_row: Any,
+                        response_budget_bytes: int | None = None) -> dict[str, Any]:
         statement = text("""
             SELECT e.key, jsonb_typeof(e.value) AS value_type,
                    CASE WHEN jsonb_typeof(e.value) = 'array'
@@ -591,7 +598,7 @@ class ToolResultStore:
             })).mappings().all()
         projected = []
         used = 0
-        size_limit = _response_value_budget()
+        size_limit = _response_value_budget(response_budget_bytes)
         for item in rows:
             field = {"path": str(item["key"])[:128], "type": item["value_type"], "item_count": item["item_count"]}
             size = len(json.dumps(field, ensure_ascii=False))
@@ -613,7 +620,8 @@ class ToolResultStore:
     async def _select(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
                       array_path: str, fields: list[str], filter_path: str,
                       equals: str | int | float | bool | None, filter_active: bool,
-                      offset: int, limit: int) -> dict[str, Any]:
+                      offset: int, limit: int,
+                      response_budget_bytes: int | None = None) -> dict[str, Any]:
         path = [] if array_path == "$" else _path_segments(array_path)
         filter_segments = _path_segments(filter_path) if filter_path else []
         count_statement = text("""
@@ -653,7 +661,7 @@ class ToolResultStore:
             if fields and isinstance(value, dict):
                 value = {field: _get_path(value, _path_segments(field)) for field in fields}
             values.append({"ordinal": int(row["ordinal"]) - 1, "value": value})
-        size_limit = _response_value_budget()
+        size_limit = _response_value_budget(response_budget_bytes)
         bounded: list[dict[str, Any]] = []
         used = 0
         for item in values:
@@ -675,7 +683,8 @@ class ToolResultStore:
 
     async def _aggregate(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID,
                          array_path: str, group_by: str, filter_path: str,
-                         equals: str | int | float | bool | None, filter_active: bool) -> dict[str, Any]:
+                         equals: str | int | float | bool | None, filter_active: bool,
+                         response_budget_bytes: int | None = None) -> dict[str, Any]:
         path = [] if array_path == "$" else _path_segments(array_path)
         group_segments = _path_segments(group_by) if group_by else []
         filter_segments = _path_segments(filter_path) if filter_path else [""]
@@ -703,7 +712,7 @@ class ToolResultStore:
             total_groups = int(rows[0]["group_total"]) if rows else 0
             projected_groups = []
             used = 0
-            size_limit = _response_value_budget()
+            size_limit = _response_value_budget(response_budget_bytes)
             for row in rows:
                 group_value = row["group_value"]
                 group = {"value": group_value[:256] if isinstance(group_value, str) else group_value,
@@ -769,9 +778,10 @@ def _get_path(value: Any, path: list[str]) -> Any:
     return value
 
 
-def _response_value_budget() -> int:
-    # The agent context has a fixed 4,000-character cap; leave room for the
-    # result envelope and JSON escaping even when the configured query cap is higher.
+def _response_value_budget(response_budget_bytes: int | None = None) -> int:
+    if response_budget_bytes is not None:
+        return max(1, int(response_budget_bytes))
+    # Compatibility bound for callers outside an agent runtime allocation.
     return max(256, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS, 3000) - 1000)
 
 

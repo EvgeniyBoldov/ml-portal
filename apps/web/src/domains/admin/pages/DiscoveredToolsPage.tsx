@@ -99,6 +99,46 @@ export function DiscoveredToolsPage() {
       render: (row) => row.risk_level || '—',
     },
     {
+      key: 'result_delivery',
+      label: 'Режим результата',
+      width: 150,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Все режимы',
+        options: [
+          { value: 'direct', label: 'Direct' },
+          { value: 'store', label: 'Store' },
+        ],
+        getValue: (row) => row.result_delivery,
+      },
+      render: (row) => (
+        <Badge tone={row.result_delivery === 'store' ? 'info' : 'neutral'}>
+          {row.result_delivery === 'store' ? 'Store' : 'Direct'}
+        </Badge>
+      ),
+    },
+    {
+      key: 'has_observed_data_schema',
+      label: 'Схема данных',
+      width: 140,
+      sortable: true,
+      filter: {
+        kind: 'select',
+        placeholder: 'Любое состояние',
+        options: [
+          { value: 'true', label: 'Есть' },
+          { value: 'false', label: 'Нет' },
+        ],
+        getValue: (row) => String(row.has_observed_data_schema),
+      },
+      render: (row) => (
+        <Badge tone={row.has_observed_data_schema ? 'success' : 'neutral'}>
+          {row.has_observed_data_schema ? 'Получена' : 'Нет'}
+        </Badge>
+      ),
+    },
+    {
       key: 'connector_slug',
       label: 'Коннектор',
       width: 180,

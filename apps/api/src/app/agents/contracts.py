@@ -285,8 +285,11 @@ class ResolvedOperation(BaseModel):
     risk_flags: List[str] = Field(default_factory=list)
     supports_partial_mode: bool = True
     raw_tool_slug: Optional[str] = None
+    discovered_tool_id: Optional[str] = None
     published_domain: Optional[str] = None
     result_kind: Optional[str] = None
+    result_delivery: Optional[Literal["direct", "store"]] = None
+    observed_data_schema: Optional[Dict[str, Any]] = None
     sandbox_override_snapshot: Dict[str, Any] = Field(default_factory=dict)
     input_schema_summary: List[str] = Field(default_factory=list)
     published: Optional[PublishedOperationSummary] = None

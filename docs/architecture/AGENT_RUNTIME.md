@@ -784,10 +784,21 @@ run-scoped, versioned and passed by reference; source continuation appends to th
 same ID. Source completion is separate from model presentation and bounded reads.
 See [Data Workspace](RUNTIME_TOOL_RESULTS.md) for the protocol, migration and
 execution limits. Runtime does not insert Analyzer tasks based on result size.
-`ToolResult.delivery="direct"` opts a domain response out of dataset storage:
-`memory.search`, `collection.doc_search` and `collection.list_documents` deliver redacted, complete JSON
-directly to the model and trace/SSE. API collection responses keep the default
-`stored` delivery. Direct delivery also survives duplicate-call reuse.
+The effective tool-result policy is stored per discovered provider capability as
+`result_delivery=direct|store`. Newly discovered tools default to `direct`;
+migration 0208 preserves the established Store-backed NetBox, Jira, SQL and
+collection-table operations; migration 0209 narrows this to list and row
+operations, leaving singleton lookups and schema-catalog searches Direct by
+default. Runtime captures a value-free schema from the
+first successful raw tool result for admin inspection, without retaining a
+sample payload in the primary database. The admin can inspect the schema and
+switch the tool to Store; discovery refresh leaves this operator setting intact.
+Direct results are included whole if they fit the dynamically allocated input
+budget for the next model request. Oversized direct results return an explicit
+limitation for retry with narrower arguments instead of being clipped or
+silently stored. See [Runtime Tool Results](RUNTIME_TOOL_RESULTS.md) for the
+allocation and workspace reader contracts. Direct delivery also survives
+duplicate-call reuse.
 
 Tool calls without an explicit per-tool timeout use the remaining agent wall-time
 budget; there is no hidden 30-second default. Explicit policy/limit timeouts are

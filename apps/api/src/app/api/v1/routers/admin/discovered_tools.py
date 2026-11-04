@@ -33,6 +33,7 @@ def _to_list_item(tool: DiscoveredTool) -> DiscoveredToolListItem:
             "tool_id": getattr(tool, "tool_id", None),
             "connector_slug": getattr(provider, "slug", None),
             "connector_name": getattr(provider, "name", None),
+            "has_observed_data_schema": tool.observed_data_schema is not None,
         }
     )
 
@@ -44,6 +45,7 @@ def _to_detail_item(tool: DiscoveredTool) -> DiscoveredToolDetailResponse:
             "tool_id": getattr(tool, "tool_id", None),
             "connector_slug": getattr(provider, "slug", None),
             "connector_name": getattr(provider, "name", None),
+            "has_observed_data_schema": tool.observed_data_schema is not None,
         }
     )
 
@@ -116,6 +118,9 @@ async def update_discovered_tool(
 
     if "risk_level" in data.model_fields_set:
         tool.risk_level = data.risk_level.strip() if data.risk_level and data.risk_level.strip() else None
+
+    if "result_delivery" in data.model_fields_set and data.result_delivery is not None:
+        tool.result_delivery = data.result_delivery
 
     await db.flush()
     await db.refresh(tool)

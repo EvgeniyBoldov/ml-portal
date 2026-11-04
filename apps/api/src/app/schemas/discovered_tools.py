@@ -20,6 +20,8 @@ class DiscoveredToolListItem(BaseModel):
     connector_slug: Optional[str] = None
     connector_name: Optional[str] = None
     domains: List[str] = Field(default_factory=list)
+    result_delivery: Literal["direct", "store"] = "direct"
+    has_observed_data_schema: bool = False
     is_active: bool = True
     last_seen_at: Optional[datetime] = None
     created_at: datetime
@@ -42,6 +44,9 @@ class DiscoveredToolDetailResponse(BaseModel):
     domains: List[str] = Field(default_factory=list)
     input_schema: Optional[Dict[str, Any]] = None
     output_schema: Optional[Dict[str, Any]] = None
+    result_delivery: Literal["direct", "store"] = "direct"
+    observed_data_schema: Optional[Dict[str, Any]] = None
+    has_observed_data_schema: bool = False
     is_active: bool = True
     last_seen_at: Optional[datetime] = None
     created_at: datetime
@@ -97,6 +102,7 @@ class DiscoveredToolUpdateRequest(BaseModel):
         description="Publication container link. NULL means discovered-only capability.",
     )
     risk_level: Optional[Literal["safe", "risky"]] = Field(default=None)
+    result_delivery: Optional[Literal["direct", "store"]] = None
 
     @field_validator("risk_level", mode="before")
     @classmethod

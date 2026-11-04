@@ -74,6 +74,14 @@ class DiscoveredTool(Base):
         JSONB, nullable=True,
         comment="JSON Schema for output"
     )
+    result_delivery: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="direct", server_default="direct",
+        comment="Runtime result delivery policy: direct or store",
+    )
+    observed_data_schema: Mapped[Optional[Dict[str, Any]]] = mapped_column(
+        JSONB, nullable=True,
+        comment="Observed JSON Schema inferred from ToolResult.data; excludes sample values",
+    )
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
     is_active: Mapped[bool] = mapped_column(

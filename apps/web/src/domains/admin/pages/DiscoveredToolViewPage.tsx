@@ -5,7 +5,7 @@ import { qk } from '@/shared/api/keys';
 import { discoveredToolsApi } from '@/shared/api/discoveredTools';
 import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
 import { Block } from '@/shared/ui/GridLayout';
-import { Button, Select } from '@/shared/ui';
+import { Badge, Button, Select } from '@/shared/ui';
 
 const DESCRIPTION_FIELDS = [
   { key: 'slug', type: 'code' as const, label: 'Slug', editable: false },
@@ -21,7 +21,11 @@ const INPUT_SCHEMA_FIELDS = [
 ];
 
 const OUTPUT_SCHEMA_FIELDS = [
-  { key: 'output_schema', type: 'json' as const, label: 'JSON Schema', editable: false },
+  { key: 'output_schema', type: 'json' as const, label: 'Схема, объявленная провайдером', editable: false },
+];
+
+const OBSERVED_DATA_SCHEMA_FIELDS = [
+  { key: 'observed_data_schema', type: 'json' as const, label: 'JSON Schema', editable: false },
 ];
 
 export function DiscoveredToolViewPage() {
@@ -29,6 +33,7 @@ export function DiscoveredToolViewPage() {
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [riskLevel, setRiskLevel] = useState('');
+  const [resultDelivery, setResultDelivery] = useState<'direct' | 'store'>('direct');
 
   const { data: tool, isLoading, isError, refetch } = useQuery({
     queryKey: qk.discoveredTools.detail(id || ''),
@@ -38,11 +43,15 @@ export function DiscoveredToolViewPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: () => discoveredToolsApi.update(id || '', { risk_level: riskLevel }),
+    mutationFn: () => discoveredToolsApi.update(id || '', {
+      risk_level: riskLevel,
+      result_delivery: resultDelivery,
+    }),
     onSuccess: (updated) => {
       queryClient.setQueryData(qk.discoveredTools.detail(id || ''), updated);
       queryClient.invalidateQueries({ queryKey: qk.discoveredTools.all() });
       setRiskLevel(updated.risk_level || '');
+      setResultDelivery(updated.result_delivery);
       setEditing(false);
     },
   });
@@ -93,12 +102,16 @@ export function DiscoveredToolViewPage() {
       loading={isLoading}
       saving={updateMutation.isPending}
       backPath="/admin/tools"
-      onEdit={() => { setRiskLevel(tool.risk_level || ''); setEditing(true); }}
+      onEdit={() => {
+        setRiskLevel(tool.risk_level || '');
+        setResultDelivery(tool.result_delivery);
+        setEditing(true);
+      }}
       onCancel={() => setEditing(false)}
       onSave={() => updateMutation.mutate()}
     >
       {updateMutation.isError && (
-        <p role="alert">Не удалось сохранить уровень риска. Проверьте введённое значение и попробуйте снова.</p>
+        <p role="alert">Не удалось сохранить настройки инструмента. Проверьте значения и попробуйте снова.</p>
       )}
       <Tab title="Описание" layout="grid" id="description">
         <Block
@@ -149,15 +162,59 @@ export function DiscoveredToolViewPage() {
         />
       </Tab>
 
-      <Tab title="Выходная схема" layout="grid" id="output-schema">
+      <Tab title="Схема провайдера" layout="grid" id="output-schema">
         <Block
-          title="Выходная схема"
+          title="Объявленная схема ответа провайдера"
           icon="arrow-up"
           iconVariant="success"
           width="full"
           fields={OUTPUT_SCHEMA_FIELDS}
           data={{ output_schema: tool.output_schema || {} }}
           editable={false}
+        />
+      </Tab>
+
+      <Tab title="Схема данных" layout="grid" id="observed-data-schema">
+        <Block
+          title="Наблюдаемая схема данных"
+          icon="arrow-up"
+          iconVariant="success"
+          width="full"
+          fields={tool.has_observed_data_schema ? OBSERVED_DATA_SCHEMA_FIELDS : undefined}
+          data={{ observed_data_schema: tool.observed_data_schema || {} }}
+          editable={false}
+          headerLabels={(
+            <Badge tone={tool.has_observed_data_schema ? 'success' : 'neutral'}>
+              {tool.has_observed_data_schema ? 'Получена из ответа' : 'Пока нет'}
+            </Badge>
+          )}
+        >
+          {!tool.has_observed_data_schema && (
+            <p>Схема появится после успешного вызова инструмента.</p>
+          )}
+        </Block>
+        <Block
+          title="Режим результата"
+          icon="database"
+          iconVariant="primary"
+          width="full"
+          fields={[{
+            key: 'result_delivery',
+            type: 'custom',
+            label: 'Доставка результата',
+            render: (value, isEditable) => isEditable
+              ? <Select
+                  value={resultDelivery}
+                  onChange={(nextValue) => setResultDelivery(nextValue === 'store' ? 'store' : 'direct')}
+                  options={[
+                    { value: 'direct', label: 'Direct — передавать ответ напрямую' },
+                    { value: 'store', label: 'Store — сохранять как набор данных' },
+                  ]}
+                />
+              : <span>{value === 'store' ? 'Store — набор данных' : 'Direct — прямой ответ'}</span>,
+          }]}
+          data={{ result_delivery: tool.result_delivery }}
+          editable={editing}
         />
       </Tab>
     </EntityPageV2>

@@ -86,29 +86,49 @@ def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) 
             complete = not more and start == 0 and (total is None or len(items) >= total)
         return ResultPage(value=items, meta=ResultMeta(source="netbox", total=total,
             has_next=more, next_arguments=next_args, complete=complete))
-    if source_tool == "jira_search_issues":
+    if source_tool in {
+        "jira_search_issues",
+        "jira_search",
+        "jira_get_project_issues",
+        "jira_list_issues",
+    }:
         if not isinstance(payload, dict) or not isinstance(payload.get("issues"), list):
             raise ValueError("Jira search response must contain an issues array")
         items = payload["issues"]
-        start = int(payload.get("startAt", arguments.get("start_at", 0)))
-        total = payload.get("total")
+        try:
+            start = int(payload.get("startAt", payload.get("start_at", arguments.get("start_at", 0))))
+        except (TypeError, ValueError):
+            start = max(0, int(arguments.get("start_at") or 0))
+        if start < 0:
+            start = max(0, int(arguments.get("start_at") or 0))
+        raw_total = payload.get("total")
+        total = raw_total if isinstance(raw_total, int) and not isinstance(raw_total, bool) and raw_total >= 0 else None
+        page_token_key = next((key for key in ("nextPageToken", "next_page_token") if key in payload), None)
+        page_token = payload.get(page_token_key) if page_token_key else None
         next_start = start + len(items)
-        more = next_start < total if isinstance(total, int) else None
+        more = bool(page_token) if page_token_key else (
+            next_start < total if total is not None else None
+        )
         if more and not items:
             raise ValueError("Jira returned an empty page without advancing its continuation")
         nested_complete = all(_nested_jira_records_complete(item) for item in items)
         complete = (not more and start == 0 and nested_complete) if more is not None else None
+        next_arguments = None
+        if more:
+            next_arguments = {**arguments, "start_at": next_start}
+            if page_token:
+                next_arguments["page_token"] = page_token
         return ResultPage(value=items, meta=ResultMeta(source="jira", total=total,
-            has_next=more, next_arguments={**arguments, "start_at": next_start} if more else None,
+            has_next=more, next_arguments=next_arguments,
             complete=complete, coverage_incomplete=not nested_complete))
-    if source_tool == "execute_sql":
+    if source_tool in {"execute_sql", "sql.execute_sql", "collection.sql.execute"}:
         if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
             raise ValueError("SQL MCP response must contain a rows array")
         truncated = bool(payload.get("truncated"))
         return ResultPage(value=payload["rows"], meta=ResultMeta(source="sql",
             total=None if truncated else len(payload["rows"]), has_next=None if truncated else False,
             complete=not truncated, truncated=truncated, columns=payload.get("columns", [])))
-    if source_tool in {"collection_search", "collection.search"}:
+    if source_tool in {"collection_search", "collection.search", "collection.table.search"}:
         if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
             raise ValueError("Collection search response must contain a rows array")
         try:

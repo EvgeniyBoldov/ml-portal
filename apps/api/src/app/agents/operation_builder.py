@@ -17,6 +17,15 @@ from app.services.sandbox_override_resolver import SandboxToolOverrides
 
 logger = get_logger(__name__)
 
+# Virtual collection operations have no discovered_tools row to carry the
+# persisted policy. Keep list and grouped-row operations on the Store path.
+_VIRTUAL_STORE_RESULT_SLUGS = frozenset({
+    "collection.search",
+    "collection.aggregate",
+    "collection.table.search",
+    "collection.table.aggregate",
+})
+
 
 class OperationBuilder:
     """Build runtime operations for data/provider instance pair."""
@@ -208,6 +217,15 @@ class OperationBuilder:
             credential_policy=credential_policy if provider_type == "mcp" else "not_required",
             health_status=provider_for_target.health_status or instance.health_status,
         )
+        discovered_tool_id = str(getattr(discovered_tool, "id", "") or "") or None
+        result_delivery = getattr(discovered_tool, "result_delivery", None)
+        if operation_slug.startswith("result."):
+            # Workspace tools own their established result/presentation
+            # semantics; the discovered-tool policy is for source tools.
+            result_delivery = None
+        elif not discovered_tool_id and raw_operation_name in _VIRTUAL_STORE_RESULT_SLUGS:
+            result_delivery = "store"
+
         operation = ResolvedOperation(
             operation_slug=operation_slug,
             operation=operation_name,
@@ -229,8 +247,12 @@ class OperationBuilder:
             systems=[],
             risk_flags=list(resolution.risk_flags),
             raw_tool_slug=raw_operation_name,
+            discovered_tool_id=discovered_tool_id,
             published_domain=resolution.domain,
             result_kind=resolution.result_kind,
+            result_delivery=(result_delivery if result_delivery is not None else
+                             (None if operation_slug.startswith("result.") else "direct")),
+            observed_data_schema=getattr(discovered_tool, "observed_data_schema", None),
             sandbox_override_snapshot=getattr(resolution, "sandbox_override_snapshot", {}),
             input_schema_summary=[],
             target=target,

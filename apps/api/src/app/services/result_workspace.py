@@ -83,7 +83,8 @@ class ResultWorkspace:
             raise ToolResultStoreError("Result not found or expired in this workspace")
         return dict(row)
 
-    async def describe(self, *, offset: int = 0, limit: int = 20, query: str = "", **scope: Any) -> dict[str, Any]:
+    async def describe(self, *, offset: int = 0, limit: int = 20, query: str = "",
+                       context_budget_tokens: int | None = None, **scope: Any) -> dict[str, Any]:
         from app.services.tool_result_store import sql_ref_for_result
         from app.services.result_sql_projection import schema_page
         if offset < 0 or not 1 <= limit <= 100:
@@ -97,7 +98,9 @@ class ResultWorkspace:
         # Continuation arguments are an internal execution binding.
         state["dataset_meta"] = _bounded_model_meta(state["dataset_meta"])
         settings = get_settings()
-        budget = min(settings.TOOL_RESULTS_CONTEXT_TOKENS * 3, 4000) - len(json.dumps(state, default=str).encode()) - 750
+        budget = (max(32, context_budget_tokens * 3) if context_budget_tokens is not None
+                  else min(settings.TOOL_RESULTS_CONTEXT_TOKENS * 3, 4000))
+        budget -= len(json.dumps(state, default=str).encode()) + 750
         state.update(schema_page(schema, offset=offset, limit=limit, query=query, budget=max(32, budget)))
         state["schema_hint"] = ("sql_columns are the exact top-level JSON fields of the virtual table. "
                                 "Nested objects and arrays remain JSONB; use JSON operators in SQL. "
@@ -106,7 +109,8 @@ class ResultWorkspace:
         return state
 
     async def read(self, *, offset: int = 0, limit: int = 20, fields: list[str] | None = None,
-                   revision: int | None = None, **scope: Any) -> dict[str, Any]:
+                   revision: int | None = None, context_budget_tokens: int | None = None,
+                   context_model: str | None = None, **scope: Any) -> dict[str, Any]:
         state = await self.state(**scope)
         if revision is not None and state["revision"] != revision:
             raise ToolResultStoreError("Dataset revision changed; describe it and restart reading")
@@ -132,12 +136,26 @@ class ResultWorkspace:
                 WHERE result_id=CAST(:result_id AS uuid) AND run_id=:run_id AND ordinal>=:offset
                 ORDER BY ordinal LIMIT :limit"""), {**scope, "offset": offset, "limit": limit})).mappings().all()
         values = []
-        budget = max(32, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS, get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3 - 1000, 3000))
+        budget = max(32, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS,
+                             get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3 - 1000, 3000))
         for record in records:
             value = record["data"]
             if fields:
                 value = {field: _get_path(value, field_paths[field]) for field in fields}
-            if len(json.dumps(values + [value], ensure_ascii=False, default=str).encode()) > budget:
+            candidate_values = values + [value]
+            rendered_candidate = json.dumps({
+                "result_id": scope["result_id"], "revision": state["revision"],
+                "value": candidate_values, "returned_count": len(candidate_values),
+                "loaded_items": state["row_count"], "source_complete": state["source_complete"],
+            }, ensure_ascii=False, default=str, separators=(",", ":"))
+            if context_budget_tokens is not None:
+                from app.adapters.impl.llm_context import estimate_request_tokens
+                exceeds = estimate_request_tokens({"model": context_model, "messages": [
+                    {"role": "tool", "content": rendered_candidate},
+                ]}) > context_budget_tokens
+            else:
+                exceeds = len(json.dumps(candidate_values, ensure_ascii=False, default=str).encode()) > budget
+            if exceeds:
                 break
             values.append(value)
         next_offset = offset + len(values)

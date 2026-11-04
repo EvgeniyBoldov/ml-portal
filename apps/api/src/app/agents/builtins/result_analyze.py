@@ -188,6 +188,10 @@ class ResultAnalyzeTool(VersionedTool):
                 text_path=str(args.get("text_path") or ""),
                 text_offset=_integer_arg(args, "text_offset", 0),
                 text_limit=_integer_arg(args, "text_limit", 1500),
+                response_budget_bytes=(
+                    max(1, int(ctx.extra["runtime_tool_result_context_budget_tokens"]) * 3)
+                    if ctx.extra.get("runtime_tool_result_context_budget_tokens") is not None else None
+                ),
                 group_by=str(args.get("group_by") or ""),
                 filter_path=str(args.get("filter_path") or ""),
                 equals=args.get("equals"),

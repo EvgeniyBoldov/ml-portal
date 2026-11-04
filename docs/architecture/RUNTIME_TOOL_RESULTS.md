@@ -35,23 +35,52 @@ Role-owned memory and task outcomes retain their existing prompt sections.
 File indexing/search and agent notes are outside this inventory change.
 
 Tool results are temporary run-scoped datasets, not long-term Memory or prompt
-text. Successful dataset payloads are redacted and persisted in the dedicated
-`postgres-tool-results` database, including empty and single-record responses.
+text. Successful results selected for Store delivery are redacted and persisted
+in the dedicated `postgres-tool-results` database, including empty and
+single-record responses.
 An opaque UUID `result_id`, deterministically derived from the run and initial
 tool call ID, identifies a dataset. Source pages append to that identity; SQL
 output creates a new dataset. The original call ID remains explicit metadata.
 
-`ToolResult.delivery` explicitly selects `stored` (the default) or `direct`.
-API collection/MCP datasets retain the default storage and normalization path.
-`memory.search`, `collection.doc_search` and `collection.list_documents` return `direct`: runtime redacts
-their payload and passes complete JSON to trace and SSE without
-Result Store persistence, dataset descriptors, `result_id` or preview truncation.
-Document-search/listing results also reach the model directly. Agent
-`memory.search` passages accumulate in the owning task's memory prompt section;
-its conversation tool reply is a receipt, avoiding a second copy of the passages.
+`ToolResult.delivery` carries the provider/tool default (`stored` or `direct`),
+but runtime resolves the effective policy from the active `DiscoveredTool`:
+`result_delivery=direct|store`. New discoveries default to `direct`. Migration
+0208 established the initial allowlist; migration 0209 refines it. Store remains
+enabled for paginated NetBox object/device/site searches, Jira issue/project
+lists, SQL row queries, collection table searches and grouped aggregates.
+`jira_search`, `jira_get_project_issues`, `jira_search_issues` and the legacy
+`jira_list_issues` alias normalize their issue arrays and continuation metadata.
+`jira_get_issue` remains Store-enabled because its description field can be
+large and the operation does not expose field selection. Singleton lookups
+(`netbox_get_device`, `collection.get`) and schema-catalog searches use Direct;
+Confluence text tools also default to Direct. Administrators can change any
+discovered capability after reviewing its observed schema. Tool policy is
+attached to the provider-scoped discovered capability, rather than inferred
+from a generic result kind. Native `result.*` workspace tools keep their own
+semantics. Virtual collection table search and aggregate operations without a
+persisted discovery row retain their explicit Store fallback; singleton get is
+Direct.
+
+`memory.search`, `collection.doc_search` and `collection.list_documents` are
+direct results as long as their discovered-tool policy is direct: runtime
+redacts their payload and passes complete JSON to trace and SSE without Result
+Store persistence, dataset descriptors or `result_id`. Agent `memory.search`
+passages accumulate in the owning task's memory prompt section; its
+conversation tool reply is a receipt, avoiding a second copy of the passages.
 These tools bound their response through their own `limit` arguments; model
 context limits still apply. Successful direct calls retain `evidence_call_id`
 in the model message. The turn ledger preserves the delivery mode on reuse.
+
+For a successful call to a discovered tool with no `observed_data_schema`,
+runtime infers a structural JSON Schema from the raw `ToolResult.data` and
+stores it once on that `DiscoveredTool`. The schema contains types and object
+property names, but no observed values. The raw sample/result is not copied to
+the primary database for admin review. An existing schema is not overwritten
+by later calls. The provider's declared `output_schema` remains a separate
+contract and is not replaced by the observed schema. Administrators can inspect
+the observed schema and change `result_delivery` on the discovered-tool detail
+page; subsequent calls use that policy. Discovery refresh does not reset these
+operator fields.
 
 ## Source protocol and normalization
 
@@ -199,10 +228,27 @@ Inline data is not duplicated as a sample. Catalog and tool descriptors both
 expose the same column contract,
 and nested fields can be inspected with result.read before using JSON operators.
 
-Presentation uses `TOOL_RESULTS_CONTEXT_TOKENS` with a conservative byte-based
-estimate (three UTF-8 bytes per estimated token), plus existing character caps;
-it is not an exact provider tokenizer. Reads have their own bounded presentation.
-Empty arrays, null, false and zero are preserved. Local execution retains runtime
+Before executing a batch of tool calls, runtime estimates the input room for
+the next model request with `inspect_context`, including current history, the
+assistant tool-call message, placeholder tool replies, tool schemas,
+`tool_choice` and `response_format`, while preserving the configured output
+reserve. It uses the selected model's registry context window when available;
+otherwise it falls back to the default context window. The remaining input
+budget is divided evenly among calls in that batch. This is conservative: an
+unused share is not redistributed. Result serialization is checked against
+that per-call budget with the selected model's token estimator. Direct results
+are delivered whole when they fit; if they do not, the model receives an
+explicit `context_budget_exceeded` limitation and guidance to retry with a
+narrower request. Runtime does not silently clip direct JSON or move an
+oversized direct result into Result Store.
+
+The same budget is passed to `result.describe`, `result.read`, and
+`result.analyze` projections. These readers return bounded pages and preserve
+continuation offsets. `result.analyze` text mode advances by the actual
+returned chunk length. Store-side byte limits and transport/payload limits
+remain in force; the dynamic context allocation replaces fixed prompt-output
+caps, not persistence limits. Non-runtime callers retain compatibility
+fallback bounds. Empty arrays, null, false and zero are preserved. Local execution retains runtime
 metadata rather than losing it in an MCP transport round trip. Duplicate-call
 reuse retains the stored dataset reference and refreshes its descriptor instead
 of treating the descriptor as another source payload.
