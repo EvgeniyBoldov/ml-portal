@@ -39,7 +39,8 @@ export interface CredentialsPanelProps {
 }
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
-  token: 'Токен Bearer',
+  token: 'API-токен',
+  bearer: 'Bearer-токен',
   basic: 'Логин и пароль',
   api_key: 'API-ключ в заголовке',
   litellm_api_key: 'Ключ LiteLLM',
@@ -120,6 +121,7 @@ export function CredentialsPanel({ mode, userId, tenantId, ownerUserId, ownerTen
 
   const payloadFields: Record<string, string[]> = {
     token: ['token'],
+    bearer: ['token'],
     basic: ['username', 'password'],
     api_key: ['api_key'],
     litellm_api_key: ['api_key'],

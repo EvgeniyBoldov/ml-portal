@@ -151,7 +151,8 @@ const META_FIELDS: FieldConfig[] = [
 ];
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
-  token: 'Bearer Token',
+  token: 'API Token',
+  bearer: 'Bearer Token',
   basic: 'Basic Auth',
   api_key: 'API Key Header',
   litellm_api_key: 'LiteLLM API Key',

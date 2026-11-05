@@ -16,7 +16,8 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Badge, Button, ConfirmDialog } from '@/shared/ui';
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
-  token: 'Bearer Token',
+  token: 'API Token',
+  bearer: 'Bearer Token',
   basic: 'Basic Auth',
   api_key: 'API Key Header',
   litellm_api_key: 'LiteLLM API Key',
@@ -25,6 +26,7 @@ const AUTH_TYPE_LABELS: Record<string, string> = {
 
 const AUTH_TYPE_OPTIONS = [
   { value: 'token', label: AUTH_TYPE_LABELS.token },
+  { value: 'bearer', label: AUTH_TYPE_LABELS.bearer },
   { value: 'basic', label: AUTH_TYPE_LABELS.basic },
   { value: 'api_key', label: AUTH_TYPE_LABELS.api_key },
   { value: 'litellm_api_key', label: AUTH_TYPE_LABELS.litellm_api_key },
@@ -38,6 +40,9 @@ const getPayloadFields = (authType: string): FieldConfig[] => {
   const fields: Record<string, FieldConfig[]> = {
     token: [
       { key: 'payload.token', type: 'password', label: 'Token', required: true },
+    ],
+    bearer: [
+      { key: 'payload.token', type: 'password', label: 'Bearer Token', required: true },
     ],
     basic: [
       { key: 'payload.username', type: 'text', label: 'Имя пользователя', required: true },

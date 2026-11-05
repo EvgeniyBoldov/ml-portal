@@ -181,8 +181,8 @@ async def _resolve_runtime_access(
         target_url=base_url,
     )
     authorization = auth_headers.get("Authorization", "")
-    if not authorization.startswith("Token "):
-        raise ValueError("NetBox authentication profile did not produce a Token authorization header")
+    if not authorization or " " not in authorization:
+        raise ValueError("NetBox authentication profile did not produce an Authorization header")
     context = arguments.get("instance_context")
     context = context if isinstance(context, dict) else {}
     log_mcp_event(
@@ -200,20 +200,20 @@ async def _resolve_runtime_access(
         auth_type=resolved.auth_type,
         auth_headers=",".join(sorted(auth_headers)),
     )
-    return base_url, authorization.removeprefix("Token ")
+    return base_url, authorization
 
 
 async def _netbox_get(
     *,
     base_url: str,
-    token: str,
+    authorization: str,
     path: str,
     params: Optional[Dict[str, Any]] = None,
     request_id: str = "",
     tool_name: str = "",
 ) -> Dict[str, Any]:
     headers = {
-        "Authorization": f"Token {token}",
+        "Authorization": authorization,
         "Accept": "application/json",
     }
     url = f"{base_url}{path}"
@@ -490,7 +490,7 @@ async def mcp_root(
                 provider_instance_id=str(context.get("provider_instance_id") or ""),
             )
             stage = "credential_resolution"
-            base_url, token = await _resolve_runtime_access(
+            base_url, authorization = await _resolve_runtime_access(
                 arguments, request_id=request_id, tool_name=tool_name,
             )
             stage = "tool_execution"
@@ -501,7 +501,7 @@ async def mcp_root(
                     raise ValueError("name is required")
                 data = await _netbox_get(
                     base_url=base_url,
-                    token=token,
+                    authorization=authorization,
                     path="/api/dcim/devices/",
                     params={"name": name, "limit": 1},
                     request_id=request_id,
@@ -516,7 +516,7 @@ async def mcp_root(
                 limit = int(arguments.get("limit") or 20)
                 data = await _netbox_get(
                     base_url=base_url,
-                    token=token,
+                    authorization=authorization,
                     path="/api/dcim/devices/",
                     params={"q": query, "limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
                     request_id=request_id,
@@ -528,7 +528,7 @@ async def mcp_root(
                 limit = int(arguments.get("limit") or 50)
                 data = await _netbox_get(
                     base_url=base_url,
-                    token=token,
+                    authorization=authorization,
                     path="/api/dcim/sites/",
                     params={"limit": max(1, min(limit, 200)), "offset": _page_offset(arguments)},
                     request_id=request_id,
@@ -549,7 +549,7 @@ async def mcp_root(
                 params.update({"limit": max(1, min(limit, 200)), "offset": offset})
                 data = await _netbox_get(
                     base_url=base_url,
-                    token=token,
+                    authorization=authorization,
                     path=_resolve_object_path(object_type),
                     params=params,
                     request_id=request_id,
@@ -574,7 +574,7 @@ async def mcp_root(
                         path = _resolve_object_path(ot)
                         page = await _netbox_get(
                             base_url=base_url,
-                            token=token,
+                            authorization=authorization,
                             path=path,
                             params=params,
                             request_id=request_id,

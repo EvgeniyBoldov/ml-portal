@@ -340,6 +340,9 @@ class CredentialService:
         if auth_type == AuthType.TOKEN.value:
             if "token" not in payload:
                 raise CredentialError("Token auth requires 'token' in payload")
+        elif auth_type == AuthType.BEARER.value:
+            if not any(payload.get(key) for key in ("access_token", "token")):
+                raise CredentialError("Bearer auth requires 'access_token' or 'token' in payload")
         elif auth_type == AuthType.BASIC.value:
             if "username" not in payload or "password" not in payload:
                 raise CredentialError("Basic auth requires 'username' and 'password' in payload")

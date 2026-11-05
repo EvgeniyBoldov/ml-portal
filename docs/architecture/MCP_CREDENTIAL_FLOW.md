@@ -30,6 +30,11 @@ credential delivery is an explicit local-only compatibility mode.
    client and does not accept a caller-selected source URL or broker endpoint.
    See [Atlassian MCP Adapter](ATLASSIAN_MCP_ADAPTER.md).
 
+For NetBox, `auth_type=token` uses the legacy `Authorization: Token …` scheme;
+`auth_type=bearer` uses `Authorization: Bearer …`. NetBox v2 API tokens require
+the Bearer scheme. The credential payload for bearer may store the value as
+`access_token` or `token`.
+
 ## Properties
 
 - explicit expiry,

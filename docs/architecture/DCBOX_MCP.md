@@ -6,11 +6,13 @@ DCBox — production-экземпляр NetBox с плагинами. MCP сох
 `mcp/netbox/server.py`.
 
 For each tool call, the NetBox shim resolves `instance_context.credential_access`
-through the shared `mcp/helpers/adapter_auth.py` broker client and constructs
-NetBox's `Authorization: Token` header from the resolved credential's declared
-auth type. Raw credentials are accepted only in local/dev when the shared
-adapter fallback is explicitly enabled. The runtime request ID is forwarded to
-broker and NetBox request logs; credential and token values are never logged.
+through the shared `mcp/helpers/adapter_auth.py` broker client and forwards the
+authentication scheme produced from the resolved credential type. `token`
+credentials use NetBox's legacy `Authorization: Token …` scheme; `bearer`
+credentials use `Authorization: Bearer …` (NetBox v2 API tokens). Raw
+credentials are accepted only in local/dev when the shared adapter fallback is
+explicitly enabled. The runtime request ID is forwarded to broker and NetBox
+request logs; credential and token values are never logged.
 
 ## Текущие маршруты
 

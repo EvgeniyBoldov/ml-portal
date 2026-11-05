@@ -18,6 +18,7 @@ from app.models.base import Base
 class AuthType(str, Enum):
     """Тип авторизации"""
     TOKEN = "token"
+    BEARER = "bearer"
     BASIC = "basic"
     OAUTH = "oauth"
     API_KEY = "api_key"
@@ -81,7 +82,7 @@ class Credential(Base):
             name="ck_credential_single_owner"
         ),
         CheckConstraint(
-            "auth_type IN ('token', 'basic', 'oauth', 'api_key', 'litellm_api_key')",
+            "auth_type IN ('token', 'bearer', 'basic', 'oauth', 'api_key', 'litellm_api_key')",
             name="ck_credential_auth_type"
         ),
         Index("ix_credential_user_lookup", "owner_user_id", "instance_id",
