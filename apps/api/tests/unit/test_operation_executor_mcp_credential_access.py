@@ -13,17 +13,19 @@ from app.agents.runtime_graph import (
 
 
 def test_mcp_jsonrpc_error_is_not_converted_to_an_empty_success_result():
-    try:
-        DirectOperationExecutor._mcp_tool_result_or_raise(
-            {
-                "jsonrpc": "2.0",
-                "id": 2,
-                "error": {"code": -32000, "message": "Jira MCP request failed"},
-            }
-        )
-        raise AssertionError("Expected JSON-RPC error to fail the tool call")
-    except ValueError as exc:
-        assert str(exc) == "MCP tool call failed (code -32000): Jira MCP request failed"
+    result = DirectOperationExecutor._mcp_tool_result_or_raise(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "error": {"code": -32000, "message": "Jira MCP request failed", "data": {"specific": "bad request"}},
+        }
+    )
+    assert result["isError"] is True
+    failure = result["_meta"]["portal.failure"]
+    assert failure["kind"] == "rpc"
+    assert failure["rpc_code"] == -32000
+    assert failure["message"] == "Jira MCP request failed"
+    assert failure["rpc_data"] == {"specific": "bad request"}
 
 
 def test_mcp_response_without_result_is_not_converted_to_an_empty_success_result():
@@ -245,17 +247,18 @@ def test_merge_mcp_args_requires_and_preserves_bound_collection_slug():
     assert "collection_id" not in merged
 
 
-def test_mcp_adapter_diagnostic_reaches_tool_error_without_arbitrary_data():
-    import pytest
-    with pytest.raises(ValueError) as caught:
-        DirectOperationExecutor._mcp_tool_result_or_raise({'error': {
-            'code': -32000, 'message': 'MCP adapter request failed', 'data': {
-                'stage': 'upstream_request', 'error_type': 'UnicodeEncodeError',
-                'request_id': 'call-1', 'payload': 'private', 'detail': 'private',
-            },
-        }})
-    assert 'stage=upstream_request' in str(caught.value)
-    assert 'error_type=UnicodeEncodeError' in str(caught.value)
-    assert 'request_id=call-1' in str(caught.value)
-    assert 'private' not in str(caught.value)
-    assert caught.value.mcp_diagnostic in str(caught.value)
+def test_mcp_adapter_legacy_diagnostic_is_normalized_and_preserved():
+    result = DirectOperationExecutor._mcp_tool_result_or_raise({'error': {
+        'code': -32000, 'message': 'MCP adapter request failed', 'data': {
+            'stage': 'upstream_request', 'error_type': 'UnicodeEncodeError',
+            'request_id': 'call-1', 'payload': 'private', 'detail': 'diagnostic detail',
+        },
+    }})
+    assert result["isError"] is True
+    failure = result["_meta"]["portal.failure"]
+    assert failure["kind"] == "rpc"
+    assert failure["details"]["stage"] == "upstream_request"
+    assert failure["details"]["error_type"] == "UnicodeEncodeError"
+    assert failure["details"]["request_id"] == "call-1"
+    assert failure["details"]["payload"] == "private"
+    assert failure["details"]["detail"] == "diagnostic detail"

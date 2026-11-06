@@ -74,14 +74,40 @@ raw fallback.
 
 ## Tool policy
 
-Adapter exceptions return JSON-RPC `error.data` with `request_id`, `stage`,
-and `error_type`. Runtime preserves these bounded diagnostic fields in the
-failed tool result (and therefore its trace) and the Docker log's
-`mcp_diagnostic` field. Exception text and arbitrary `error.data` contents are
-not propagated: they can contain credentials, headers, or request bodies.
-For example, a header encoding failure appears as
-`stage=upstream_request error_type=UnicodeEncodeError request_id=...`
-instead of only the generic `-32000` adapter error.
+Failed calls carry a versioned `MCPFailure` diagnostic. Its canonical Pydantic
+model and normalization helpers live in `apps/api/src/portal_mcp_contract`;
+the API, worker and MCP images package the same source. Consumers do not
+maintain an independent JSON Schema.
+
+The diagnostic distinguishes `kind=tool|rpc|http|transport|protocol` from
+`category=input|auth|access|availability|rate_limit|unknown`. It retains the
+source `code`, `message`, structured `details` and JSON-RPC `rpc_code`/`rpc_data`,
+plus factual `request_id`, `stage` and `http_status` when available.
+Unknown failures remain unknown; an arbitrary error string is not evidence
+of an authentication failure or a repair instruction.
+
+For upstream JSON-RPC errors the normalized object is returned in `error.data`.
+Tool errors retain `isError=true`, their content and structured content, and
+carry the diagnostic in `result._meta["portal.failure"]`. A generic public
+message does not replace the source diagnosis: source text and structured data
+remain available in the normalized object. HTTP failures and initialization
+failures use the same contract. Existing MCP servers without this metadata
+remain supported by the API consumer's legacy normalization.
+
+Diagnostics are bounded and secret-aware. Credential values, authentication
+headers, broker tokens and secret-shaped fields are redacted before crossing
+the adapter boundary; size limits produce explicit truncation markers. This
+does not remove the query/parser/validation details needed to correct a call.
+Sensitive structured fields use an explicit key list: diagnostic fields such
+as `expected_token` and credential identifiers are not secrets solely because
+their names contain `token` or `credential`. Already normalized v1 failures
+retain their source category and diagnosis across another adapter hop.
+The separate `user_message` is a Portal-owned safe description, not arbitrary
+upstream text. Full diagnostic messages are intended for tool observations and
+operator traces; they are not automatically copied into the public chat error.
+The contract supplies facts and does not authorize retries or define agent
+recovery policy. In particular, `tools/call` is still never replayed by the
+adapter.
 
 `MCP_ADAPTER_ENABLED_TOOLS` is an exact comma-separated allowlist. Empty exposes
 no tools; `*` explicitly permits all. It filters tools/list and rejects direct
@@ -139,8 +165,9 @@ Logs record dispatch, HTTP attempts and statuses, broker resolution, selected
 target origin, response size, JSON-RPC code, duration, and safe transport error
 details such as connection errno. They never record request/response bodies,
 tool arguments, credentials, broker JWTs, prompts, model inputs, or upstream
-error text. User-facing MCP errors stay generic to prevent upstreams from
-echoing secrets. NetBox records the same `x-portal-request-id` through credential
+error text. Diagnostic content travels through the bounded failure contract,
+not Docker logs. Public error messages use the separate safe projection.
+NetBox records the same `x-portal-request-id` through credential
 resolution and NetBox REST requests. Health is available at /healthz.
 
 Run `make test-mcp-adapter` for the focused contract suite in the API image with

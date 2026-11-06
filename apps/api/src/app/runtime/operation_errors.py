@@ -72,6 +72,7 @@ class OperationResultEnvelope:
     safe_message: Optional[str] = None
     retryable: Optional[bool] = None
     data: Optional[Dict[str, Any]] = None
+    failure: Optional[Dict[str, Any]] = None
 
     def to_metadata(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -87,4 +88,6 @@ class OperationResultEnvelope:
             payload["retryable"] = self.retryable
         if self.data is not None:
             payload["data"] = self.data
+        if self.failure is not None:
+            payload["failure"] = self.failure
         return payload

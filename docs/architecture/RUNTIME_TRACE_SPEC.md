@@ -89,6 +89,16 @@ one `llm_call` entity; `tool_call`/`tool_result` share one `tool_call` entity.
 Agent-owned call entities are direct children of the executor run that initiated them.
 This is an explicit journal contract, not a frontend inference rule.
 
+Failed MCP tool calls retain the shared versioned diagnostic in
+`result.failure` on the tool-result event. The run journal additionally retains
+`mcp_failure` and `result_envelope.failure`, alongside the safe public error.
+Source error messages, structured details,
+JSON-RPC codes/data and factual HTTP/stage/correlation information survive
+adapter and executor normalization with bounded secret redaction. This is
+operator/model diagnostic data; it is not the public chat error text. Docker
+logs keep correlation and factual status fields, not source error bodies.
+See [MCP Adapter](MCP_ADAPTER.md) for the canonical model and wire locations.
+
 Root-role `memory.search` calls are direct children of the preflight orchestrator
 or planner iteration. Their `tool_call` is admitted before execution and their
 `tool_result` closes the same call on success, failure or cancellation, with

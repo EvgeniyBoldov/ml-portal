@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # no longer invalidates this image's application layer.
 COPY mcp/${MCP_SERVER_DIR}/ /opt/mcp/${MCP_SERVER_DIR}/
 COPY mcp/helpers/ /opt/mcp/helpers/
+COPY apps/api/src/portal_mcp_contract/ /opt/mcp/portal_mcp_contract/
 
 ENV PYTHONPATH=/opt/mcp
 ENV MCP_SERVER_DIR=${MCP_SERVER_DIR}

@@ -14,6 +14,7 @@ USER appuser
 
 # Copy entire application structure to /app/app/ (unified structure)
 COPY apps/api/src/app/ ./app/
+COPY apps/api/src/portal_mcp_contract/ ./portal_mcp_contract/
 
 # Set environment variables
 ENV PYTHONPATH=/app

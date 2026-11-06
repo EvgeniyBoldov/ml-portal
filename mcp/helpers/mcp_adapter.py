@@ -23,9 +23,23 @@ from helpers.observability import (
     safe_error_detail,
     safe_target,
 )
+from portal_mcp_contract import (
+    MCPFailure,
+    MCPFailureCategory,
+    MCPFailureKind,
+    normalize_failure,
+    public_user_message,
+    safe_diagnostic,
+)
 
 logger = logging.getLogger("mcp.adapter")
 PROTOCOL_VERSION = "2024-11-05"
+
+
+class MCPAdapterFailure(RuntimeError):
+    def __init__(self, failure: dict[str, Any]) -> None:
+        self.failure = failure
+        super().__init__(str(failure.get("user_message") or "MCP adapter request failed"))
 
 
 @dataclass(frozen=True)
@@ -61,6 +75,54 @@ def _error(rpc_id: Any, code: int, message: str) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
+def _credential_secret_values(credential: ResolvedCredential | None) -> tuple[str, ...]:
+    if credential is None:
+        return ()
+    values: list[str] = []
+    for key, value in credential.payload.items():
+        if isinstance(value, str) and value and any(word in str(key).lower() for word in ("token", "password", "secret", "key")):
+            values.append(value)
+    return tuple(values)
+
+
+def _tool_error_message(result: dict[str, Any]) -> str:
+    content = result.get("content")
+    if isinstance(content, list):
+        parts = [item.get("text") for item in content if isinstance(item, dict) and isinstance(item.get("text"), str)]
+        if parts:
+            return "\n".join(parts)[:8000]
+    structured = result.get("structuredContent")
+    if isinstance(structured, dict) and isinstance(structured.get("message"), str):
+        return structured["message"][:8000]
+    return "MCP tool reported an error"
+
+
+def _failure_category(code: Any, message: Any, *, http_status: int | None = None) -> MCPFailureCategory:
+    if http_status == 401:
+        return MCPFailureCategory.AUTH
+    if http_status == 403:
+        return MCPFailureCategory.ACCESS
+    if http_status == 429:
+        return MCPFailureCategory.RATE_LIMIT
+    if http_status in {502, 503, 504}:
+        return MCPFailureCategory.AVAILABILITY
+    if code == -32602:
+        return MCPFailureCategory.INPUT
+    return MCPFailureCategory.UNKNOWN
+
+
+def _user_message(category: MCPFailureCategory) -> str:
+    return public_user_message(category)
+
+
+def _safe_rpc_log_code(code: Any) -> int | str:
+    return code if isinstance(code, int) and not isinstance(code, bool) else "invalid_code"
+
+
+def _safe_rpc_wire_code(code: Any) -> int:
+    return code if isinstance(code, int) and not isinstance(code, bool) else -32000
+
+
 def parse_response(body: bytes, rpc_id: Any) -> dict[str, Any]:
     """Select the matching JSON-RPC response, ignoring SSE notifications."""
     try:
@@ -90,6 +152,15 @@ class MCPAdapter:
         self.upstream_app = upstream_app
         self.transport = transport
         self.sessions: dict[str, float] = {}
+
+    def _classify_failure(self, code: Any, message: Any, *, http_status: int | None = None) -> MCPFailureCategory:
+        return _failure_category(code, message, http_status=http_status)
+
+    def _source_failure_details(self) -> Any:
+        return None
+
+    def _source_failure_message(self, message: str, details: Any) -> str:
+        return message
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope["type"] == "lifespan":
@@ -125,6 +196,7 @@ class MCPAdapter:
         data_instance_id = ""
         provider_instance_id = ""
         target_url = self.config.upstream_url
+        secret_values: tuple[str, ...] = ()
         try:
             async with asyncio.timeout(self.config.timeout_s):
                 body = bytearray()
@@ -245,8 +317,14 @@ class MCPAdapter:
                     context = context if isinstance(context, dict) else {}
                     data_instance_id = str(context.get("data_instance_id") or "")
                     provider_instance_id = str(context.get("provider_instance_id") or "")
+                    credential_access = args.get("credential_access")
+                    if not isinstance(credential_access, dict):
+                        credential_access = context.get("credential_access") or {}
+                    secret_values = ((str(credential_access.get("token")),)
+                                     if isinstance(credential_access, dict) and credential_access.get("token") else ())
                     stage = "credential_resolution"
                     credential = await self._resolve_credential(args, request_id, tool)
+                    secret_values = (*_credential_secret_values(credential), *secret_values)
                     target_url = self._source_url(args, credential, tool)
                     stage = "upstream_authentication"
                     forward_headers = upstream_auth_headers(
@@ -277,7 +355,7 @@ class MCPAdapter:
                     }}}
                 stage = "upstream_request"
                 async with self._upstream_context(credential, tool):
-                    payload = await self._forward(request, forward_headers, request_id)
+                    payload = await self._forward(request, forward_headers, request_id, secrets=secret_values)
                 if method == "tools/list":
                     stage = "tool_descriptors"
                     payload = self.config.policy.filter_result(payload)
@@ -292,16 +370,84 @@ class MCPAdapter:
                     provider_instance_id=provider_instance_id,
                     credential_id=credential.credential_id if credential else "",
                     auth_type=credential.auth_type if credential else "",
-                    rpc_code=upstream_error.get("code"),
+                    rpc_code=_safe_rpc_log_code(upstream_error.get("code")),
                     rpc_message="upstream_error" if upstream_error else ("tool_isError" if failed else ""),
                 )
-                # Never return provider error text: some upstreams echo secrets.
-                if payload.get("error"):
-                    payload = _error(rpc_id, -32000, "Upstream MCP request failed")
-                elif (payload.get("result") or {}).get("isError"):
-                    payload = _ok(rpc_id, {"isError": True, "content": [{"type": "text", "text": "Upstream tool failed"}]})
+                if isinstance(payload.get("error"), dict):
+                    upstream = payload["error"]
+                    diagnostic = normalize_failure(upstream.get("data"), secrets=secret_values)
+                    if diagnostic is not None:
+                        diagnostic = MCPFailure.model_validate({
+                            **diagnostic,
+                            "request_id": diagnostic.get("request_id") or request_id,
+                            "stage": diagnostic.get("stage") or stage,
+                        }).bounded_dump()
+                    else:
+                        diagnostic = MCPFailure(
+                            kind=MCPFailureKind.RPC,
+                            category=self._classify_failure(upstream.get("code"), upstream.get("message")),
+                            code=safe_diagnostic(upstream.get("code"), secrets=secret_values) if upstream.get("code") is not None else None,
+                            message=str(safe_diagnostic(upstream.get("message") or "MCP RPC error", secrets=secret_values)),
+                            details=safe_diagnostic(upstream.get("data"), secrets=secret_values),
+                            request_id=request_id,
+                            stage=stage,
+                            rpc_code=safe_diagnostic(upstream.get("code"), secrets=secret_values),
+                            rpc_data=safe_diagnostic(upstream.get("data"), secrets=secret_values),
+                            user_message=_user_message(self._classify_failure(upstream.get("code"), upstream.get("message"))),
+                        ).bounded_dump()
+                    # Keep MCP's public error concise; preserve source diagnostics
+                    # in the typed error.data contract for capable callers.
+                    payload["error"] = {
+                        "code": _safe_rpc_wire_code(upstream.get("code")),
+                        "message": "MCP upstream request failed",
+                        "data": diagnostic,
+                    }
+                elif isinstance(payload.get("result"), dict) and payload["result"].get("isError"):
+                    result = safe_diagnostic(payload["result"], secrets=secret_values)
+                    message = _tool_error_message(result)
+                    source_failures = self._source_failure_details()
+                    if source_failures:
+                        message = self._source_failure_message(message, source_failures)
+                        details = {"tool_result": result, "source_failures": safe_diagnostic(source_failures, secrets=secret_values)}
+                    else:
+                        details = result
+                    meta = result.get("_meta") if isinstance(result.get("_meta"), dict) else {}
+                    diagnostic = normalize_failure(meta.get("portal.failure"), secrets=secret_values)
+                    if diagnostic is not None:
+                        preserved_details = diagnostic.get("details")
+                        if source_failures:
+                            if isinstance(preserved_details, dict):
+                                preserved_details = {
+                                    **preserved_details,
+                                    "source_failures": safe_diagnostic(source_failures, secrets=secret_values),
+                                }
+                            else:
+                                preserved_details = {
+                                    "upstream_details": preserved_details,
+                                    "source_failures": safe_diagnostic(source_failures, secrets=secret_values),
+                                }
+                        diagnostic = MCPFailure.model_validate({
+                            **diagnostic,
+                            "request_id": diagnostic.get("request_id") or request_id,
+                            "stage": diagnostic.get("stage") or stage,
+                            "details": preserved_details if preserved_details is not None else details,
+                        }).bounded_dump()
+                    else:
+                        diagnostic = MCPFailure(
+                            kind=MCPFailureKind.TOOL,
+                            category=self._classify_failure(None, message),
+                            code="tool_error",
+                            message=str(safe_diagnostic(message, secrets=secret_values)),
+                            details=details,
+                            request_id=request_id,
+                            stage=stage,
+                            user_message=_user_message(self._classify_failure(None, message)),
+                        ).bounded_dump()
+                    result["_meta"] = {**meta, "portal.failure": diagnostic}
+                    payload["result"] = result
                 await self._respond(send, 200, payload)
         except Exception as exc:
+            sensitive_stage = stage in {"credential_resolution", "upstream_authentication"}
             log_mcp_event(
                 logger, outcome="failed", request_id=request_id, server=self.config.name,
                 method=method, tool=tool, stage=stage, error_type=type(exc).__name__,
@@ -314,20 +460,31 @@ class MCPAdapter:
                 credential_id=credential.credential_id if credential else "",
                 auth_type=credential.auth_type if credential else "",
                 auth_headers=",".join(sorted(forward_headers)),
-                error_detail=safe_error_detail(exc),
+                error_detail="-" if sensitive_stage else str(safe_diagnostic(safe_error_detail(exc), secrets=secret_values)),
             )
-            # Send diagnostic metadata, never exception text: transport exceptions
-            # can contain header values, request bodies, or broker response data.
-            diagnostic = {
-                "request_id": request_id,
-                "stage": stage,
-                "error_type": type(exc).__name__,
-            }
-            if isinstance(exc, UnicodeEncodeError):
-                diagnostic["detail"] = (
-                    f"Cannot encode request value using {exc.encoding}; "
-                    "check authentication headers and data source URL"
-                )
+            # Keep a useful typed transport diagnosis without returning arbitrary
+            # exception text, request/response bodies, or credential values.
+            http_status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            kind = (MCPFailureKind.HTTP if http_status else
+                    MCPFailureKind.PROTOCOL if isinstance(exc, ValueError) else MCPFailureKind.TRANSPORT)
+            category = self._classify_failure(None, "", http_status=http_status)
+            if kind == MCPFailureKind.TRANSPORT and isinstance(exc, (TimeoutError, httpx.TimeoutException, httpx.ConnectError)):
+                category = MCPFailureCategory.AVAILABILITY
+            diagnostic = exc.failure if isinstance(exc, MCPAdapterFailure) else MCPFailure(
+                kind=kind,
+                category=category,
+                code=type(exc).__name__,
+                message=("Credential resolution failed" if sensitive_stage else
+                         str(safe_diagnostic(safe_error_detail(exc) or type(exc).__name__, secrets=secret_values))),
+                details={"exception_type": type(exc).__name__} if sensitive_stage else {
+                    "exception_type": type(exc).__name__,
+                    "detail": str(safe_diagnostic(safe_error_detail(exc), secrets=secret_values)),
+                },
+                request_id=request_id,
+                stage=stage,
+                http_status=http_status,
+                user_message=_user_message(category),
+            ).bounded_dump()
             response = _error(rpc_id, -32000, "MCP adapter request failed")
             response["error"]["data"] = diagnostic
             await self._respond(send, 200, response)
@@ -350,7 +507,8 @@ class MCPAdapter:
     ) -> AsyncIterator[None]:
         yield
 
-    async def _forward(self, request: dict[str, Any], auth: dict[str, str], request_id: str) -> dict[str, Any]:
+    async def _forward(self, request: dict[str, Any], auth: dict[str, str], request_id: str,
+                       *, secrets: tuple[str, ...] = ()) -> dict[str, Any]:
         transport = self.transport
         if self.upstream_app is not None:
             transport = httpx.ASGITransport(app=self.upstream_app)
@@ -371,15 +529,26 @@ class MCPAdapter:
                 "jsonrpc": "2.0", "id": init_id, "method": "initialize",
                 "params": {"protocolVersion": PROTOCOL_VERSION, "capabilities": {},
                            "clientInfo": {"name": self.config.name, "version": "1.0.0"}},
-            }, request_id=request_id, stage="initialize")
+            }, request_id=request_id, stage="initialize", secrets=secrets)
             if initialized.get("error"):
                 logger.warning(
                     "mcp_upstream_stage_failed request_id=%s server=%s stage=initialize rpc_code=%s",
                     request_id,
                     self.config.name,
-                    (initialized.get("error") or {}).get("code") if isinstance(initialized.get("error"), dict) else "-",
+                    _safe_rpc_log_code((initialized.get("error") or {}).get("code")) if isinstance(initialized.get("error"), dict) else "-",
                 )
-                raise ValueError("Upstream initialization failed")
+                rpc = initialized["error"]
+                failure = MCPFailure(
+                    kind=MCPFailureKind.RPC,
+                    category=self._classify_failure(rpc.get("code"), rpc.get("message")),
+                    code=safe_diagnostic(rpc.get("code"), secrets=secrets) if rpc.get("code") is not None else None,
+                    message=str(safe_diagnostic(rpc.get("message") or "MCP initialization failed", secrets=secrets)),
+                    details=safe_diagnostic(rpc.get("data"), secrets=secrets),
+                    request_id=request_id, stage="initialize", rpc_code=safe_diagnostic(rpc.get("code"), secrets=secrets),
+                    rpc_data=safe_diagnostic(rpc.get("data"), secrets=secrets),
+                    user_message="The MCP source could not be initialized.",
+                ).bounded_dump()
+                raise MCPAdapterFailure(failure)
             logger.info(
                 "mcp_upstream_stage_completed request_id=%s server=%s stage=initialize http_status=200 session_received=%s",
                 request_id,
@@ -403,6 +572,7 @@ class MCPAdapter:
                 {"jsonrpc": "2.0", "method": "notifications/initialized"},
                 request_id=request_id,
                 stage="notifications_initialized",
+                secrets=secrets,
             )
             logger.info(
                 "mcp_upstream_stage_completed request_id=%s server=%s stage=notifications_initialized",
@@ -426,6 +596,7 @@ class MCPAdapter:
                 request_id=request_id,
                 stage="tools_call" if request.get("method") == "tools/call" else str(request.get("method")),
                 tool=str(((request.get("params") or {}).get("name") or "")),
+                secrets=secrets,
             )
             error = response.get("error") if isinstance(response.get("error"), dict) else {}
             logger.info(
@@ -434,7 +605,7 @@ class MCPAdapter:
                 request_id,
                 self.config.name,
                 ((request.get("params") or {}).get("name") or "-"),
-                error.get("code", "-") if error else "-",
+                    _safe_rpc_log_code(error.get("code")) if error else "-",
                 response_headers.get("content-type", "-"),
             )
             return response
@@ -448,42 +619,72 @@ class MCPAdapter:
         request_id: str = "",
         stage: str = "upstream_request",
         tool: str = "",
+        secrets: tuple[str, ...] = (),
     ) -> tuple[dict[str, Any], httpx.Headers]:
-        async with client.stream("POST", self.config.upstream_url, headers=headers, json=payload) as response:
-            if response.status_code >= 400:
-                log_mcp_event(
-                    logger,
-                    outcome="failed",
-                    request_id=request_id,
-                    server=self.config.name,
-                    method=str(payload.get("method") or "notification"),
-                    tool=tool,
-                    stage=stage,
-                    target=safe_target(self.config.upstream_url),
-                    http_status=response.status_code,
-                    error_type="UpstreamHTTPError",
-                )
-                response.raise_for_status()
-            body = bytearray()
-            async for chunk in response.aiter_bytes():
-                body.extend(chunk)
-                if len(body) > self.config.max_response_bytes:
+        try:
+            async with client.stream("POST", self.config.upstream_url, headers=headers, json=payload) as response:
+                body = bytearray()
+                truncated = False
+                async for chunk in response.aiter_bytes():
+                    remaining = self.config.max_response_bytes - len(body)
+                    body.extend(chunk[:remaining])
+                    if len(chunk) > remaining:
+                        truncated = True
+                        break
+                    if response.status_code < 400 and len(body) > self.config.max_response_bytes:
+                        raise ValueError("Adapter response size limit exceeded")
+                if response.status_code >= 400:
+                    log_mcp_event(
+                        logger, outcome="failed", request_id=request_id, server=self.config.name,
+                        method=str(payload.get("method") or "notification"), tool=tool, stage=stage,
+                        target=safe_target(self.config.upstream_url), http_status=response.status_code,
+                        error_type="UpstreamHTTPError",
+                    )
+                    try:
+                        detail: Any = json.loads(body) if body else None
+                    except (ValueError, UnicodeDecodeError):
+                        detail = body.decode("utf-8", errors="replace")
+                    if truncated:
+                        detail = {"body": detail, "_truncated": True}
+                    category = self._classify_failure(None, "", http_status=response.status_code)
+                    raise MCPAdapterFailure(MCPFailure(
+                        kind=MCPFailureKind.HTTP, category=category,
+                        code=f"http_{response.status_code}",
+                        message=f"Upstream returned HTTP {response.status_code}",
+                        details=safe_diagnostic(detail, secrets=secrets), request_id=request_id,
+                        stage=stage, http_status=response.status_code,
+                        user_message=_user_message(category),
+                    ).bounded_dump())
+                if truncated:
                     raise ValueError("Adapter response size limit exceeded")
-            log_mcp_event(
-                logger,
-                outcome="completed",
-                request_id=request_id,
-                server=self.config.name,
-                method=str(payload.get("method") or "notification"),
-                tool=tool,
-                stage=stage,
-                target=safe_target(self.config.upstream_url),
-                http_status=response.status_code,
-                response_bytes=len(body),
-            )
-            if "id" not in payload:
-                return {}, response.headers
-            return parse_response(bytes(body), payload["id"]), response.headers
+                log_mcp_event(
+                    logger, outcome="completed", request_id=request_id, server=self.config.name,
+                    method=str(payload.get("method") or "notification"), tool=tool, stage=stage,
+                    target=safe_target(self.config.upstream_url), http_status=response.status_code,
+                    response_bytes=len(body),
+                )
+                if "id" not in payload:
+                    return {}, response.headers
+                try:
+                    parsed = parse_response(bytes(body), payload["id"])
+                except Exception as exc:
+                    raise MCPAdapterFailure(MCPFailure(
+                        kind=MCPFailureKind.PROTOCOL, category=MCPFailureCategory.UNKNOWN,
+                        code=type(exc).__name__, message=str(safe_diagnostic(str(exc), secrets=secrets)),
+                        details={"response_bytes": len(body)}, request_id=request_id, stage=stage,
+                        user_message="The MCP source returned an invalid response.",
+                    ).bounded_dump()) from exc
+                return parsed, response.headers
+        except MCPAdapterFailure:
+            raise
+        except httpx.HTTPError as exc:
+            detail = safe_error_detail(exc)
+            raise MCPAdapterFailure(MCPFailure(
+                kind=MCPFailureKind.TRANSPORT, category=MCPFailureCategory.AVAILABILITY,
+                code=type(exc).__name__, message=str(safe_diagnostic(detail or type(exc).__name__, secrets=secrets)),
+                details={"exception_type": type(exc).__name__}, request_id=request_id, stage=stage,
+                user_message="The MCP source could not be reached.",
+            ).bounded_dump()) from exc
 
     @staticmethod
     async def _respond(send: Any, status: int, payload: Any, headers: dict[str, str] | None = None) -> None:

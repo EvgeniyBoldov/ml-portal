@@ -179,7 +179,72 @@ async def test_gateway_sanitizes_upstream_rpc_errors_and_never_replays_call():
             r = await c.post("/", headers=headers, json={"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "read"}})
         assert "error" in r.json()
         assert "secret-from-provider" not in r.text
+        failure = r.json()["error"]["data"]
+        assert failure["version"] == 1
+        assert failure["kind"] == "rpc"
+        assert failure["rpc_code"] == -1
+        assert failure["message"] == "[redacted]-from-provider"
     assert sum(body["method"] == "tools/call" for body, _ in seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_gateway_preserves_is_error_and_structured_diagnostics_with_redaction(caplog):
+    async def upstream(request):
+        body = json.loads(request.content)
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        if body["method"] == "initialize":
+            return httpx.Response(200, headers={"mcp-session-id": "s"}, json={"jsonrpc": "2.0", "id": body["id"], "result": {}})
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {
+            "isError": True,
+            "content": [{"type": "text", "text": "Could not parse cql: siteSearch ~ \\\"title\\\""}],
+            "structuredContent": {"reason": "query cannot be parsed", "password": "credential-secret"},
+            "_meta": {"source": "confluence"},
+        }})
+
+    gateway = MCPAdapter(AdapterConfig(
+        policy=ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "safe"}}}),
+    ), transport=httpx.MockTransport(upstream))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as client:
+        headers = await initialize(client)
+        with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock(return_value=credential(token="credential-secret"))):
+            response = await client.post("/", headers=headers, json={"jsonrpc": "2.0", "id": 7, "method": "tools/call", "params": {"name": "read"}})
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result["_meta"]["source"] == "confluence"
+    assert "Could not parse cql" in result["content"][0]["text"]
+    assert result["structuredContent"]["password"] == "[redacted]"
+    failure = result["_meta"]["portal.failure"]
+    assert failure["kind"] == "tool"
+    assert failure["details"]["structuredContent"]["reason"] == "query cannot be parsed"
+    assert "credential-secret" not in response.text
+    assert "credential-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_gateway_http_failure_keeps_bounded_redacted_source_body_and_classification(caplog):
+    async def upstream(request):
+        body = json.loads(request.content)
+        if body["method"] == "notifications/initialized":
+            return httpx.Response(202)
+        if body["method"] == "initialize":
+            return httpx.Response(200, headers={"mcp-session-id": "s"}, json={"jsonrpc": "2.0", "id": body["id"], "result": {}})
+        return httpx.Response(401, json={"message": "token=credential-secret", "reason": "expired"})
+
+    gateway = MCPAdapter(AdapterConfig(
+        policy=ToolPolicy(frozenset({"read"}), {"read": {"x-runtime": {"risk_level": "safe"}}}),
+    ), transport=httpx.MockTransport(upstream))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as client:
+        headers = await initialize(client)
+        with patch("helpers.mcp_adapter.resolve_request_credential", AsyncMock(return_value=credential(token="credential-secret"))):
+            response = await client.post("/", headers=headers, json={"jsonrpc": "2.0", "id": 8, "method": "tools/call", "params": {"name": "read"}})
+    failure = response.json()["error"]["data"]
+    assert failure["kind"] == "http"
+    assert failure["category"] == "auth"
+    assert failure["http_status"] == 401
+    assert failure["details"]["reason"] == "expired"
+    assert failure["details"]["message"] == "token=[redacted]"
+    assert "credential-secret" not in caplog.text
 
 
 def test_empty_policy_is_closed_and_risk_is_explicit():

@@ -120,9 +120,11 @@ test-backend:
 	$(COMPOSE_DEV) exec api pytest tests/unit/ -v --tb=short --maxfail=10
 
 test-mcp-adapter:
-	$(COMPOSE_DEV) run --rm --no-deps -T -v "$(CURDIR)/mcp:/app/mcp:ro" api \
+	$(COMPOSE_DEV) run --rm --no-deps -T -v "$(CURDIR)/mcp:/app/mcp:ro" -v "$(CURDIR)/apps/api/src/portal_mcp_contract:/app/portal_mcp_contract:ro" api \
 		python -m pytest --noconftest -o addopts= -q \
-		mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/ \
+		mcp/adapter/tests/ mcp/atlassian_adapter/tests/ mcp/netbox/tests/test_server.py \
+		tests/unit/test_sql_mcp_server_guards.py tests/unit/test_mcp_failure_contract.py \
+		tests/unit/test_mcp_jsonrpc_client_failures.py \
 		tests/unit/test_ml_inference_mcp_server.py tests/unit/test_atlassian_jira_mcp_server.py \
 		tests/unit/test_mcp_credential_broker_service.py tests/unit/test_runtime_credential_resolver.py \
 		tests/unit/test_operation_builder.py tests/unit/test_operation_executor_mcp_credential_access.py

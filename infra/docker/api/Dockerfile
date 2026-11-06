@@ -14,6 +14,7 @@ USER appuser
 
 # Copy application code to /app/app/ (unified structure)
 COPY apps/api/src/app/ ./app/
+COPY apps/api/src/portal_mcp_contract/ ./portal_mcp_contract/
 COPY apps/api/alembic.ini ./
 COPY apps/api/tool_results_alembic.ini ./
 

@@ -24,6 +24,7 @@ COPY --from=dependencies /usr/local/bin /usr/local/bin
 COPY --from=dependencies /opt/tiktoken /opt/tiktoken
 ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
 COPY --chown=appuser:appuser apps/api/src/app/ ./app/
+COPY --chown=appuser:appuser apps/api/src/portal_mcp_contract/ ./portal_mcp_contract/
 COPY --chown=appuser:appuser apps/api/alembic.ini ./
 COPY --chown=appuser:appuser apps/api/tool_results_alembic.ini ./
 

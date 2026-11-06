@@ -939,6 +939,28 @@ class OperationExecutionFacade:
             except Exception:
                 rendered = str(raw_output)
                 return rendered if fits_budget(rendered) else limited_result()
+        failure = result.metadata.get("mcp_failure")
+        if isinstance(failure, dict):
+            rendered = _json_dumps_exact({"success": False, "failure": failure}, ensure_ascii=False, default=str)
+            if fits_budget(rendered):
+                return rendered
+            compact_failure = {
+                key: failure.get(key)
+                for key in ("version", "kind", "category", "code", "message", "request_id", "stage", "http_status", "rpc_code", "user_message")
+                if failure.get(key) is not None
+            }
+            compact_failure["details_truncated_for_context"] = True
+            rendered = _json_dumps_exact({"success": False, "failure": compact_failure}, ensure_ascii=False, default=str)
+            if fits_budget(rendered):
+                return rendered
+            return _json_dumps_exact({"success": False, "failure": {
+                "version": failure.get("version", 1),
+                "kind": failure.get("kind", "unknown"),
+                "category": failure.get("category", "unknown"),
+                "code": str(failure.get("code") or "unknown")[:80],
+                "message": str(failure.get("message") or "MCP source failed")[:100],
+                "details_truncated_for_context": True,
+            }}, ensure_ascii=False)
         return f"Error: {result.error or 'unknown'}"
 
     @staticmethod

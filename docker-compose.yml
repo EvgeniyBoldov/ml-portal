@@ -164,6 +164,7 @@ services:
       - "8000:8000"
     volumes:
       - ./apps/api/src/app:/app/app
+      - ./apps/api/src/portal_mcp_contract:/app/portal_mcp_contract
       - ./apps/api/tests:/app/tests
       - ./apps/api/pytest.ini:/app/pytest.ini
       - ./models_llm:/app/models_llm
@@ -526,6 +527,7 @@ services:
       dockerfile: infra/docker/worker/Dockerfile
     volumes:
       - ./apps/api/src/app:/app/app
+      - ./apps/api/src/portal_mcp_contract:/app/portal_mcp_contract
       - ./models_llm:/models_llm:ro
     env_file: .env
     environment:
@@ -558,6 +560,7 @@ services:
       - scheduler
     volumes:
       - ./apps/api/src/app:/app/app
+      - ./apps/api/src/portal_mcp_contract:/app/portal_mcp_contract
       - ./models_llm:/models_llm:ro
     env_file: .env
     depends_on:

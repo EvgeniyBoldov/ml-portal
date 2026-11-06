@@ -118,7 +118,7 @@ async def test_failed_initialize_keeps_auth_header_names_and_masks_values(caplog
                         "instance_context": {"data_instance_url": "https://jira.example"},
                     },
                 }})
-    assert response.json()["error"]["data"]["stage"] == "upstream_request"
+    assert response.json()["error"]["data"]["stage"] == "initialize"
     assert sent[0]["X-Atlassian-Jira-Personal-Token"] == "never-log-secret"
     assert "auth_headers=X-Atlassian-Jira-Personal-Token_X-Atlassian-Jira-Url" in caplog.text
     assert "never-log-secret" not in caplog.text

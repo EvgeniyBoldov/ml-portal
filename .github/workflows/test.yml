@@ -19,13 +19,13 @@ jobs:
     - name: Check embedded adapter startup
       run: python -c 'from atlassian_adapter.server import app; assert app.upstream_app is not None'
       env:
-        PYTHONPATH: mcp
+        PYTHONPATH: mcp:apps/api/src
     - name: Test shared adapter and broker-bound native tools
       run: >-
         python -m pytest --noconftest -o addopts= -o asyncio_default_fixture_loop_scope=function -q
-        mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/
+        mcp/adapter/tests/ mcp/atlassian_adapter/tests/
       env:
-        PYTHONPATH: mcp
+        PYTHONPATH: mcp:apps/api/src
 
   backend-tests:
     runs-on: ubuntu-latest

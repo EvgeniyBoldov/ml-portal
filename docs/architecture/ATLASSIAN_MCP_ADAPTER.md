@@ -100,6 +100,20 @@ for the native SDK. `auth_middleware` records the in-process source binding and
 response status. Passwords, PATs, API tokens, encoded Basic values, broker JWTs,
 request/response bodies and arbitrary tool arguments are not logged.
 
+Failed native tools use the shared [MCP failure contract](MCP_ADAPTER.md).
+The per-call source client retains a bounded list of failed source HTTP
+responses before the SDK replaces their messages with generic exceptions.
+The adapter carries these as `failure.details.source_failures`, alongside
+the native tool result, with credential redaction. This preserves both a
+Confluence CQL parser response and the subsequent text-search fallback failure.
+Source HTTP status supplies authentication, access and availability categories;
+the known Confluence parser diagnostic supplies the input category. It does
+not infer a specific query correction from every HTTP 400.
+
+This capture is scoped to one client/call and does not share responses between
+parallel calls. Native library error logging that printed query text and
+tracebacks is suppressed; Portal's structured status/correlation logs remain.
+
 The source-runtime suite runs the real pinned server, its native tools and SDKs,
 with only broker/Jira HTTP mocked. It covers discovery without service ENV,
 parallel PAT/Basic source isolation, declared external schemes, normalization,
@@ -108,7 +122,7 @@ transport bounds and cancellation cleanup. Run it with the shared adapter tests:
 
 ```bash
 pip install -r mcp/atlassian_adapter/requirements-test.txt
-python -m pytest --noconftest -o addopts= -q \
+PYTHONPATH=mcp:apps/api/src python -m pytest --noconftest -o addopts= -q \
   mcp/adapter/tests/test_adapter.py mcp/atlassian_adapter/tests/
 ```
 

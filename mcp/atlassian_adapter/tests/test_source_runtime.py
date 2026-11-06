@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sys
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -147,6 +148,90 @@ async def test_real_upstream_discovery_and_parallel_pat_basic_calls(requests_moc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "category"), [
+    (400, "input"), (401, "auth"), (403, "access"), (429, "rate_limit"), (503, "availability"),
+])
+async def test_confluence_source_failures_survive_native_server_and_adapter(
+    requests_mock, monkeypatch, caplog, status, category,
+):
+    """The pinned server's MCP error retains source HTTP diagnostics and category."""
+    for key in ("JIRA_URL", "CONFLUENCE_URL", "JIRA_PERSONAL_TOKEN", "CONFLUENCE_PERSONAL_TOKEN", "MCP_ALLOWED_URL_DOMAINS"):
+        monkeypatch.delenv(key, raising=False)
+    title = "Какие задачи решает ML? (Часть 1. Классический ML)"
+    query = f'"{title}"'
+    observed_cql = []
+
+    def reject_cql(request, context):
+        cql = parse_qs(urlsplit(request.url).query).get("cql", [""])[0]
+        observed_cql.append(cql)
+        message = f"Could not parse cql : {cql}" if status == 400 else "The source rejected the request."
+        return {"message": message}
+
+    requests_mock.get(
+        __import__("requests_mock").ANY,
+        status_code=status,
+        json=reject_cql,
+    )
+    upstream = build_upstream_app()
+    gateway = PortalAtlassianAdapter(AdapterConfig(
+        name="integration-confluence",
+        policy=ToolPolicy(frozenset({"confluence_search"}), {
+            "confluence_search": {"x-runtime": {"risk_level": "safe"}},
+        }),
+    ), upstream_app=upstream)
+    original_client = httpx.AsyncClient
+
+    def broker_response(request):
+        resolved = ResolvedCredential(
+            "credential", "data", "token", "user", {"token": "pat-secret"}, 123,
+            "https://wiki.example/confluence",
+        )
+        return httpx.Response(200, json={
+            "credential_id": resolved.credential_id, "instance_id": resolved.instance_id,
+            "auth_type": resolved.auth_type, "owner_type": "user", "payload": resolved.payload,
+            "source_url": resolved.source_url, "expires_at": 123,
+        })
+
+    def broker_http_client(**kwargs):
+        if kwargs.get("transport") is None:
+            kwargs["transport"] = httpx.MockTransport(broker_response)
+        return original_client(**kwargs)
+
+    async with upstream.router.lifespan_context(upstream):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=gateway), base_url="http://adapter") as client:
+            initialized = await client.post("/", json={"jsonrpc": "2.0", "id": 1, "method": "initialize"})
+            headers = {"mcp-session-id": initialized.headers["mcp-session-id"]}
+            payload = {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "confluence_search", "arguments": {
+                    "query": query,
+                    "instance_context": {"data_instance_id": "data", "credential_access": {
+                        "token": "access-jwt", "resolve_url": "http://api:8000/api/v1/internal/mcp/credentials/resolve",
+                    }},
+                }},
+            }
+            with patch("helpers.secret_broker.httpx.AsyncClient", broker_http_client):
+                response = await client.post("/", headers=headers, json=payload)
+    result = response.json()["result"]
+    assert result["isError"] is True
+    failure = result["_meta"]["portal.failure"]
+    assert failure["kind"] == "tool"
+    assert failure["category"] == category
+    assert observed_cql
+    assert f'siteSearch ~ ""{title}""' in observed_cql[0]
+    assert failure["details"]["source_failures"][-1]["http_status"] == status
+    if status == 400:
+        assert "Could not parse cql" in failure["message"]
+        captured = failure["details"]["source_failures"]
+        assert any(observed_cql[0] in str(item["response"]) for item in captured)
+        assert any(observed_cql[-1] in str(item["response"]) for item in captured)
+    assert "access-jwt" not in response.text
+    assert "pat-secret" not in response.text
+    assert title not in caplog.text
+    assert "Could not parse cql" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_caller_cannot_use_a_forged_broker():
     gateway = PortalAtlassianAdapter(AdapterConfig())
     args = {"instance_context": {"credential_access": {
@@ -163,7 +248,7 @@ async def test_cancellation_closes_client_and_clears_request_context():
     from types import SimpleNamespace
     from unittest.mock import Mock
     from atlassian_adapter.source_runtime import _current_client
-    fake = SimpleNamespace(product="jira", url="http://jira.internal", session=SimpleNamespace(close=Mock()))
+    fake = SimpleNamespace(product="jira", url="http://jira.internal", session=SimpleNamespace(close=Mock()), source_failures=[])
     gateway = PortalAtlassianAdapter(AdapterConfig())
     with patch("atlassian_adapter.source_runtime.build_source_client", return_value=fake):
         with pytest.raises(asyncio.CancelledError):
@@ -207,7 +292,7 @@ async def test_cancellation_during_client_preparation_closes_late_session():
     from types import SimpleNamespace
     from unittest.mock import Mock
     ready, release = threading.Event(), threading.Event()
-    fake = SimpleNamespace(session=SimpleNamespace(close=Mock()))
+    fake = SimpleNamespace(session=SimpleNamespace(close=Mock()), source_failures=[])
     def prepare(*args):
         ready.set()
         release.wait(timeout=5)

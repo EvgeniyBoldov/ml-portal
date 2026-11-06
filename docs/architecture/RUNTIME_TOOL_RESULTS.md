@@ -207,6 +207,27 @@ limit. Oversized SQL output fails explicitly; full successful output is stored.
 continues through agent needs and planner decisions, not automatic runtime task
 creation.
 
+## MCP failure observations
+
+MCP failure diagnostics use the shared `portal_mcp_contract.MCPFailure` model
+described in [MCP Adapter](MCP_ADAPTER.md). A failed `ToolResult` keeps its safe
+public message in `error` and the normalized source diagnostic in
+`metadata.mcp_failure`. Model tool observations receive a structured failed
+result containing that diagnostic, including the source's parser/validation
+details. They do not collapse it to `Error: <generic message>`.
+
+The same bounded, secret-redacted diagnostic accompanies the failed tool call
+in the runtime trace. It is separate from successful tool-result datasets:
+failures are not persisted as successful Result Store records. Existing
+providers returning legacy JSON-RPC errors or `isError` content are normalized
+at the consumer boundary. Successful content and pagination keep their existing
+semantics.
+
+This observation contract does not decide which failures an agent may repair,
+whether a repeat is safe, or what internal details may be explained to the
+user. Those policies remain runtime/prompt responsibilities. The safe public
+message remains available independently of diagnostic content.
+
 ## Model presentation
 
 Every stored result has a descriptor and `delivery=inline|stored`. Complete small

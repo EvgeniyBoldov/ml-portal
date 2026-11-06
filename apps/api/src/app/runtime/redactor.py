@@ -4,6 +4,8 @@ import re
 from typing import Any, Dict, Iterable
 from urllib.parse import urlsplit, urlunsplit
 
+from portal_mcp_contract import normalize_failure
+
 
 _REDACTED = "***"
 
@@ -70,6 +72,11 @@ class RuntimeRedactor:
         for key, raw_value in payload.items():
             key_text = str(key)
             key_norm = key_text.strip().lower()
+            if key_norm in {"mcp_failure", "failure"} and isinstance(raw_value, dict):
+                normalized_failure = normalize_failure(raw_value)
+                if normalized_failure is not None:
+                    result[key_text] = normalized_failure
+                    continue
             compact_key = re.sub(r"[^a-z0-9]", "", key_norm)
             if key_norm in self.NON_PERSISTED_REASONING_KEYS:
                 result[key_text] = _REDACTED

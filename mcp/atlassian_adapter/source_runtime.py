@@ -10,17 +10,20 @@ import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+import json
 import logging
 import os
 from typing import Any
 from urllib.parse import unquote, urlsplit, urlunsplit
 
+import requests
 from requests.adapters import HTTPAdapter
 from requests.exceptions import InvalidURL
 
 from helpers.adapter_auth import _value, resolve_request_credential, upstream_auth_headers
 from helpers.mcp_adapter import MCPAdapter
+from portal_mcp_contract import MCPFailureCategory
 from helpers.observability import safe_target
 from helpers.secret_broker import ResolvedCredential
 
@@ -79,15 +82,37 @@ def _reject_redirect(response: Any, **kwargs: Any) -> Any:
     return response
 
 
+def _capture_source_failure(sink: list[dict[str, Any]]):
+    def capture(response: Any, **kwargs: Any) -> Any:
+        if response.status_code < 400:
+            return response
+        try:
+            diagnostic: Any = response.json()
+        except (ValueError, requests.exceptions.JSONDecodeError):
+            diagnostic = response.text
+        serialized = json.dumps(diagnostic, ensure_ascii=False, default=str)
+        if len(serialized) > 16000:
+            diagnostic = serialized[:15980] + " [truncated]"
+        sink.append({"http_status": response.status_code, "response": diagnostic})
+        if len(sink) > 10:
+            del sink[:-10]
+        return response
+    return capture
+
+
 @dataclass
 class SourceClient:
     product: str
     url: str
     fetcher: Any
     session: Any
+    source_failures: list[dict[str, Any]] = field(default_factory=list)
 
 
 _current_client: ContextVar[SourceClient | None] = ContextVar("atlassian_source_client", default=None)
+_completed_source_failures: ContextVar[tuple[dict[str, Any], ...] | None] = ContextVar(
+    "atlassian_completed_source_failures", default=None,
+)
 
 
 def build_source_client(credential: ResolvedCredential, tool: str) -> SourceClient:
@@ -129,14 +154,59 @@ def build_source_client(credential: ResolvedCredential, tool: str) -> SourceClie
     for adapter in set(session.adapters.values()):
         adapter.close()
     session.adapters.clear()
+    source_failures: list[dict[str, Any]] = []
     session.mount("http://", SourceBoundAdapter(url))
     session.mount("https://", SourceBoundAdapter(url))
     session.trust_env = False
-    session.hooks["response"] = [_reject_redirect]
-    return SourceClient(product, url, fetcher, session)
+    session.hooks["response"] = [_reject_redirect, _capture_source_failure(source_failures)]
+    return SourceClient(product, url, fetcher, session, source_failures)
 
 
 class PortalAtlassianAdapter(MCPAdapter):
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        capture_token = _completed_source_failures.set(None)
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            _completed_source_failures.reset(capture_token)
+
+    def _classify_failure(self, code: Any, message: Any, *, http_status: int | None = None) -> MCPFailureCategory:
+        source_failures = _completed_source_failures.get() or ()
+        if source_failures:
+            status = source_failures[-1].get("http_status")
+            authoritative = {
+                401: MCPFailureCategory.AUTH,
+                403: MCPFailureCategory.ACCESS,
+                429: MCPFailureCategory.RATE_LIMIT,
+                502: MCPFailureCategory.AVAILABILITY,
+                503: MCPFailureCategory.AVAILABILITY,
+                504: MCPFailureCategory.AVAILABILITY,
+            }.get(status)
+            if authoritative is not None:
+                return authoritative
+        category = super()._classify_failure(code, message, http_status=http_status)
+        if category != MCPFailureCategory.UNKNOWN:
+            return category
+        # This exact upstream diagnostic is the known Confluence CQL parser
+        # failure seen in production; do not infer input errors from arbitrary 4xx text.
+        text = str(message or "").lower()
+        if "query cannot be parsed" in text or "could not parse cql" in text:
+            return MCPFailureCategory.INPUT
+        return category
+
+    def _source_failure_details(self) -> list[dict[str, Any]] | None:
+        captured = _completed_source_failures.get()
+        return [dict(item) for item in captured] if captured else None
+
+    def _source_failure_message(self, message: str, details: Any) -> str:
+        if isinstance(details, list) and details:
+            response = details[-1].get("response")
+            if isinstance(response, dict):
+                source_message = response.get("message") or response.get("error")
+                if isinstance(source_message, str) and source_message.strip():
+                    return source_message.strip()
+        return message
+
     async def _resolve_credential(
         self, arguments: dict[str, Any], request_id: str, tool: str,
     ) -> ResolvedCredential:
@@ -162,6 +232,7 @@ class PortalAtlassianAdapter(MCPAdapter):
     @asynccontextmanager
     async def _upstream_context(self, credential: ResolvedCredential | None, tool: str) -> AsyncIterator[None]:
         client = None
+        _completed_source_failures.set(None)
         if credential:
             preparation = asyncio.create_task(asyncio.to_thread(build_source_client, credential, tool))
             try:
@@ -184,6 +255,7 @@ class PortalAtlassianAdapter(MCPAdapter):
                 )
             yield
         finally:
+            _completed_source_failures.set(tuple(client.source_failures) if client else None)
             _current_client.reset(token)
             if client:
                 client.session.close()
@@ -222,6 +294,17 @@ def build_upstream_app() -> Any:
     from mcp_atlassian.utils.io import is_read_only_mode
     from mcp_atlassian.utils.tools import get_enabled_tools
     from mcp_atlassian.utils.toolsets import get_enabled_toolsets
+
+    # The native library logs exception text and traceback for every tool error,
+    # which can contain the full CQL/search input. The MCP response carries the
+    # source diagnostic to the caller; keep it out of container logs.
+    for logger_name in (
+        "mcp_atlassian",
+        "mcp_atlassian.utils.decorators",
+        "mcp_atlassian.servers.confluence",
+        "mcp_atlassian.servers.jira",
+    ):
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL + 1)
 
     @asynccontextmanager
     async def lifespan(app: Any) -> AsyncIterator[dict[str, Any]]:

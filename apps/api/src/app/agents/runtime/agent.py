@@ -1732,6 +1732,7 @@ class AgentToolRuntime(BaseRuntime):
                 else None
             ),
             data=safe_result_projection if result.success else None,
+            failure=result.metadata.get("mcp_failure") if isinstance(result.metadata.get("mcp_failure"), dict) else None,
         )
         sse_data = safe_result_projection if result.success else result.error
         sse_truncated = False
@@ -1786,6 +1787,7 @@ class AgentToolRuntime(BaseRuntime):
             "error": None if result.success else str(result.error or ""),
             "safe_message": None if result.success else str(result.error or ""),
             "user_message": result.metadata.get("user_message"),
+            "mcp_failure": result.metadata.get("mcp_failure") if isinstance(result.metadata.get("mcp_failure"), dict) else None,
             "operator_message": result.metadata.get("operator_message"),
             "source": result.metadata.get("source"),
             "debug": result.metadata.get("debug"),

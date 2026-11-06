@@ -25,6 +25,7 @@ from app.core.config import (
 from app.core.http.tls import outbound_http_verify
 from app.services.mcp_credential_broker_service import MCPCredentialBrokerService
 from app.services.mcp_jsonrpc_client import parse_mcp_response as _parse_mcp_response_body
+from portal_mcp_contract import MCPFailure, MCPFailureCategory, MCPFailureKind, is_sensitive_key, normalize_failure, public_user_message, safe_diagnostic
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 
 
@@ -50,6 +51,29 @@ def _safe_transport_cause(exc: BaseException) -> tuple[str, str, str]:
         return "-", "-", "-"
     reason = str(getattr(cause, "strerror", "") or "-").replace("\n", " ").replace("\r", " ")[:120]
     return type(cause).__name__, str(getattr(cause, "errno", "-") or "-"), reason
+
+
+def _mcp_call_secrets(arguments: Dict[str, Any]) -> tuple[str, ...]:
+    values: list[str] = []
+
+    def collect(value: Any, key: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child in value.items():
+                lowered = str(child_key).lower()
+                if isinstance(child, str) and is_sensitive_key(lowered):
+                    values.append(child)
+                else:
+                    collect(child, lowered)
+        elif isinstance(value, list):
+            for child in value:
+                collect(child, key)
+
+    collect(arguments)
+    return tuple(item for item in values if item)
+
+
+def _mcp_user_message(category: MCPFailureCategory) -> str:
+    return public_user_message(category)
 
 
 @dataclass(slots=True)
@@ -84,6 +108,12 @@ class MissingOperationCredentialsError(ValueError):
             f"'{data_instance_slug}'; this operation requires {required_scope}. "
             "No upstream request was sent."
         )
+
+
+class MCPFailureError(ValueError):
+    def __init__(self, failure: Dict[str, Any]) -> None:
+        self.mcp_failure = failure
+        super().__init__(str(failure.get("user_message") or "The MCP source request failed."))
 
 
 class DirectOperationExecutor:
@@ -255,6 +285,7 @@ class DirectOperationExecutor:
             payload = await self._invoke_unified_tool_call(call, ctx)
         except Exception as exc:
             cause_type, cause_errno, cause_reason = _safe_transport_cause(exc)
+            cause_reason = str(safe_diagnostic(cause_reason, secrets=_mcp_call_secrets(call.arguments)))
             logger.warning(
                 "runtime_mcp_tool_call_failed run_id=%s call_id=%s operation=%s mcp_tool=%s "
                 "provider=%s data_instance_id=%s error_type=%s http_status=%s "
@@ -272,8 +303,42 @@ class DirectOperationExecutor:
                 cause_reason,
                 getattr(exc, "mcp_diagnostic", "-"),
             )
-            return ToolResult.fail(str(exc))
-        result = self._tool_result_from_payload(payload)
+            failure = getattr(exc, "mcp_failure", None)
+            if not isinstance(failure, dict):
+                status_code = getattr(exc, "status_code", None)
+                if isinstance(exc, (TimeoutError, httpx.TimeoutException, httpx.ConnectError)) and status_code is None:
+                    category = MCPFailureCategory.AVAILABILITY
+                else:
+                    category = {
+                        401: MCPFailureCategory.AUTH,
+                        403: MCPFailureCategory.ACCESS,
+                        429: MCPFailureCategory.RATE_LIMIT,
+                        502: MCPFailureCategory.AVAILABILITY,
+                        503: MCPFailureCategory.AVAILABILITY,
+                        504: MCPFailureCategory.AVAILABILITY,
+                    }.get(status_code, MCPFailureCategory.UNKNOWN)
+                cause_type, cause_errno, cause_reason = _safe_transport_cause(exc)
+                secrets = _mcp_call_secrets(call.arguments)
+                failure = MCPFailure(
+                    kind=(MCPFailureKind.HTTP if status_code else
+                          MCPFailureKind.PROTOCOL if isinstance(exc, ValueError) else MCPFailureKind.TRANSPORT),
+                    category=category,
+                    code=f"http_{status_code}" if status_code else type(exc).__name__,
+                    message=f"MCP request failed with HTTP {status_code}" if status_code else type(exc).__name__,
+                    details=safe_diagnostic({
+                        "exception_type": type(exc).__name__,
+                        "cause_type": cause_type,
+                        "cause_errno": cause_errno,
+                        "cause_reason": cause_reason,
+                    }, secrets=secrets),
+                    request_id=call_id or None,
+                    stage="tools_call",
+                    http_status=status_code,
+                    user_message=_mcp_user_message(category),
+                ).bounded_dump()
+            failure = MCPFailure.model_validate(failure).bounded_dump()
+            return ToolResult.fail(failure["user_message"], mcp_failure=failure, user_message=failure["user_message"])
+        result = self._tool_result_from_payload(payload, secrets=_mcp_call_secrets(call.arguments))
         logger.info(
             "runtime_mcp_tool_call_%s run_id=%s call_id=%s operation=%s mcp_tool=%s "
             "provider=%s data_instance_id=%s",
@@ -330,7 +395,10 @@ class DirectOperationExecutor:
             if re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", active_call_id)
             else uuid.uuid4().hex
         )
-        session_id = await self._mcp_initialize(provider_url, timeout_s=timeout, request_id=request_id)
+        session_id = await self._mcp_initialize(
+            provider_url, timeout_s=timeout, request_id=request_id,
+            secrets=_mcp_call_secrets(call.arguments),
+        )
         payload = {
             "jsonrpc": "2.0",
             "id": 2,
@@ -391,10 +459,49 @@ class DirectOperationExecutor:
                 response.status_code,
                 attempts,
             )
-            raise ValueError(
-                f"MCP tool call failed with HTTP {response.status_code} after {attempts} attempts"
-            )
-        data = _parse_mcp_response_body(response.text)
+            category = {
+                401: MCPFailureCategory.AUTH,
+                403: MCPFailureCategory.ACCESS,
+                429: MCPFailureCategory.RATE_LIMIT,
+                502: MCPFailureCategory.AVAILABILITY,
+                503: MCPFailureCategory.AVAILABILITY,
+                504: MCPFailureCategory.AVAILABILITY,
+            }.get(response.status_code, MCPFailureCategory.UNKNOWN)
+            response_body = response.content[:24000]
+            try:
+                source_diagnostic: Any = json.loads(response_body) if response_body else None
+            except (ValueError, UnicodeDecodeError):
+                source_diagnostic = response_body.decode("utf-8", errors="replace")
+            if len(response.content) > len(response_body):
+                source_diagnostic = {"body": source_diagnostic, "_truncated": True}
+            secrets = _mcp_call_secrets(call.arguments)
+            error = ValueError(_mcp_user_message(category))
+            error.mcp_failure = MCPFailure(
+                kind=MCPFailureKind.HTTP,
+                category=category,
+                code=f"http_{response.status_code}",
+                message=f"MCP HTTP request failed with status {response.status_code}",
+                details=safe_diagnostic({"attempts": attempts, "source_response": source_diagnostic}, secrets=secrets),
+                rpc_data=safe_diagnostic(source_diagnostic, secrets=secrets),
+                request_id=request_id,
+                stage="tools_call",
+                http_status=response.status_code,
+                user_message=_mcp_user_message(category),
+            ).bounded_dump()
+            raise error
+        try:
+            data = _parse_mcp_response_body(response.text)
+        except Exception as exc:
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.PROTOCOL,
+                category=MCPFailureCategory.UNKNOWN,
+                code=type(exc).__name__,
+                message="MCP source returned an invalid response",
+                details={"exception_type": type(exc).__name__},
+                request_id=request_id,
+                stage="tools_call",
+                user_message=_mcp_user_message(MCPFailureCategory.UNKNOWN),
+            ).bounded_dump()) from exc
         rpc_error = data.get("error") if isinstance(data.get("error"), dict) else {}
         logger.info(
             "runtime_mcp_http_response_received request_id=%s stage=tools_call provider=%s target=%s "
@@ -404,12 +511,14 @@ class DirectOperationExecutor:
             _safe_url_origin(provider_url),
             response.status_code,
             attempts,
-            rpc_error.get("code", "-") if rpc_error else "-",
+            rpc_error.get("code", "-") if rpc_error and isinstance(rpc_error.get("code"), int) and not isinstance(rpc_error.get("code"), bool) else "invalid_code" if rpc_error else "-",
         )
-        return self._mcp_tool_result_or_raise(data)
+        return self._mcp_tool_result_or_raise(data, secrets=_mcp_call_secrets(call.arguments))
 
     @staticmethod
-    def _mcp_tool_result_or_raise(response_payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _mcp_tool_result_or_raise(
+        response_payload: Dict[str, Any], *, secrets: tuple[str, ...] = (),
+    ) -> Dict[str, Any]:
         """Return a valid MCP tools/call result or surface its JSON-RPC error.
 
         MCP servers commonly keep HTTP 200 for protocol-level errors.  Treating
@@ -418,24 +527,30 @@ class DirectOperationExecutor:
         """
         error = response_payload.get("error")
         if isinstance(error, dict):
-            message = str(error.get("message") or "MCP RPC error")
-            code = error.get("code")
-            suffix = f" (code {code})" if code is not None else ""
-            # Only propagate bounded diagnostic fields; never stringify arbitrary
-            # JSON-RPC error.data (it may contain credentials or request bodies).
-            diagnostic = error.get("data")
-            fields = {}
-            if isinstance(diagnostic, dict):
-                for key in ("stage", "error_type", "request_id"):
-                    value = diagnostic.get(key)
-                    if isinstance(value, str) and value and all(
-                        char.isascii() and (char.isalnum() or char in "_.:-") for char in value
-                    ):
-                        fields[key] = value[:120]
-            context = " ".join(f"{key}={value}" for key, value in fields.items())
-            exc = ValueError(f"MCP tool call failed{suffix}: {message}" + (f" [{context}]" if context else ""))
-            exc.mcp_diagnostic = context or "-"
-            raise exc
+            data = error.get("data")
+            try:
+                failure = normalize_failure(data, secrets=secrets)
+                if failure is None:
+                    raise ValueError("unsupported MCP failure envelope")
+            except Exception:
+                message = str(safe_diagnostic(error.get("message") or "MCP RPC error", secrets=secrets))
+                is_invalid_params = error.get("code") == -32602
+                category = MCPFailureCategory.INPUT if is_invalid_params else MCPFailureCategory.UNKNOWN
+                failure = MCPFailure(
+                    kind=MCPFailureKind.RPC,
+                    category=category,
+                    code=safe_diagnostic(error.get("code"), secrets=secrets) if error.get("code") is not None else None,
+                    message=message,
+                    details=safe_diagnostic(data, secrets=secrets),
+                    rpc_code=safe_diagnostic(error.get("code"), secrets=secrets),
+                    rpc_data=safe_diagnostic(data, secrets=secrets),
+                    user_message=_mcp_user_message(category),
+                ).bounded_dump()
+            return {
+                "isError": True,
+                "content": [{"type": "text", "text": failure["message"]}],
+                "_meta": {"portal.failure": failure},
+            }
         if error:
             raise ValueError("MCP tool call failed: MCP RPC error")
 
@@ -445,11 +560,26 @@ class DirectOperationExecutor:
         return result
 
     @staticmethod
-    def _tool_result_from_payload(payload: Dict[str, Any]) -> ToolResult:
+    def _tool_result_from_payload(payload: Dict[str, Any], *, secrets: tuple[str, ...] = ()) -> ToolResult:
         if payload.get("isError"):
-            content = payload.get("content") or []
-            message = _extract_mcp_error_message(content) or "Tool call failed"
-            return ToolResult.fail(message)
+            meta = payload.get("_meta") if isinstance(payload.get("_meta"), dict) else {}
+            raw_failure = meta.get("portal.failure")
+            try:
+                failure = normalize_failure(raw_failure, secrets=secrets)
+                if failure is None:
+                    raise ValueError("unsupported MCP failure envelope")
+            except Exception:
+                content = payload.get("content") or []
+                message = _extract_mcp_error_message(content) or "MCP tool reported an error"
+                failure = MCPFailure(
+                    kind=MCPFailureKind.TOOL,
+                    category=MCPFailureCategory.UNKNOWN,
+                    code="tool_error",
+                    message=str(safe_diagnostic(message, secrets=secrets)),
+                    details=safe_diagnostic({"content": content, "structuredContent": payload.get("structuredContent")}, secrets=secrets),
+                    user_message=_mcp_user_message(MCPFailureCategory.UNKNOWN),
+                ).bounded_dump()
+            return ToolResult.fail(failure["user_message"], mcp_failure=failure, user_message=failure["user_message"])
 
         structured = payload.get("structuredContent")
         if "structuredContent" in payload:
@@ -681,6 +811,7 @@ class DirectOperationExecutor:
 
     async def _mcp_initialize(
         self, provider_url: str, timeout_s: Optional[int], request_id: str = "",
+        secrets: tuple[str, ...] = (),
     ) -> str:
         now = time.monotonic()
         cached = self._mcp_sessions.get(provider_url)
@@ -692,12 +823,15 @@ class DirectOperationExecutor:
             if cached and cached[1] > time.monotonic():
                 return cached[0]
 
-            session_id = await self._mcp_initialize_fresh(provider_url, timeout_s, request_id=request_id)
+            session_id = await self._mcp_initialize_fresh(
+                provider_url, timeout_s, request_id=request_id, secrets=secrets,
+            )
             self._mcp_sessions[provider_url] = (session_id, time.monotonic() + self._mcp_session_ttl_s)
             return session_id
 
     async def _mcp_initialize_fresh(
         self, provider_url: str, timeout_s: Optional[int], request_id: str = "",
+        secrets: tuple[str, ...] = (),
     ) -> str:
         payload = {
             "jsonrpc": "2.0",
@@ -716,13 +850,30 @@ class DirectOperationExecutor:
         }
         timeout = timeout_s or 30
         client = await self._get_client(provider_url, timeout)
-        response, _ = await self._post_with_retry(
-            client=client,
-            provider_url=provider_url,
-            headers=headers,
-            payload=payload,
-            timeout_s=timeout,
-        )
+        try:
+            response, _ = await self._post_with_retry(
+                client=client,
+                provider_url=provider_url,
+                headers=headers,
+                payload=payload,
+                timeout_s=timeout,
+            )
+        except httpx.HTTPError as exc:
+            category = (
+                MCPFailureCategory.AVAILABILITY
+                if isinstance(exc, (httpx.TimeoutException, httpx.NetworkError))
+                else MCPFailureCategory.UNKNOWN
+            )
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.TRANSPORT,
+                category=category,
+                code=type(exc).__name__,
+                message=type(exc).__name__,
+                details={"exception_type": type(exc).__name__},
+                request_id=headers["x-portal-request-id"],
+                stage="initialize",
+                user_message=_mcp_user_message(category),
+            ).bounded_dump()) from exc
         if response.status_code >= 400:
             logger.warning(
                 "runtime_mcp_http_response_error request_id=%s stage=initialize target=%s http_status=%s",
@@ -730,10 +881,87 @@ class DirectOperationExecutor:
                 _safe_url_origin(provider_url),
                 response.status_code,
             )
-            raise ValueError(f"MCP initialize failed with HTTP {response.status_code}")
+            category = {
+                401: MCPFailureCategory.AUTH,
+                403: MCPFailureCategory.ACCESS,
+                429: MCPFailureCategory.RATE_LIMIT,
+                502: MCPFailureCategory.AVAILABILITY,
+                503: MCPFailureCategory.AVAILABILITY,
+                504: MCPFailureCategory.AVAILABILITY,
+            }.get(response.status_code, MCPFailureCategory.UNKNOWN)
+            body = response.content[:24000]
+            try:
+                source_details: Any = json.loads(body) if body else None
+            except (ValueError, UnicodeDecodeError):
+                source_details = body.decode("utf-8", errors="replace")
+            if len(response.content) > len(body):
+                source_details = {"body": source_details, "_truncated": True}
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.HTTP,
+                category=category,
+                code=f"http_{response.status_code}",
+                message=f"MCP initialize returned HTTP {response.status_code}",
+                details=safe_diagnostic(source_details, secrets=secrets),
+                request_id=headers["x-portal-request-id"],
+                stage="initialize",
+                http_status=response.status_code,
+                user_message=_mcp_user_message(category),
+            ).bounded_dump())
+        try:
+            initialize_payload = _parse_mcp_response_body(response.text)
+        except Exception as exc:
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.PROTOCOL,
+                category=MCPFailureCategory.UNKNOWN,
+                code=type(exc).__name__,
+                message="MCP initialize returned an invalid response",
+                details={"exception_type": type(exc).__name__},
+                request_id=headers["x-portal-request-id"],
+                stage="initialize",
+                user_message=_mcp_user_message(MCPFailureCategory.UNKNOWN),
+            ).bounded_dump()) from exc
+        rpc_error = initialize_payload.get("error")
+        if isinstance(rpc_error, dict):
+            category = MCPFailureCategory.INPUT if rpc_error.get("code") == -32602 else MCPFailureCategory.UNKNOWN
+            failure = normalize_failure(rpc_error.get("data"), secrets=secrets)
+            if failure is None:
+                failure = MCPFailure(
+                    kind=MCPFailureKind.RPC,
+                    category=category,
+                    code=safe_diagnostic(rpc_error.get("code"), secrets=secrets) if rpc_error.get("code") is not None else None,
+                    message=str(safe_diagnostic(rpc_error.get("message") or "MCP initialization failed", secrets=secrets)),
+                    details=safe_diagnostic(rpc_error.get("data"), secrets=secrets),
+                    request_id=headers["x-portal-request-id"],
+                    stage="initialize",
+                    rpc_code=safe_diagnostic(rpc_error.get("code"), secrets=secrets),
+                    rpc_data=safe_diagnostic(rpc_error.get("data"), secrets=secrets),
+                    user_message=_mcp_user_message(category),
+                ).bounded_dump()
+            raise MCPFailureError(failure)
+        if not isinstance(initialize_payload.get("result"), dict):
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.PROTOCOL,
+                category=MCPFailureCategory.UNKNOWN,
+                code="missing_initialize_result",
+                message="MCP initialize response has no result object",
+                details=safe_diagnostic(initialize_payload, secrets=secrets),
+                request_id=headers["x-portal-request-id"],
+                stage="initialize",
+                user_message=_mcp_user_message(MCPFailureCategory.UNKNOWN),
+            ).bounded_dump())
         session_id = response.headers.get("mcp-session-id")
         if not session_id:
-            raise ValueError("MCP initialize response missing mcp-session-id")
+            raise MCPFailureError(MCPFailure(
+                kind=MCPFailureKind.PROTOCOL,
+                category=MCPFailureCategory.UNKNOWN,
+                code="missing_session_id",
+                message="MCP initialize response has no session identifier",
+                details={"http_status": response.status_code},
+                request_id=headers["x-portal-request-id"],
+                stage="initialize",
+                http_status=response.status_code,
+                user_message=_mcp_user_message(MCPFailureCategory.UNKNOWN),
+            ).bounded_dump())
         logger.info(
             "runtime_mcp_http_response_received request_id=%s stage=initialize target=%s http_status=%s session_received=true",
             headers["x-portal-request-id"],
