@@ -106,6 +106,7 @@ class Settings(BaseSettings):
     CHAT_FILE_READ_MAX_CHARS: int = Field(default=32_000, ge=1)
     CHAT_FILE_READ_MAX_BYTES: int = Field(default=8 * 1024 * 1024, ge=1)
     CHAT_FILE_EXTRACTION_VERSION: int = Field(default=1, ge=1)
+    CHAT_ATTACHMENT_RETENTION_DAYS: int = Field(default=30, ge=1)
     FILE_DATA_MAX_BYTES: int = Field(default=50 * 1024 * 1024, ge=1)
     FILE_DATA_MAX_CHARS: int = Field(default=500_000, ge=1, le=500_000)
     FILE_DATA_CHUNK_CHARS: int = Field(default=2000, ge=128)

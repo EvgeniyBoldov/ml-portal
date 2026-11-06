@@ -24,6 +24,7 @@ from app.models.memory_scope import MemoryScope
 from app.services.lifecycle_admin_service import LifecycleAdminService
 from app.services.chat_attachment_service import ChatAttachmentService
 from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+from app.core.config import get_settings
 from app.services.sandbox_service import SandboxService
 from app.workers.session_factory import get_worker_session
 from app.workers.transaction_utils import worker_transaction
@@ -302,6 +303,40 @@ def cleanup_orphaned_chat_attachments(self):
         return asyncio.run(_cleanup())
     except Exception as e:
         logger.error("Failed to cleanup orphaned chat attachments: %s", e, exc_info=True)
+        raise self.retry(exc=e)
+
+
+@shared_task(
+    name="app.workers.tasks_cleanup.cleanup_expired_chat_attachments",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=60,
+)
+def cleanup_expired_chat_attachments(self):
+    """Delete files belonging to chats older than the configured retention period."""
+    import asyncio
+
+    async def _cleanup():
+        async with get_worker_session() as session:
+            settings = get_settings()
+            older_than = datetime.now(timezone.utc) - timedelta(
+                days=settings.CHAT_ATTACHMENT_RETENTION_DAYS
+            )
+            deleted_count = await ChatArtifactReferenceService(session).cleanup_expired_chat_attachments(
+                older_than=older_than,
+            )
+            await session.commit()
+            logger.info(
+                "Deleted %s attachments belonging to chats older than %s days",
+                deleted_count,
+                settings.CHAT_ATTACHMENT_RETENTION_DAYS,
+            )
+            return deleted_count
+
+    try:
+        return asyncio.run(_cleanup())
+    except Exception as e:
+        logger.error("Failed to clean expired chat attachments: %s", e, exc_info=True)
         raise self.retry(exc=e)
 
 

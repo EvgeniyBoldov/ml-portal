@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, call
 from uuid import uuid4
 
 import pytest
@@ -108,3 +108,88 @@ async def test_cleanup_expired_detached_attachments_deletes_s3_and_rows(monkeypa
     assert deleted == 1
     delete_object.assert_awaited_once_with("chat-bucket", "artifacts/generated/user/file.txt")
     session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_chat_attachments_removes_chat_object_and_derived_data(monkeypatch):
+    from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+
+    chat_id = uuid4()
+    attachment_id = uuid4()
+    artifact_id = uuid4()
+    attachment = SimpleNamespace(
+        id=attachment_id,
+        chat_id=chat_id,
+        storage_bucket="chat-uploads",
+        storage_key=f"chats/{chat_id}/attachments/{attachment_id}/old.txt",
+    )
+    reference = SimpleNamespace(id=artifact_id)
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=[_ScalarResult([attachment]), _ScalarResult([reference])])
+    session.delete = AsyncMock()
+    session.flush = AsyncMock()
+
+    delete_indexes = AsyncMock()
+    delete_representations = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.file_data_service.FileDataService",
+        lambda _session: SimpleNamespace(delete_indexes=delete_indexes),
+    )
+    monkeypatch.setattr(
+        "app.services.artifact_representation_service.ArtifactRepresentationService",
+        lambda _session: SimpleNamespace(delete_for_artifact=delete_representations),
+    )
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.get_settings",
+        lambda: SimpleNamespace(S3_BUCKET_CHAT_UPLOADS="chat-uploads"),
+    )
+    delete_object = AsyncMock(return_value=True)
+    monkeypatch.setattr("app.services.chat_artifact_reference_service.s3_manager.delete_object", delete_object)
+
+    deleted = await ChatArtifactReferenceService(session).cleanup_expired_chat_attachments(
+        older_than=datetime.now(timezone.utc) - timedelta(days=30),
+    )
+
+    assert deleted == 1
+    selection = session.execute.await_args_list[0].args[0]
+    assert "chats.created_at" in str(selection)
+    assert "chat_attachments.created_at <" not in str(selection)
+    delete_indexes.assert_awaited_once_with(reference=reference)
+    delete_representations.assert_awaited_once_with(str(artifact_id))
+    delete_object.assert_awaited_once_with("chat-uploads", attachment.storage_key)
+    assert session.delete.await_args_list == [
+        call(reference),
+        call(attachment),
+    ]
+    session.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_expired_chat_attachments_skips_non_chat_bucket_and_keeps_failed_deletions(monkeypatch):
+    from app.services.chat_artifact_reference_service import ChatArtifactReferenceService
+
+    chat_id = uuid4()
+    attachment = SimpleNamespace(
+        id=uuid4(),
+        chat_id=chat_id,
+        storage_bucket="rag",
+        storage_key=f"chats/{chat_id}/attachments/old.txt",
+    )
+    session = AsyncMock()
+    session.execute = AsyncMock(return_value=_ScalarResult([attachment]))
+    session.delete = AsyncMock()
+    session.flush = AsyncMock()
+    monkeypatch.setattr(
+        "app.services.chat_artifact_reference_service.get_settings",
+        lambda: SimpleNamespace(S3_BUCKET_CHAT_UPLOADS="chat-uploads"),
+    )
+    delete_object = AsyncMock()
+    monkeypatch.setattr("app.services.chat_artifact_reference_service.s3_manager.delete_object", delete_object)
+
+    deleted = await ChatArtifactReferenceService(session).cleanup_expired_chat_attachments(
+        older_than=datetime.now(timezone.utc) - timedelta(days=30),
+    )
+
+    assert deleted == 0
+    delete_object.assert_not_awaited()
+    session.delete.assert_not_awaited()

@@ -155,6 +155,7 @@ variables. The separate experimental `server:app` remains in the source tree.
 - `S3_SECURE` — использовать HTTPS для S3.
 - `S3_BUCKET_RAG` — бакет под RAG-артефакты.
 - `S3_BUCKET_ARTIFACTS` — бакет под прочие артефакты.
+- `CHAT_ATTACHMENT_RETENTION_DAYS` (30) — возраст чата, после которого плановая очистка удаляет его вложения и связанные производные данные. RAG-документы не затрагиваются.
 - `UPLOAD_MAX_BYTES` — лимит загрузки файла.
 - `UPLOAD_ALLOWED_MIME` — разрешенные MIME-типы.
 

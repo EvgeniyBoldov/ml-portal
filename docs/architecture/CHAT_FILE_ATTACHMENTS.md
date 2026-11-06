@@ -172,6 +172,13 @@ Internal objects abandoned by transaction rollback and obsolete run snapshots ar
 collected by the existing orphan-cleanup worker after its grace period. Original
 source access remains authoritative even when an extracted representation exists.
 
+Chat-uploaded and assistant-generated attachments in chats older than the configured
+`CHAT_ATTACHMENT_RETENTION_DAYS` (default 30) are removed by an hourly cleanup.
+It deletes objects only from the configured chat uploads bucket under the owning
+`chats/<id>/` prefix, along with their chat artifact references and private derived
+file data. It does not delete chats or messages. Collection RAG objects and buckets
+are not part of this retention task.
+
 ## Delivery model
 
 Unified file delivery works through file ids and download indirection.

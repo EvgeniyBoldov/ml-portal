@@ -12,6 +12,7 @@ from app.adapters.s3_client import s3_manager
 from app.core.config import get_settings
 from app.models.chat_artifact_reference import ChatArtifactReference
 from app.models.chat_attachment import ChatAttachment
+from app.models.chat import Chats
 from app.models.collection import Collection
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
@@ -491,6 +492,67 @@ class ChatArtifactReferenceService:
                 deleted += 1
             except Exception:
                 continue
+        await self.session.flush()
+        return deleted
+
+    async def cleanup_expired_chat_attachments(
+        self,
+        *,
+        older_than: datetime,
+        limit: int = 500,
+    ) -> int:
+        """Remove attachments belonging to chats older than the retention cutoff."""
+        from app.services.artifact_representation_service import ArtifactRepresentationService
+        from app.services.file_data_service import FileDataService
+
+        chat_bucket = get_settings().S3_BUCKET_CHAT_UPLOADS
+        result = await self.session.execute(
+            select(ChatAttachment)
+            .join(Chats, Chats.id == ChatAttachment.chat_id)
+            .where(
+                ChatAttachment.chat_id.is_not(None),
+                Chats.created_at < older_than,
+                ChatAttachment.storage_bucket == chat_bucket,
+                ChatAttachment.storage_key.startswith("chats/"),
+            )
+            .order_by(ChatAttachment.created_at.asc())
+            .limit(limit)
+        )
+
+        deleted = 0
+        for attachment in result.scalars().all():
+            chat_id = str(attachment.chat_id)
+            if (
+                attachment.storage_bucket != chat_bucket
+                or not attachment.storage_key.startswith(f"chats/{chat_id}/")
+            ):
+                continue
+
+            references = (
+                await self.session.execute(
+                    select(ChatArtifactReference).where(
+                        ChatArtifactReference.target_kind == "chat_attachment",
+                        ChatArtifactReference.target_id == str(attachment.id),
+                    )
+                )
+            ).scalars().all()
+
+            try:
+                for reference in references:
+                    await FileDataService(self.session).delete_indexes(reference=reference)
+                    await ArtifactRepresentationService(self.session).delete_for_artifact(str(reference.id))
+
+                if not await s3_manager.delete_object(attachment.storage_bucket, attachment.storage_key):
+                    continue
+            except Exception:
+                # Keep database references so a later scheduled run can retry.
+                continue
+
+            for reference in references:
+                await self.session.delete(reference)
+            await self.session.delete(attachment)
+            deleted += 1
+
         await self.session.flush()
         return deleted
 

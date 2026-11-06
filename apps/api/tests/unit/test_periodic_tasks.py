@@ -50,6 +50,16 @@ def test_chat_context_expiry_has_a_worker_route():
     assert route["queue"].name == "cleanup_low"
 
 
+def test_expired_chat_attachment_cleanup_is_scheduled_hourly_on_cleanup_queue():
+    schedule = build_default_beat_schedule()
+    spec = schedule["expired-chat-attachments-cleanup"]
+
+    assert spec["task"] == "app.workers.tasks_cleanup.cleanup_expired_chat_attachments"
+    assert spec["schedule"] == 3600.0
+    route = celery_app.amqp.router.route({}, spec["task"])
+    assert route["queue"].name == "cleanup_low"
+
+
 def test_cleanup_expired_runtime_tool_results_deletes_rows_and_commits(monkeypatch):
     from app.workers import tasks_cleanup
 
