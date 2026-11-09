@@ -1,4 +1,6 @@
-import { InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
+import { useEffect, useState } from 'react';
+import { InspectorTextBlock, InspectorStatus } from '@/shared/ui/Inspector';
+import Modal from '@/shared/ui/Modal';
 import type {
   TraceMemoryContext,
   TraceMemoryContextItem,
@@ -17,6 +19,19 @@ export function MemoryContextViewer({
 }: {
   context?: TraceMemoryContext;
 }) {
+  const [selectedGroup, setSelectedGroup] = useState<{
+    title: string;
+    items: TraceMemoryContextItem[];
+  } | null>(null);
+  useEffect(() => {
+    const closeFullView = () => setSelectedGroup(null);
+    document.addEventListener('agent-inspector-section-change', closeFullView);
+    return () =>
+      document.removeEventListener(
+        'agent-inspector-section-change',
+        closeFullView
+      );
+  }, []);
   if (!context)
     return (
       <InspectorEmptyState message="Контекст памяти не записан в журнал." />
@@ -71,42 +86,27 @@ export function MemoryContextViewer({
       showScope: true,
     },
   ];
-  const counts: [string, number][] = [
-    ['Факты', context.selectedFacts],
-    ['Проекты', context.selectedProjects],
-    ['Термины', context.selectedGlossary],
-    ['Знания', context.selectedMemoryItems],
-  ];
   return (
     <InspectorStack>
-      {context.owner ? (
-        <InspectorTextBlock
-          text={
-            context.owner.kind === 'planner'
-              ? 'Собственная накопленная память планера'
-              : `Собственная накопленная память задания ${context.owner.id}`
-          }
-        />
+      <p className={styles.intro}>
+        Контекст, доступный агенту при выполнении задачи.
+      </p>
+      {context.scopeCandidates ? (
+        <InspectorSection
+          title={`Кандидаты области${context.truncated ? ' · список сокращён' : ''}`}
+        >
+          <InspectorTextBlock
+            text={JSON.stringify(context.scopeCandidates, null, 2)}
+          />
+        </InspectorSection>
       ) : null}
-      <div className={styles.summary}>
-        <InspectorStatus
-          label={context.fallback ? 'Fallback без памяти' : context.scopeCandidates ? 'Результат поиска' : 'Подготовлен'}
-          tone={context.fallback ? 'warn' : 'success'}
-        />
-        {counts
-          .filter(([, count]) => count > 0)
-          .map(([label, count]) => (
-            <span key={label} className={styles.count}>
-              {label}: <strong>{count}</strong>
-            </span>
-          ))}
-      </div>
-      {context.scopeCandidates ? <InspectorSection title={`Кандидаты области${context.truncated ? ' · список сокращён' : ''}`}>
-        <InspectorTextBlock text={JSON.stringify(context.scopeCandidates, null, 2)} />
-      </InspectorSection> : null}
-      {context.scopeAmbiguities?.length ? <InspectorSection title="Неоднозначность области">
-        <InspectorTextBlock text={JSON.stringify(context.scopeAmbiguities, null, 2)} />
-      </InspectorSection> : null}
+      {context.scopeAmbiguities?.length ? (
+        <InspectorSection title="Неоднозначность области">
+          <InspectorTextBlock
+            text={JSON.stringify(context.scopeAmbiguities, null, 2)}
+          />
+        </InspectorSection>
+      ) : null}
       {groups
         .filter(group => group.items.length > 0 || group.status)
         .map(group => (
@@ -114,6 +114,17 @@ export function MemoryContextViewer({
             key={group.title}
             title={`${group.title} · ${group.items.length}`}
           >
+            {group.items.length ? (
+              <button
+                type="button"
+                className={styles.groupDetails}
+                onClick={() =>
+                  setSelectedGroup({ title: group.title, items: group.items })
+                }
+              >
+                {group.items.length > 10 ? `Все записи (${group.items.length})` : 'Увеличить таблицу'}
+              </button>
+            ) : null}
             {group.status === 'failed' ? (
               <InspectorStatus
                 label={group.error || 'Последний поиск завершился ошибкой'}
@@ -124,6 +135,7 @@ export function MemoryContextViewer({
               <MemoryItemsTable
                 items={group.items}
                 showScope={group.showScope}
+                previewLimit={10}
               />
             ) : (
               <InspectorEmptyState
@@ -150,11 +162,41 @@ export function MemoryContextViewer({
         </InspectorSection>
       ) : null}
       {context.searchScope ? (
-        <InspectorSection title="Область поиска">
-          <InspectorTextBlock
-            text={JSON.stringify(context.searchScope, null, 2)}
-          />
+        <InspectorSection title="Параметры поиска">
+          <details className={styles.technicalDetails}>
+            <summary>Показать технические параметры</summary>
+            <InspectorTextBlock
+              text={JSON.stringify(context.searchScope, null, 2)}
+            />
+          </details>
         </InspectorSection>
+      ) : null}
+      {context.scopeCandidates?.length || context.scopeAmbiguities?.length ? (
+        <InspectorSection title="Диагностика области поиска">
+          <details className={styles.technicalDetails}>
+            <summary>Показать детали</summary>
+            {context.scopeCandidates?.length ? (
+              <InspectorTextBlock
+                text={JSON.stringify(context.scopeCandidates, null, 2)}
+              />
+            ) : null}
+            {context.scopeAmbiguities?.length ? (
+              <InspectorTextBlock
+                text={JSON.stringify(context.scopeAmbiguities, null, 2)}
+              />
+            ) : null}
+          </details>
+        </InspectorSection>
+      ) : null}
+      {selectedGroup ? (
+        <Modal
+          open
+          title={selectedGroup.title}
+          size="xl"
+          onClose={() => setSelectedGroup(null)}
+        >
+          <MemoryItemsTable items={selectedGroup.items} showScope />
+        </Modal>
       ) : null}
     </InspectorStack>
   );

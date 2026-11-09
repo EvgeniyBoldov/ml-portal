@@ -9,6 +9,10 @@
 
 export const qk = {
   sandbox: {
+    resultMetadata: (sessionId: string, runId: string, resultId: string) =>
+      ['sandbox', 'result', sessionId, runId, resultId, 'metadata'] as const,
+    resultPage: (sessionId: string, runId: string, resultId: string, offset: number, revision: number) =>
+      ['sandbox', 'result', sessionId, runId, resultId, 'page', offset, revision] as const,
     sessions: {
       all: () => ['sandbox', 'sessions'] as const,
       list: (params?: { status?: string }) =>

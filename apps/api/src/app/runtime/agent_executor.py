@@ -63,6 +63,96 @@ from app.runtime.interaction import InteractionQuestion, InteractionRequester, R
 
 logger = get_logger(__name__)
 
+
+def _agent_access_inventory(sub_request: Any) -> list[dict[str, Any]]:
+    """Project configured source and system-tool access for the inspector."""
+    audit = dict(getattr(sub_request, "rbac_audit", {}) or {})
+    collection_audit = dict(audit.get("collection_filter") or {})
+    candidates = set(collection_audit.get("candidates") or [])
+    source_details = collection_audit.get("candidate_source_details")
+    source_details = source_details if isinstance(source_details, dict) else {}
+    sources: dict[str, dict[str, Any]] = {}
+    for instance in getattr(sub_request, "resolved_data_instances", []) or []:
+        key = str(getattr(instance, "collection_slug", None) or getattr(instance, "slug", "")).strip()
+        if key:
+            sources[key] = {"kind": "source", "key": key,
+                "label": str(getattr(instance, "name", None) or key), "status": "available", "children": [],
+                **({"description": str(getattr(instance, "description", None) or getattr(instance, "data_description", None) or
+                    getattr(instance, "usage_purpose", None)).strip()[:600]}
+                   if getattr(instance, "description", None) or getattr(instance, "data_description", None) or
+                   getattr(instance, "usage_purpose", None) else {})}
+    denied_rbac = set(collection_audit.get("denied_by_rbac") or [])
+    denied_capability = set(collection_audit.get("denied_by_capability") or [])
+    for key in sorted(candidates - sources.keys()):
+        if key in denied_rbac:
+            code, reason = "blocked_by_rbac", "Недоступен по правам доступа"
+        elif key in denied_capability:
+            code, reason = "outside_agent_access", "Не настроен в доступе агента"
+        else:
+            code, reason = "source_unavailable", "Источник недоступен"
+        metadata = source_details.get(key) if isinstance(source_details.get(key), dict) else {}
+        sources[key] = {"kind": "source", "key": key, "label": str(metadata.get("label") or key),
+            "status": "unavailable", "reason_code": code, "reason": reason, "children": [],
+            **({"description": metadata["description"]} if metadata.get("description") else {})}
+
+    missing_credentials = set(getattr(getattr(sub_request, "missing_requirements", None), "credentials", []) or [])
+    for key, source in sources.items():
+        if key in missing_credentials and source["status"] == "available":
+            source.update(status="limited", reason_code="missing_credentials",
+                reason="Не настроены учётные данные для источника")
+
+    system_tools: dict[str, dict[str, Any]] = {}
+    for operation in getattr(sub_request, "resolved_operations", []) or []:
+        tool_key = str(getattr(operation, "operation_slug", "")).strip()
+        if not tool_key:
+            continue
+        tool = {"kind": "tool", "key": tool_key,
+            "label": str(getattr(operation, "name", None) or tool_key), "status": "available",
+            **({"description": str(operation.discovery_description).strip()[:600]}
+               if getattr(operation, "discovery_description", None) else {}),
+            "source_label": ("Система" if getattr(operation, "scope", None) == "system" else
+                str(getattr(operation, "provider_instance_slug", None) or getattr(operation, "data_instance_slug", ""))),
+            "risk_level": str(getattr(operation, "risk_level", "unknown"))}
+        if getattr(operation, "scope", None) == "system":
+            system_tools[tool_key] = tool
+            continue
+        source_key = str(getattr(operation, "collection_slug", None) or getattr(operation, "data_instance_slug", "")).strip()
+        source = sources.get(source_key)
+        if source is not None and source["status"] == "limited":
+            tool.update(status="unavailable", reason_code=source.get("reason_code"), reason=source.get("reason"))
+        if source is not None:
+            source["children"].append(tool)
+
+    for operation in collection_audit.get("configured_operations", []):
+        if not isinstance(operation, dict):
+            continue
+        source_key = str(operation.get("source_key") or "").strip()
+        tool_key = str(operation.get("key") or "").strip()
+        if not tool_key:
+            continue
+        if operation.get("scope") == "system" or not source_key:
+            if tool_key not in system_tools:
+                system_tools[tool_key] = {"kind": "tool", "key": tool_key,
+                    "label": str(operation.get("label") or tool_key), "status": "unavailable",
+                    "reason_code": "tool_unavailable", "reason": "Не прошёл проверку доступности",
+                    **({"description": str(operation["description"]).strip()[:600]} if operation.get("description") else {}),
+                    "source_label": str(operation.get("source_label") or "Система"),
+                    **({"risk_level": operation["risk_level"]} if operation.get("risk_level") else {})}
+            continue
+        source = sources.get(source_key)
+        if source is None or any(item.get("key") == tool_key for item in source["children"]):
+            continue
+        denied = source["status"] == "unavailable"
+        source["children"].append({"kind": "tool", "key": tool_key,
+            "label": str(operation.get("label") or tool_key), "status": "unavailable",
+            "reason_code": source.get("reason_code") if denied else "tool_unavailable",
+            "reason": source.get("reason") if denied else "Не прошёл проверку доступности",
+            **({"description": str(operation["description"]).strip()[:600]} if operation.get("description") else {}),
+            "source_label": str(operation.get("source_label") or source.get("label") or source_key),
+            **({"risk_level": operation["risk_level"]} if operation.get("risk_level") else {})})
+    return [*sources.values(), *system_tools.values()]
+
+
 def _render_memory_recall(recall: Dict[str, Any]) -> list[str]:
     """Keep remembered statements distinct from their documentary evidence."""
     lines: list[str] = []
@@ -317,6 +407,17 @@ class AgentExecutor:
                 },
             )
             return
+
+        # Persist a concise effective-access view alongside the detailed preflight facts.
+        # Only expose status when the resolver established it; never copy exception text.
+        access_items = _agent_access_inventory(sub_request)
+        yield RuntimeEvent.access_snapshot(
+            entity_type="agent", entity_id=str(lifecycle_agent_execution_id or task.task_id),
+            parent_entity_type="agent_execution",
+            parent_entity_id=str(lifecycle_agent_execution_id or task.task_id),
+            agent_description=(str(getattr(sub_request.agent, "description", None) or "").strip()[:600] or None),
+            items=access_items,
+        )
 
         runtime_overrides = getattr(ctx.get_runtime_deps(), "sandbox_overrides", None) or {}
         if isinstance(runtime_overrides, dict) and runtime_overrides.get("sandbox_run_id"):

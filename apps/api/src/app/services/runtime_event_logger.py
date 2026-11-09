@@ -59,7 +59,7 @@ _BRIEF_EVENTS = frozenset({
     "task_planned", "task_started", "task_paused", "task_resumed", "task_completed", "task_needs_dependency", "task_blocked", "task_unfulfillable",
     "task_failed", "attempt_started", "attempt_succeeded", "attempt_failed",
     "checkpoint_planned", "checkpoint_decided",
-    "attempt_retry_scheduled", "preflight_snapshot", "rbac_snapshot", "limits_snapshot",
+    "attempt_retry_scheduled", "preflight_snapshot", "rbac_snapshot", "access_snapshot", "limits_snapshot",
     "preflight_started", "preflight_completed", "preflight_failed", "preflight_route_decision",
     "sandbox_override_snapshot",
     "budget_snapshot", "budget_consumed", "budget_rejected", "intent", "final_answer_marker", "error",

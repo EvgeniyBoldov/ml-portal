@@ -127,6 +127,11 @@ def build_default_beat_schedule() -> dict:
             "task": "app.workers.tasks_cleanup.cleanup_expired_runtime_tool_results",
             "schedule": 3600.0,  # 1 hour
         },
+        "runtime-events-expired-cleanup": {
+            "task": "app.workers.tasks_cleanup.cleanup_old_runtime_events",
+            "schedule": 3600.0,  # 1 hour
+            "options": {"queue": "cleanup_low"},
+        },
         "complete-tool-payloads-expired-cleanup": {
             "task": "app.workers.tasks_cleanup.cleanup_expired_tool_payloads",
             "schedule": 3600.0,

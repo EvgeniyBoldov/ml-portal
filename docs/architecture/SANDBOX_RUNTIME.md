@@ -6,6 +6,40 @@ Sandbox is an admin-only overlay over the real runtime.
 
 It exists to let operators change runtime values without introducing a second execution model.
 
+Sandbox session owners can browse retained Result Store datasets through
+`GET /sandbox/sessions/{session_id}/runs/{run_id}/results` and
+`GET /sandbox/sessions/{session_id}/runs/{run_id}/results/{result_id}`.
+The list supports `agent_execution_id`, `offset`, and `limit`; the result read
+supports `offset`, `limit`, and an optional `revision` for consistent paging.
+`GET /sandbox/sessions/{session_id}/runs/{run_id}/results/{result_id}/metadata`
+checks availability and returns the descriptor without reading dataset rows.
+Both return `next_offset` when more entries are available. Reads check session
+ownership, run membership, the run's recorded tenant and user, and dataset TTL.
+Missing or expired datasets return 404, changed revisions return 409, and a
+row exceeding the 1 MiB browser page budget returns 413. A run without a
+retained journal event identifying its owner and tenant cannot be browsed.
+The tool response tab displays direct results from the journal and, for stored
+results, checks availability and opens a paginated table in a modal. Table cells
+show at most 300 characters followed by an ellipsis when truncated. A missing
+result is shown as unavailable; the API does not prove the reason for a 404.
+The tool response keeps the status first, then a result viewer or a stored-result
+card, followed by a separate metadata section. A complete model tool reply is
+shown in the result viewer when recorded in a later LLM request from the same
+owner and identified by the tool call ID; a descriptor or sample alone does not
+establish the complete reply. If it is unavailable, the stored-result card remains
+available. The stored-result card contains
+the result ID and actions to open the dataset table and its schema in modals.
+The metadata section compares received or stored rows with the source total and,
+when both counts are explicitly available, stored rows with received rows.
+Unknown received counts are never inferred from the stored count. The metadata
+section presents only the source and storage counts, with an unknown denominator
+shown as a dash. Complete inline replies show the answer count without a storage
+comparison. Count badges
+are green for complete coverage, yellow for partial coverage, and red when zero
+rows were obtained out of a nonempty total; contradictory completeness remains
+partial. The dataset table scrolls in both directions within the viewport, with
+column headings and pagination visible.
+
 ## Core Rule
 
 Sandbox may override values, but it must not redefine runtime behavior.
@@ -135,6 +169,19 @@ Each tool item should indicate publication state:
 The right panel should show the selected discovered capability, its read-only release inventory, the branch publication toggle and semantic/runtime-safe fields. Release selection stays read-only until runtime can execute that exact release.
 
 Run inspector contract:
+- The planner inspector's plan is the current iteration's recorded changes:
+  newly introduced tasks, explicit resolutions of prior incomplete tasks and
+  the iteration checkpoint. The stage and planner-decision step show the
+  accumulated plan reconstructed from applied proposals of the same plan.
+  Earlier views exclude later proposals; task and checkpoint status is bounded
+  by the next applied iteration. Explicit `continue_with_tasks` links show the
+  old task as inactive beside its new continuation; `exclude_from_scope` is
+  labelled excluded, while partial/unresolved dispositions remain distinct.
+  New tasks are green, linked continuations yellow, inactive tasks grey and
+  struck through, with text labels in addition to colour. Missing earlier
+  iterations or referenced tasks produce a visible incomplete-history notice.
+  A checkpoint shows its recorded planned and effective destinations; a change
+  in destination is not inferred from a task failure.
 - `memory.search` shows retrieved document passages in its response tab and has
   no separate memory tab. Native HippoRAG passage `text` and source references
   also populate the owning executor's long-term memory group alongside facts.
@@ -153,12 +200,33 @@ Run inspector contract:
 - LLM and tool calls use `Инфо`, `Запрос`, `Ответ` or `Ошибка`, `RAW`; result
   and error are mutually exclusive, and an unavailable terminal result is not
   exposed as an empty tab;
+- tool outcome is tri-state: explicit success/failure is preserved, while
+  absent or contradictory outcome evidence is shown as unconfirmed rather than
+  success. MCP failure v1 and recognized legacy failure envelopes produce a
+  catalog-backed, human-safe message; source details and diagnostic fields
+  remain in RAW. Raw SQL/transport text is not the primary explanation;
+- known runtime errors (including operation, budget, LLM timeout/context and
+  preflight failures) use safe explanatory labels. Unknown codes fall back to a
+  generic explanation rather than exposing raw error text;
+- tool results use typed previews for recognized ResultPage values, arrays,
+  scalar lists, text, records and stored-result descriptors. The preview is
+  bounded; “open available result” exposes only the full payload present in the
+  trace event. In sandbox, stored descriptors additionally offer an availability
+  check and paginated dataset browsing through the authorized result API;
+- tool result coverage keeps separate facts for event truncation, model
+  delivery (`result_inline_complete`), source coverage
+  (`result_source_complete`), and query execution (`query_complete`). In
+  particular, `result_inline_complete` describes what the model received, not
+  whether the journal event contains the complete value. Omitted facts remain
+  unknown; zero counts are meaningful;
+- preflight readiness is shown only when a corresponding readiness event was
+  recorded. Orchestrator completion alone does not imply readiness data;
 - `TraceCall` exposes typed request, response, error and compact info models to
   semantic Viewers. Unknown payload fields are not projected into semantic
   tabs and remain available only in RAW;
-- planner uses `Инфо`, `План` and applicable snapshot tabs; an agent uses
-  `Инфо`, `Задача`, an available `Результат` and applicable snapshot tabs;
-  memory/fact executors expose `Память`/`Факты` only when their projection has
+- planner uses `Инфо`, `План` and applicable snapshot tabs; an ordinary agent
+  uses `Задача`, an available `Результат` and applicable snapshot tabs, without
+  an `Инфо` tab. Memory/fact executors expose `Память`/`Факты` only when their projection has
   data; synthesizer exposes an available `Результат` and applicable snapshot
   tabs; a planner checkpoint exposes a dedicated `Решение` tab with declared
   and effective next route, decision reason and iteration;
@@ -168,11 +236,71 @@ Run inspector contract:
 - executor-level `Prompt`, `RBAC`, `Limits` and `Preflight` are separate typed
   tabs. `Prompt` shows the effective system prompt for the execution; the LLM
   request retains the concrete message list for that call;
-- an executor's `Инфо` tab is a compact record of work performed
-  (LLM/tool calls, retries, errors, and separately labelled input, output and
+- Where retained, an executor's `Инфо` tab is a compact record of work
+  performed (LLM/tool calls, retries, errors, and separately labelled input, output and
   total token usage). Its `Лимиты` tab contains only
   locally configured executor limits and their usage; run-wide budgets are not
   repeated for every executor;
+- ordinary agent inspectors use a dedicated header with recorded agent name,
+  recorded role description when available, lifecycle status and elapsed
+  execution time; header status is normalized effective execution status,
+  reflecting authoritative lifecycle failure/cancellation/pause and business
+  outcome rather than raw coroutine completion. Needs/unfulfillable outcomes
+  are not shown as success. Resource usage is displayed only in
+  `Лимиты и расход`: one row per metric, with parameter, usage and limit
+  visible together. Recorded remaining budget and overage are visible directly;
+  normal use is represented by the usage bar without a duplicate success badge.
+  There is no budget-time explanation disclosure in this table.
+  Warnings and exceeded limits remain visible before expansion. The default tab is
+  `Задача`; the redundant `Инфо` tab is omitted. Its task view shows goal,
+  distinct instructions, inputs, dependencies and expected outputs, without a
+  task status; an explicitly empty input object is shown as intentional empty
+  input («Дополнительных параметров нет»). Recorded response format is a
+  separate field from expected result descriptions, which are projected
+  independently so format metadata does not replace actual expectations.
+  Planner task views retain their existing expected-output presentation;
+  checkpoint and document-memory inspectors retain their
+  specialized policies;
+- ordinary agents use the same tab navigation as the planner, including the
+  existing horizontal tab strip. Full-view dialogs close when leaving their
+  section. The desktop workspace inspector defaults to
+  420 px (minimum 320 px), retains a saved user width, and supports pointer and
+  keyboard resizing with viewport-aware bounds;
+- long agent text uses an on-page disclosure, not a code editor for short prose.
+  Structured result full view preserves the readable field/table presentation
+  and offers JSON explicitly. Memory full view opens the selected facts group;
+  prompt view supports document sections/search/original text, while RAW uses
+  collapsible event payloads with search and a full event view;
+- ordinary agent `Результат` is rendered from a typed `AgentResponse` projection
+  of `agent_end.result` (`TaskResult`), or an execution-owned legacy `final`,
+  with lifecycle-only legacy `agent_end` fields as fallback. The viewer does
+  not expose the protocol envelope. Text, structured data, files, sources,
+  needs, limitation, interaction, phase sufficiency and diagnostics are
+  independent optional sections; tool actions are read from the trace rather
+  than repeated in the result. Sources, files, needs and interaction options
+  are retained fully in projection and use a ten-item
+  UI preview with explicit disclosure of remaining items. Explicit false,
+  zero, null,
+  empty object and empty list values are preserved when their presence is known.
+  A missing terminal result is distinct from an explicitly empty value;
+- result files use registered artifact references rendered through the
+  canonical artifact download route. Source links are clickable only for
+  absolute HTTP(S) URLs without embedded credentials; other source labels stay
+  plain text. Runtime envelope metadata stays in `RAW`; domain structured data
+  is preserved, including meaningful identifiers and keys;
+- known `required_artifact_missing` limitations receive a localized
+  explanation rather than exposing the internal reason code;
+- known generic data-field and operation names use catalog-backed localized
+  labels; unknown values and SQL-specific notes remain as recorded;
+- ordinary agent result/info/entity status is normalized consistently:
+  `fulfilled` maps to `completed`, `needs` to `waiting`, and `unfulfillable`
+  remains a non-success outcome; authoritative lifecycle failure, cancellation,
+  pause or waiting takes precedence. A legacy `interaction` completion maps to
+  `waiting` unless an explicit lifecycle status overrides it;
+- a legacy `final` may carry citations in sidecar `payload.sources`. Only a
+  valid completion declaration with the strict allowed field/type shape is
+  parsed as such; completionless JSON or extra domain keys remain structured
+  data. The final must be owned by the selected agent execution;
 - a failed planner iteration exposes a localized failure summary and the
   recorded error code when the failed plan is linked to an applied plan from
   the same orchestrator. The UI does not invent an error message when runtime
@@ -185,6 +313,15 @@ Run inspector contract:
   boolean). RAW renders one source journal event per read-only JSON field;
 - UUID-only payloads and technical timestamps are noise in ordinary tabs;
   backend event payloads must provide human-readable operator fields.
+- Opaque graph and storage identifiers remain available for joins and RAW
+  diagnostics, but are omitted from semantic checkpoint, route, override and
+  memory-owner labels and reference-only tool-request values. Route-policy
+  recommendation IDs and UUID rule IDs are not shown. Override configuration
+  JSON is collapsed under technical details; effective operations use
+  human-readable labels. Domain identifiers needed to interpret returned data
+  remain visible.
+- Tree metrics use localized labels. “Время исполнения” is actual elapsed stage
+  time; budget wall time is shown separately as “Учтено бюджетом” in limits.
 - Run-level answer state is projected by the same trace projector into a typed
   `TraceRunView`: terminal content takes precedence over streamed deltas,
   attachment references are validated and deduplicated, safe errors and pause

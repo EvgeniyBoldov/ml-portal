@@ -267,6 +267,8 @@ class ResolvedOperation(BaseModel):
     name: str = Field(..., min_length=1)
     scope: Literal["system", "collection"] = "collection"
     description: Optional[str] = None
+    # Raw discovered description for trace presentation; excluded from serialized runtime contracts.
+    discovery_description: Optional[str] = Field(default=None, exclude=True)
     input_schema: Dict[str, Any] = Field(default_factory=dict)
     output_schema: Optional[Dict[str, Any]] = None
     data_instance_id: str = Field(..., min_length=1)

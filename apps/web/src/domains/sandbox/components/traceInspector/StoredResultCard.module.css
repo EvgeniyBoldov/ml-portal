@@ -1,0 +1,96 @@
+.card,
+.modal {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+.modalFrame {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100dvh - var(--space-8));
+  overflow: hidden;
+}
+.modalBody {
+  min-height: 0;
+  overflow: auto;
+}
+.modal {
+  width: 100%;
+}
+.card p,
+.modal p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+.card button,
+.modal button {
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font: inherit;
+}
+.card button:disabled,
+.modal button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.card details {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+.schemaList {
+  margin: 0;
+  padding-left: var(--sp-5);
+  overflow-wrap: anywhere;
+}
+.card ul {
+  max-height: 12rem;
+  overflow: auto;
+  padding-left: var(--sp-5);
+}
+.tableWrap {
+  max-width: 100%;
+  max-height: min(60dvh, 40rem);
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.table th,
+.table td {
+  min-width: 10rem;
+  max-width: 22rem;
+  padding: var(--sp-2) var(--sp-3);
+  border-bottom: 1px solid var(--border-color);
+  text-align: left;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+}
+.pagination {
+  display: flex;
+  gap: var(--sp-2);
+}

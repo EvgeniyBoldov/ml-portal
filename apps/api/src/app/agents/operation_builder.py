@@ -232,6 +232,7 @@ class OperationBuilder:
             name=resolution.title,
             scope="system" if is_system_tool else "collection",
             description=resolution.description,
+            discovery_description=str(getattr(discovered_tool, "description", None) or "").strip() or None,
             input_schema=resolution.input_schema,
             output_schema=resolution.output_schema,
             data_instance_id=data_instance_id,

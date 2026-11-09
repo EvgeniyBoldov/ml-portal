@@ -66,6 +66,7 @@ class RuntimeEventType(str, Enum):
     ROUTE_POLICY_END = "route_policy_end"
     SANDBOX_OVERRIDE_SNAPSHOT = "sandbox_override_snapshot"
     RBAC_SNAPSHOT = "rbac_snapshot"
+    ACCESS_SNAPSHOT = "access_snapshot"
     LIMITS_SNAPSHOT = "limits_snapshot"
     LLM_REQUEST = "llm_request"
     LLM_RESPONSE = "llm_response"
@@ -117,6 +118,22 @@ class RuntimeEvent:
 
     type: RuntimeEventType
     data: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def access_snapshot(
+        cls, *, entity_type: str, entity_id: Optional[str], items: List[dict],
+        agent_description: Optional[str] = None, **extra: Any,
+    ) -> "RuntimeEvent":
+        """Privacy-safe configured/effective access projection for the sandbox inspector."""
+        payload = {
+            "entity_type": entity_type,
+            "entity_id": entity_id,
+            "items": items,
+            **extra,
+        }
+        if agent_description:
+            payload["agent_description"] = agent_description
+        return cls(RuntimeEventType.ACCESS_SNAPSHOT, payload)
 
     # -------- lifecycle constructors --------
 
@@ -601,7 +618,7 @@ class RuntimeEvent:
         *,
         tool: str,
         call_id: str,
-        success: bool,
+        success: Optional[bool],
         data: Any,
         sources: Optional[list[dict[str, Any]]] = None,
         error_code: Optional[RuntimeErrorCode | str] = None,
@@ -627,16 +644,22 @@ class RuntimeEvent:
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
         result_delivery: Optional[str] = None,
+        result_row_count: Optional[int] = None,
+        result_source_total: Optional[int] = None,
+        mcp_failure: Optional[Dict[str, Any]] = None,
     ) -> "RuntimeEvent":
         payload: Dict[str, Any] = {
             "entity_type": "tool_call",
             "entity_id": call_id,
             "tool": tool,
             "call_id": call_id,
-            "success": success,
-            "status": "completed" if success else "failed",
             "data": data,
         }
+        if success is not None:
+            payload["success"] = bool(success)
+            payload["status"] = "completed" if success else "failed"
+        else:
+            payload["status"] = "unknown"
         if sources is not None:
             payload["sources"] = list(sources)
         if artifact_refs:
@@ -687,6 +710,12 @@ class RuntimeEvent:
             payload["result_source_complete"] = bool(result_source_complete)
         if result_delivery is not None:
             payload["result_delivery"] = result_delivery
+        if result_row_count is not None:
+            payload["result_row_count"] = result_row_count
+        if result_source_total is not None:
+            payload["result_source_total"] = result_source_total
+        if mcp_failure is not None:
+            payload["mcp_failure"] = dict(mcp_failure)
         return cls(RuntimeEventType.TOOL_RESULT, payload)
 
     @classmethod

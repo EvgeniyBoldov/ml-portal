@@ -7,6 +7,7 @@
 }
 
 .table table {
+  table-layout: fixed;
   border-radius: 0;
   box-shadow: none;
 }
@@ -19,6 +20,8 @@
   font-weight: var(--font-weight-medium);
   text-transform: none;
   letter-spacing: normal;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .table td[class] {
@@ -50,8 +53,8 @@
 }
 
 .subject {
-  width: 30%;
-  min-width: 8rem;
+  width: 32%;
+  min-width: 0;
   overflow-wrap: anywhere;
 }
 
@@ -69,6 +72,34 @@
 }
 
 .extra {
-  width: 15%;
+  width: 22%;
+  overflow-wrap: anywhere;
+}
+
+.showMore {
+  margin-top: var(--sp-2);
+  padding: var(--sp-1) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-link, var(--text-primary));
+  font: inherit;
+  cursor: pointer;
+}
+
+.keyDetails {
+  margin-top: var(--sp-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.keyDetails > summary {
+  cursor: pointer;
+}
+
+.keyDetails code {
+  display: inline-block;
+  margin-top: var(--sp-1);
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
   overflow-wrap: anywhere;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { memoryContextFromPayload, memoryContextFromTool, projectTraceRun, projectTraceStages, resolveTraceInspectionTarget, stepFor } from './traceProjection';
+import { memoryContextFromPayload, memoryContextFromTool, projectTraceRun, projectTraceStages, resolveTraceInspectionTarget, stepFor, type TraceExecutorRun } from './traceProjection';
 import { replayRuntimeJournal, type RuntimeJournalEvent } from './traceState';
 
 const event = (sequence: number, eventType: string, payload: Record<string, unknown>): RuntimeJournalEvent => ({
@@ -18,7 +18,57 @@ const event = (sequence: number, eventType: string, payload: Record<string, unkn
   payload,
 });
 
+function projectAgentExecutor(
+  endPayload: Record<string, unknown>,
+  precedingEvents: RuntimeJournalEvent[] = [],
+): TraceExecutorRun {
+  const base = [
+    event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+    event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+    event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
+  ];
+  const terminalSequence = 4 + precedingEvents.length;
+  const state = replayRuntimeJournal([
+    ...base,
+    ...precedingEvents,
+    event(terminalSequence, 'agent_end', {
+      entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1',
+      status: 'completed', ...endPayload,
+    }),
+  ]);
+  return projectTraceStages(state)[0].steps[0].executorRuns[0];
+}
+
 describe('projectTraceStages memory components', () => {
+  it('links complete tool rows from the next LLM request only for the same owner and call', () => {
+    const payload = JSON.stringify({ rows: [{ name: 'verified' }], _runtime_result: { delivery: 'inline', inline_complete: true } });
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'result.sql', call_id: 'tool-1' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', call_id: 'tool-1', success: true, result_delivery: 'stored', result_id: 'result-1', result_inline_complete: true, data: { row_count: 1, payload_type: 'array' } }),
+      event(6, 'llm_request', { entity_type: 'llm_call', entity_id: 'wrong-owner', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-2', messages: [{ role: 'tool', tool_call_id: 'tool-1', content: JSON.stringify({ rows: [{ name: 'wrong' }], _runtime_result: { delivery: 'inline', inline_complete: true } }) }] }),
+      event(7, 'llm_request', { entity_type: 'llm_call', entity_id: 'next', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', messages: [{ role: 'tool', tool_call_id: 'tool-1', content: payload }] }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'tool_call:tool-1');
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult).toMatchObject({
+      inlineDataAvailable: true, inlineData: [{ name: 'verified' }],
+    });
+  });
+
+  it('does not interpret a stored pointer or sample as a complete model response', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', tool: 'search', call_id: 'tool-1' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'tool-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', call_id: 'tool-1', success: true, result_delivery: 'stored', result_id: 'result-1', result_inline_complete: false, data: { row_count: 50, payload_type: 'array' } }),
+      event(6, 'llm_request', { entity_type: 'llm_call', entity_id: 'next', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', messages: [{ role: 'tool', tool_call_id: 'tool-1', content: JSON.stringify({ sample: [{ name: 'example' }], _runtime_result: { delivery: 'stored', inline_complete: false } }) }] }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'tool_call:tool-1');
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult?.inlineDataAvailable).toBeUndefined();
+  });
   it('shows the root route policy as its own trace stage with matched conditions', () => {
     const state = replayRuntimeJournal([
       event(1, 'route_policy_start', {
@@ -44,7 +94,7 @@ describe('projectTraceStages memory components', () => {
       sourceAgent: 'inventory.netbox', userRequest: 'посмотри в инвентори какие у меня есть коммутаторы',
     });
     const policyExecutor = stage.executorRuns[0];
-    expect(policyExecutor).toMatchObject({ executorName: 'Политика маршрутизации', kind: 'route_policy' });
+    expect(policyExecutor).toMatchObject({ executorName: 'Рекомендация маршрута', kind: 'route_policy' });
     expect(resolveTraceInspectionTarget(state, policyExecutor.inspectorKey)?.tabs.map((item) => item.id)).toEqual(['info', 'route_policy', 'raw']);
   });
 
@@ -140,7 +190,8 @@ describe('projectTraceStages memory components', () => {
         entity_type: 'orchestrator', entity_id: 'preflight-1', parent_entity_type: 'run', parent_entity_id: 'run-1',
         proposed_route: 'planner', effective_route: 'tool_call', reason: 'runtime_reroute', detail: 'В текущем состоянии нужен операционный источник.',
       }),
-      event(5, 'orchestrator_end', { entity_type: 'orchestrator', entity_id: 'preflight-1', role: 'turn_preflight', status: 'planner' }),
+      event(5, 'access_snapshot', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'orchestrator', parent_entity_id: 'preflight-1', items: [{ kind: 'tool', key: 'memory.search', label: 'Поиск в памяти', status: 'available' }] }),
+      event(6, 'orchestrator_end', { entity_type: 'orchestrator', entity_id: 'preflight-1', role: 'turn_preflight', status: 'planner' }),
     ]);
 
     const executor = projectTraceStages(state).find((stage) => stage.kind === 'turn_preflight')?.executorRuns[0];
@@ -149,6 +200,7 @@ describe('projectTraceStages memory components', () => {
       entityHints: ['НОП'], constraints: ['не выдумывать'],
       input: { user_request: 'Запомни факт', mechanical_lookup: { entities: ['НОП'] } },
     }));
+    expect(executor?.accessSnapshot?.items).toContainEqual(expect.objectContaining({ key: 'memory.search', status: 'available' }));
   });
 
   it.each([undefined, true, false])('shows preflight memory.search while waiting and after result=%s', (success) => {
@@ -217,8 +269,9 @@ describe('projectTraceStages memory components', () => {
       event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'planner-1', role: 'planner', context_snapshot: { rbac: audit } }),
       event(2, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1' }),
       event(3, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
+      event(4, 'access_snapshot', { entity_type: 'planner', entity_id: 'iteration-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', items: [{ kind: 'agent', key: 'viewer', label: 'Просмотрщик', status: 'available' }] }),
     ];
-    for (const events of [base, [...base, event(4, 'rbac_snapshot', {
+    for (const events of [base, [...base, event(5, 'rbac_snapshot', {
       entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1', rbac: audit,
     })]]) {
       const state = replayRuntimeJournal(events);
@@ -227,6 +280,7 @@ describe('projectTraceStages memory components', () => {
       expect(target?.tabs.map((item) => item.label)).toContain('Доступ');
       expect(planner.access?.rows).toContainEqual({ kind: 'Агент', name: 'viewer', allowed: true, reason: 'Разрешён эффективной политикой' });
       expect(planner.access?.rows).toContainEqual({ kind: 'Агент', name: 'hidden', allowed: false, reason: 'Запрещён RBAC' });
+      expect(planner.accessSnapshot?.items).toContainEqual(expect.objectContaining({ key: 'viewer', label: 'Просмотрщик', status: 'available' }));
     }
   });
 
@@ -258,6 +312,29 @@ describe('projectTraceStages memory components', () => {
     ]);
     expect(stage.steps[1].executorRuns[0].executorName).toBe('net.engineer');
     expect(stage.steps[2].executorRuns[0].executorType).toBe('CHECKPOINT');
+  });
+
+  it('keeps the planner delta separate from the accumulated plan and shows both checkpoints', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'orchestrator_start', { entity_type: 'orchestrator', entity_id: 'planner-1', role: 'planner' }),
+      event(2, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1', iteration: 1 }),
+      event(3, 'plan_iteration_applied', { entity_type: 'plan', entity_id: 'plan-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', iteration_id: 'iteration-1', proposal: { terminal: 'planner', tasks: [{ task_id: 'netbox_1', executor: 'inventory.netbox', intent: 'Инвентарь', instructions: 'Собрать' }] } }),
+      event(4, 'task_planned', { entity_type: 'task', entity_id: 'task-entity-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', plan_id: 'plan-1', iteration_id: 'iteration-1', task_id: 'netbox_1', executor: 'inventory.netbox', intent: 'Инвентарь' }),
+      event(5, 'checkpoint_planned', { entity_type: 'checkpoint', entity_id: 'cp-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', plan_id: 'plan-1', iteration_id: 'iteration-1', declared_next: 'planner' }),
+      event(6, 'task_completed', { entity_type: 'task', entity_id: 'task-entity-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', plan_id: 'plan-1', task_id: 'netbox_1' }),
+      event(7, 'checkpoint_decided', { entity_type: 'checkpoint', entity_id: 'cp-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1', plan_id: 'plan-1', iteration_id: 'iteration-1', declared_next: 'planner', effective_next: 'planner' }),
+      event(8, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-2', parent_entity_type: 'orchestrator', parent_entity_id: 'planner-1', iteration: 2 }),
+      event(9, 'llm_request', { entity_type: 'llm_call', entity_id: 'planner-call-2', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-2', purpose: 'planning_decision' }),
+      event(10, 'plan_iteration_applied', { entity_type: 'plan', entity_id: 'plan-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-2', iteration_id: 'iteration-2', proposal: { terminal: 'synthesis', tasks: [] } }),
+      event(11, 'checkpoint_planned', { entity_type: 'checkpoint', entity_id: 'cp-2', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-2', plan_id: 'plan-1', iteration_id: 'iteration-2', declared_next: 'synthesis' }),
+    ]);
+    const stage = projectTraceStages(state).find(item => item.entity.id === 'iteration-2');
+    expect(stage?.plan?.tasks).toHaveLength(0);
+    expect(stage?.fullPlan?.tasks).toMatchObject([{ taskId: 'netbox_1', status: 'Готово' }]);
+    expect(stage?.fullPlan?.entries?.filter(item => item.kind === 'checkpoint')).toHaveLength(2);
+    const plannerStep = stage?.steps.find(step => step.kind === 'planner_decision');
+    expect(plannerStep).toBeDefined();
+    expect(resolveTraceInspectionTarget(state, plannerStep!.key)?.tabs.map(tab => tab.id)).toContain('plan');
   });
 
   it('explains the declared and effective checkpoint transition', () => {
@@ -456,7 +533,7 @@ describe('projectTraceStages memory components', () => {
     if (toolTarget?.kind === 'call') {
       expect(toolTarget.call.responseView?.toolResult).toMatchObject({
         success: true,
-        summary: 'Получено: 2',
+        summary: 'Всего в источнике: 2',
         data: { total: 2, rows: [{ title: 'Регламент' }] },
       });
     } else {
@@ -484,6 +561,189 @@ describe('projectTraceStages memory components', () => {
       completionKind: 'answer', sufficientForPhase: true, needs: [{ key: 'follow_up' }], artifacts: [{ file_name: 'answer.txt' }],
       operations: { total: 1, succeeded: 1, failed: 0 },
     }));
+  });
+
+  it('projects TaskResult text and arbitrary structured data without exposing the result envelope', () => {
+    const executor = projectAgentExecutor({ result: {
+      protocol_version: 2,
+      outcome: 'completed',
+      completion: 'fulfilled',
+      description: 'Ответ агента',
+      answer: 'Краткий текст',
+      structured_response: { enabled: false, retries: 0, note: null },
+      outputs: { enabled: false, retries: 0, note: null },
+      needs: [], attachments: [], sources: [], diagnostics: [],
+      verified: { receipts: [{ success: true, operation: 'collection.document.search', retrieval: true, result_fingerprint: 'secret-fingerprint', result_id: 'secret-result' }] },
+    } });
+
+    expect(executor.result.agentResponse).toMatchObject({
+      answer: 'Краткий текст',
+      hasStructuredData: true,
+      structuredData: { enabled: false, retries: 0, note: null },
+      completion: 'fulfilled',
+      outcome: 'completed',
+      actions: [{ label: 'collection · document · search', retrieval: true }],
+    });
+    expect(executor.result.output).toEqual({ enabled: false, retries: 0, note: null });
+    expect(JSON.stringify(executor.result.agentResponse)).not.toContain('secret-fingerprint');
+    expect(JSON.stringify(executor.result.agentResponse)).not.toContain('secret-result');
+    expect(JSON.stringify(executor.result.agentResponse)).not.toContain('protocol_version');
+  });
+
+  it('distinguishes omitted structured response from explicit null and preserves false, zero, objects and arrays', () => {
+    const omitted = projectAgentExecutor({ result: { outcome: 'completed', completion: 'fulfilled', structured_response: null, outputs: {} } });
+    const explicitNull = projectAgentExecutor({ result: { outcome: 'completed', completion: 'fulfilled', structured_response: null, outputs: { structured_response: null } } });
+    expect(omitted.result.agentResponse).toMatchObject({ hasStructuredData: false });
+    expect(explicitNull.result.agentResponse).toMatchObject({ hasStructuredData: true, structuredData: null });
+
+    for (const value of [false, 0, {}, []]) {
+      const executor = projectAgentExecutor({ result: { outcome: 'completed', completion: 'fulfilled', structured_response: value, outputs: {} } });
+      expect(executor.result.agentResponse).toMatchObject({ hasStructuredData: true, structuredData: value });
+    }
+  });
+
+  it('projects every recorded interaction choice as passive response details', () => {
+    const executor = projectAgentExecutor({ result: {
+      outcome: 'needs_dependency', completion: 'needs',
+      interaction: { question: 'Какой филиал?', response_type: 'boolean', options: ['Да', 'Нет', 3, '', ...Array.from({ length: 15 }, (_, index) => `Вариант ${index}`)] },
+    } });
+
+    expect(executor.result.agentResponse?.interaction).toMatchObject({
+      kind: 'confirmation', question: 'Какой филиал?', responseTypeLabel: 'Ответ «да» или «нет»',
+      options: ['Да', 'Нет', ...Array.from({ length: 15 }, (_, index) => `Вариант ${index}`)],
+    });
+  });
+
+  it('preserves all recorded sources and successful receipts in the typed result', () => {
+    const sources = Array.from({ length: 24 }, (_, index) => ({ title: `Источник ${index}` }));
+    const receipts = Array.from({ length: 15 }, (_, index) => ({
+      success: true, operation: `collection.document.search_${index}`, retrieval: true,
+    }));
+    const executor = projectAgentExecutor({ result: {
+      outcome: 'completed', completion: 'fulfilled', sources,
+      verified: { receipts },
+    } });
+
+    expect(executor.result.agentResponse?.sources).toHaveLength(24);
+    expect(executor.result.agentResponse?.actions).toHaveLength(15);
+  });
+
+  it('localizes known agent receipt operations and keeps unknown names readable', () => {
+    const executor = projectAgentExecutor({ result: {
+      outcome: 'completed', completion: 'fulfilled',
+      verified: { receipts: ['netbox_get_objects', 'result.sql', 'result.analyze', 'custom.lookup'].map(operation => ({
+        success: true, operation, retrieval: true,
+      })) },
+    } });
+
+    expect(executor.result.agentResponse?.actions.map(action => action.label)).toEqual([
+      'Получение объектов NetBox',
+      'Анализ сохранённых данных',
+      'Анализ сохранённых данных',
+      'custom · lookup',
+    ]);
+  });
+
+  it('groups only declared diagnostics and keeps result notes in structured data', () => {
+    const executor = projectAgentExecutor({ result: {
+      outcome: 'completed', completion: 'fulfilled',
+      structured_response: { notes: 'The source returned a partial inventory.' },
+      outputs: {},
+      diagnostics: [
+        { code: 'schema_deviation' },
+        { code: 'schema_deviation' },
+        { code: 'advisory_schema_invalid' },
+      ],
+    } });
+
+    expect(executor.result.agentResponse?.diagnostics).toMatchObject([
+      { label: 'Данные отличаются от рекомендованного формата', count: 2, details: ['Некоторые поля не совпали с рекомендуемым описанием. Полученные значения сохранены в результате.'] },
+      { label: 'Не удалось проверить рекомендованный формат', count: 1, details: ['Рекомендуемую схему не удалось проверить. Просмотрите сохранённый результат ниже.'] },
+    ]);
+    expect(executor.result.agentResponse?.structuredData).toEqual({ notes: 'The source returned a partial inventory.' });
+  });
+
+  it('localizes known missing required artifact limitations over technical messages', () => {
+    const executor = projectAgentExecutor({ result: {
+      outcome: 'unfulfillable', completion: 'unfulfillable', reason_code: 'required_artifact_missing',
+      limitation: { code: 'required_artifact_missing', message: 'required_artifact_missing: artifact registry returned null' },
+    } });
+
+    expect(executor.result.agentResponse?.limitation?.message).toBe('Не создан обязательный файл');
+  });
+
+  it('adapts legacy output slots without displaying evidence references as answer data', () => {
+    const valueSlot = projectAgentExecutor({ result: {
+      outcome: 'completed', completion: 'fulfilled',
+      outputs: { enabled: { kind: 'value', value: false }, evidence: { kind: 'evidence', ref: 'private-ref' } },
+    } });
+    const evidenceOnly = projectAgentExecutor({ result: {
+      outcome: 'completed', completion: 'fulfilled',
+      outputs: { evidence: { kind: 'evidence', ref: 'private-ref' } },
+    } });
+
+    expect(valueSlot.result.agentResponse).toMatchObject({ hasStructuredData: true, structuredData: { enabled: false } });
+    expect(evidenceOnly.result.agentResponse).toMatchObject({ hasStructuredData: false });
+    expect(JSON.stringify(evidenceOnly.result.agentResponse)).not.toContain('private-ref');
+  });
+
+  it('uses only a final explicitly owned by the selected agent and parses JSON data as structured', () => {
+    const owned = event(4, 'final', {
+      entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1',
+      content: '{"items":[{"name":"device-a"}]}',
+    });
+    const neighbor = event(4, 'final', {
+      entity_type: 'agent_execution', entity_id: 'agent-2', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-2',
+      content: 'Не относится к выбранному агенту',
+    });
+    const withOwned = projectAgentExecutor({}, [owned]);
+    const withNeighborOnly = projectAgentExecutor({}, [neighbor]);
+
+    expect(withOwned.result.agentResponse).toMatchObject({ hasStructuredData: true, structuredData: { items: [{ name: 'device-a' }] } });
+    expect(withNeighborOnly.result.agentResponse?.answer).toBeUndefined();
+    expect(withNeighborOnly.result.agentResponse?.hasStructuredData).toBe(false);
+  });
+
+  it('keeps JSON objects with legacy-looking keys as domain data unless they match the completion contract', () => {
+    const domainValues = [
+      { answer: 42, device_id: 'router-1' },
+      { report: { rows: [1, 2] }, device_id: 'router-2' },
+      { outputs: { count: 3 }, device_id: 'router-3' },
+      { completion: 'fulfilled', device_id: 'router-4' },
+    ];
+    for (const value of domainValues) {
+      const owned = event(4, 'final', {
+        entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1',
+        content: JSON.stringify(value),
+      });
+      const executor = projectAgentExecutor({}, [owned]);
+      expect(executor.result.agentResponse).toMatchObject({ hasStructuredData: true, structuredData: value });
+    }
+  });
+
+  it('projects safe sources from the selected agent final sidecar', () => {
+    const owned = event(4, 'final', {
+      entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1',
+      content: 'Найдена запись.',
+      sources: [{ title: 'Каталог устройств', url: 'https://inventory.example/devices' }],
+    });
+    const executor = projectAgentExecutor({}, [owned]);
+
+    expect(executor.result.agentResponse?.answer).toBe('Найдена запись.');
+    expect(executor.result.agentResponse?.sources).toEqual([{ label: 'Каталог устройств', href: 'https://inventory.example/devices' }]);
+  });
+
+  it('maps standalone agent completion claims to consistent result, info, and timeline statuses', () => {
+    for (const [claim, expected] of [['fulfilled', 'completed'], ['needs', 'waiting']] as const) {
+      const executor = projectAgentExecutor({ outcome: claim });
+      expect(executor.result.status).toBe(expected);
+      expect(executor.info.status).toBe(expected);
+      expect(executor.entity.status).toBe(expected);
+    }
+
+    const paused = projectAgentExecutor({ status: 'paused', outcome: 'fulfilled' });
+    expect(paused.result.status).toBe('paused');
+    expect(paused.entity.status).toBe('paused');
   });
 
   it('uses the final answer marker as the synthesizer result', () => {
@@ -533,20 +793,27 @@ describe('projectTraceStages memory components', () => {
       event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
       event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker', task_title: 'Выполнение' }),
       event(4, 'rbac_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', rbac: { agent_access: { slug: 'worker', allowed: true, reason: 'RBAC passed' }, collection_filter: { allowed: ['docs'] } } }),
-      event(5, 'budget_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', own: { llm_calls: 1 }, limits: { llm_calls: 2 } }),
-      event(6, 'preflight_started', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
-      event(7, 'preflight_completed', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', status: 'ok', missing: { tools: [], collections: [], credentials: [] } }),
-      event(8, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', messages: [{ role: 'system', content: 'prompt' }] }),
-      event(9, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', content: 'ok', status: 'completed' }),
-      event(10, 'agent_end', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', status: 'completed', summary: 'Готово' }),
+      event(5, 'access_snapshot', { entity_type: 'agent', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', agent_description: 'Агент для работы с документами', items: [{ kind: 'source', key: 'docs', label: 'Документы', description: 'Корпоративная база документов', status: 'unavailable', reason_code: 'blocked_by_rbac', reason: 'Нет доступа к источнику', children: [{ kind: 'tool', key: 'search', label: 'Поиск', description: 'Ищет документы по запросу', source_label: 'Confluence', status: 'unavailable', reason: 'Источник недоступен', risk_level: 'low' }] }] }),
+      event(6, 'budget_snapshot', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', own: { llm_calls: 1 }, limits: { llm_calls: 2 } }),
+      event(7, 'preflight_started', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1' }),
+      event(8, 'preflight_completed', { entity_type: 'preflight', entity_id: 'preflight-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', status: 'ok', missing: { tools: [], collections: [], credentials: [] } }),
+      event(9, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', messages: [{ role: 'system', content: 'prompt' }] }),
+      event(10, 'llm_response', { entity_type: 'llm_call', entity_id: 'llm-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-1', content: 'ok', status: 'completed' }),
+      event(11, 'agent_end', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', status: 'completed', summary: 'Готово' }),
+      event(12, 'access_snapshot', { entity_type: 'agent', entity_id: 'agent-1', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-2', items: [{ kind: 'source', key: 'wrong', label: 'Чужой источник', status: 'available' }] }),
     ]);
     const stages = projectTraceStages(state);
     const executorTarget = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
     const callTarget = resolveTraceInspectionTarget(state, 'llm_call:llm-1');
-    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Задача', 'Результат', 'Промпт', 'Доступ', 'Лимиты', 'RAW']);
+    expect(executorTarget?.tabs.map((item) => item.label)).toEqual(['Задача', 'Результат', 'Промпт', 'Доступ', 'Лимиты и расход', 'RAW']);
     if (executorTarget?.kind === 'executor') {
       expect(executorTarget.executor.access?.rows).toContainEqual({ kind: 'Агент', name: 'worker', allowed: true, reason: 'RBAC passed' });
       expect(executorTarget.executor.access?.rows).toContainEqual({ kind: 'Коллекция', name: 'docs', allowed: true, reason: 'Доступна выбранному агенту' });
+      expect(executorTarget.executor.accessSnapshot).toMatchObject({
+        entityType: 'agent',
+        agentDescription: 'Агент для работы с документами',
+        items: [{ kind: 'source', key: 'docs', description: 'Корпоративная база документов', status: 'unavailable', children: [{ kind: 'tool', key: 'search', description: 'Ищет документы по запросу', sourceLabel: 'Confluence', riskLevel: 'low' }] }],
+      });
     }
     expect(callTarget?.tabs.map((item) => item.label)).toEqual(['Инфо', 'Запрос', 'Ответ', 'RAW']);
     expect(stages[0].executorRuns[0].prompt?.text).toBe('prompt');
@@ -559,8 +826,9 @@ describe('projectTraceStages memory components', () => {
       event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-1', parent_entity_type: 'step', parent_entity_id: 'step-1', agent_slug: 'worker' }),
     ]);
     const target = resolveTraceInspectionTarget(state, 'agent_execution:agent-1');
-    expect(target?.tabs.map((item) => item.label)).toContain('Инфо');
+    expect(target?.tabs.map((item) => item.label)).toEqual(['Задача', 'RAW']);
     expect(target?.tabs.map((item) => item.label)).not.toContain('Доступ');
+    expect(target?.tabs.map((item) => item.label)).not.toContain('Готовность');
     expect(target?.kind).toBe('executor');
     if (target?.kind === 'executor') expect(target.executor.access).toBeUndefined();
   });
@@ -688,7 +956,7 @@ describe('projectTraceRun', () => {
       event(6, 'error', { entity_type: 'run', entity_id: 'run-1', safe_message: 'Недоступно', traceback: 'secret' }),
     ]);
     expect(projectTraceRun(state)).toMatchObject({
-      finalContent: '', status: 'error', error: 'Недоступно',
+      finalContent: '', status: 'error', error: 'Операция не выполнена.',
       pause: { kind: 'input', question: 'Уточните запрос' }, limits: { rows: [{ key: 'llm_calls', used: 1, label: 'Вызовы LLM' }] },
     });
   });
@@ -710,7 +978,7 @@ describe('projectTraceRun', () => {
     expect(projectTraceRun(state)).toMatchObject({
       status: 'failed',
       finalContent: 'Данные не получены, сводку составить не удалось.',
-      error: 'Не удалось применить повторный план',
+      error: 'Операция не выполнена.',
       attachments: [{ artifactId: 'artifact-1', fileName: 'report.txt' }],
     });
   });

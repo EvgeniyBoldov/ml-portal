@@ -10,12 +10,14 @@ interface MarkdownRendererProps {
   content: string;
   enableSyntaxHighlighting?: boolean;
   enableLineBreaks?: boolean;
+  allowImages?: boolean;
 }
 
 export default function MarkdownRenderer({
   content,
   enableSyntaxHighlighting = true,
   enableLineBreaks = true,
+  allowImages = true,
 }: MarkdownRendererProps) {
   const isSafeHref = (href?: string) => {
     if (!href) return false;
@@ -73,6 +75,10 @@ export default function MarkdownRenderer({
         urlTransform={(url) => (isSafeHref(url) ? url : '')}
         components={{
           code: renderCode,
+          img({ src, alt, ...props }) {
+            if (!allowImages) return <span>{alt || src || 'Изображение'}</span>;
+            return <img src={src} alt={alt ?? ''} loading="lazy" {...props} />;
+          },
           // Стилизация для параграфов
           p({ children, ...props }) {
             return (

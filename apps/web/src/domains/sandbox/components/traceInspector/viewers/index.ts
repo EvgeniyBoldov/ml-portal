@@ -1,4 +1,4 @@
-export { LimitsViewer, RbacViewer } from './AccessViewers';
+export { AccessSnapshotViewer, AgentLimitsViewer, LimitsViewer, RbacViewer } from './AccessViewers';
 export { ExecutorInfoViewer } from './ExecutorInfoViewer';
 export { CheckpointViewer } from './CheckpointViewer';
 export { PromptViewer } from './PromptViewer';

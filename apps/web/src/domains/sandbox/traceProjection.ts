@@ -1,8 +1,9 @@
 import type { RuntimeJournalEvent, SandboxTraceState, TraceEntity } from './traceState';
-import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, sanitizeDisplay, toolResult, type LlmOutcome, type ParsedContent } from './callInspection';
+import { callDisplayName, llmOutcome, llmResponseContent, llmResponseStatus, parseCallContent, purposeLabel, safeFailureMessage, sanitizeDisplay, toolResult, type LlmOutcome, type ParsedContent } from './callInspection';
 import type { CallErrorDetails, CallPresentationStatus } from './callPresentation';
 import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
+import { projectPlanHistory } from './planHistory';
 
 export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
 export type TraceStageKind = 'iteration' | 'route_policy' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
@@ -85,6 +86,18 @@ export interface TraceToolResult {
   data: unknown;
   summary: string;
   truncated: boolean;
+  resultId?: string;
+  delivery?: string;
+  storedDescriptor?: boolean;
+  inlineComplete?: boolean;
+  sourceComplete?: boolean;
+  sourceTotal?: number;
+  returnedCount?: number;
+  receivedCount?: number;
+  inlineDataAvailable?: boolean;
+  inlineData?: unknown;
+  queryComplete?: boolean;
+  failure?: ReturnType<typeof toolResult>['failure'];
 }
 
 export interface TraceCallResponse {
@@ -163,6 +176,25 @@ export interface TraceAccessView {
   defaultCollectionAllow?: boolean;
 }
 
+export interface TraceAccessItem {
+  kind: 'agent' | 'source' | 'tool';
+  key: string;
+  label: string;
+  status: 'available' | 'unavailable' | 'limited' | 'unknown';
+  reasonCode?: string;
+  reason?: string;
+  riskLevel?: string;
+  description?: string;
+  sourceLabel?: string;
+  children: TraceAccessItem[];
+}
+
+export interface TraceAccessSnapshot {
+  entityType: 'planner' | 'agent' | 'preflight';
+  agentDescription?: string;
+  items: TraceAccessItem[];
+}
+
 export interface TraceExecutorRun {
   entity: TraceEntity;
   /** Stable presentation key; differs from the stage key for synthesizer. */
@@ -186,6 +218,7 @@ export interface TraceExecutorRun {
   routePolicy?: TraceRoutePolicy;
   prompt?: TracePrompt;
   access?: TraceAccessView;
+  accessSnapshot?: TraceAccessSnapshot;
   limits?: TraceLimitsView;
   toolOverrides?: TraceToolOverrideSnapshot;
   /** Declared and effective continuation decision for a planner checkpoint. */
@@ -209,6 +242,8 @@ export interface TraceToolOverrideSnapshot {
   configuredSemantics: Record<string, unknown>;
   effectiveOperations: Array<{
     toolId: string;
+    operationSlug?: string;
+    operationName?: string;
     publicationConfigured?: boolean;
     publishedEffective?: boolean;
     configuredSemantics?: unknown;
@@ -231,7 +266,72 @@ export interface TraceExecutorResult {
   needs?: unknown;
   artifacts?: unknown;
   sources?: unknown;
+  /** Parsed task contract for ordinary agents; never contains the raw TaskResult envelope. */
+  agentResponse?: TraceAgentResponseView;
   operations: { total: number; succeeded: number; failed: number };
+}
+
+export type TraceAgentCompletion = 'fulfilled' | 'needs' | 'unfulfillable';
+export type TraceAgentOutcome = 'completed' | 'needs_dependency' | 'unfulfillable';
+
+export interface TraceAgentNeedView {
+  description: string;
+  kind?: 'data' | 'artifact' | 'decision';
+  required?: boolean;
+}
+
+export interface TraceAgentArtifactView {
+  artifactId: string;
+  fileName: string;
+  description?: string;
+  contentType?: string;
+  sizeBytes?: number;
+}
+
+export interface TraceAgentSourceView {
+  label: string;
+  href?: string;
+}
+
+export interface TraceAgentActionView {
+  label: string;
+  retrieval: boolean;
+  inlineComplete?: boolean;
+  sourceComplete?: boolean;
+  queryComplete?: boolean;
+}
+
+export interface TraceAgentDiagnosticView {
+  label: string;
+  count: number;
+  details?: string[];
+}
+
+export interface TraceAgentInteractionView {
+  kind: 'input' | 'confirmation';
+  question?: string;
+  message?: string;
+  responseTypeLabel?: string;
+  options: string[];
+}
+
+/** Human-safe typed projection of a TaskResult or explicitly owned legacy final. */
+export interface TraceAgentResponseView {
+  answer?: string;
+  failureMessage?: string;
+  hasStructuredData: boolean;
+  structuredData?: unknown;
+  completion?: TraceAgentCompletion;
+  outcome?: TraceAgentOutcome;
+  sufficientForPhase?: boolean;
+  missingInputs?: unknown;
+  needs: TraceAgentNeedView[];
+  limitation?: { message: string; actionLabel?: string };
+  artifacts: TraceAgentArtifactView[];
+  sources: TraceAgentSourceView[];
+  actions: TraceAgentActionView[];
+  diagnostics: TraceAgentDiagnosticView[];
+  interaction?: TraceAgentInteractionView;
 }
 
 export interface TracePrompt {
@@ -363,6 +463,8 @@ export interface TraceStage {
   task: string;
   /** Planner-owned plan for this revision only. */
   plan?: PlanViewModel;
+  /** Accumulated plan as of this iteration, reconstructed from the journal. */
+  fullPlan?: PlanViewModel;
   /** All canonical steps in this planner iteration, in execution order. */
   steps: TraceStep[];
   executorRuns: TraceExecutorRun[];
@@ -444,11 +546,14 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined => (
     ? value as Record<string, unknown>
     : undefined
 );
+const hasDisplayContent = (value: unknown): boolean => value !== undefined && value !== null && value !== ''
+  && !(Array.isArray(value) && value.length === 0)
+  && !(asRecord(value) && Object.keys(asRecord(value) ?? {}).length === 0);
 const limitLabels: Record<string, string> = {
   agent_steps: 'Шаги агента', iterations: 'Итерации',
   task_attempts: 'Попытки задач', agent_runs: 'Запуски агентов', llm_calls: 'Вызовы LLM',
   tool_calls: 'Вызовы инструментов', tokens_in: 'Входные токены', tokens_out: 'Выходные токены',
-  tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Время выполнения',
+  tokens_total: 'Всего токенов', retries: 'Повторы', wall_time_ms: 'Учтено бюджетом',
   retries_llm_transport: 'Повторы LLM', retries_invalid_tool: 'Повторы проверки инструмента',
 };
 const limitLabel = (key: string): string => limitLabels[key] ?? key.replace(/_/g, ' ');
@@ -579,6 +684,8 @@ const stepKindFor = (stage: TraceStageKind, executor?: TraceExecutorRun): TraceS
   return executor?.kind === 'planner' ? 'planner_decision' : 'task_execution';
 };
 const tab = (id: TraceInspectorTabId, label: string): TraceInspectorTab => ({ id, label });
+const hasInspectorData = (value: unknown): boolean => value !== undefined && value !== null
+  && !(typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0);
 const hasResult = (result: TraceExecutorResult): boolean => (
   (result.status !== 'unknown' && result.status !== 'running')
   || result.output !== undefined
@@ -589,28 +696,39 @@ const hasResult = (result: TraceExecutorResult): boolean => (
 );
 const executorSnapshotTabs = (executor: TraceExecutorRun): TraceInspectorTab[] => [
   ...(executor.prompt ? [tab('prompt', 'Промпт')] : []),
-  ...(executor.access ? [tab('rbac', 'Доступ')] : []),
-  ...(executor.limits ? [tab('limits', 'Лимиты')] : []),
+  ...(executor.access || executor.accessSnapshot || executor.kind === 'preflight' && executor.preflight ? [tab('rbac', 'Доступ')] : []),
+  ...(executor.limits || isOrdinaryAgentExecutor(executor) && executor.info.statistics.some((item) => item.key === 'tokens_in' || item.key === 'tokens_out' || item.key === 'tokens_total')
+    ? [tab('limits', isOrdinaryAgentExecutor(executor) ? 'Лимиты и расход' : 'Лимиты')] : []),
   ...(executor.toolOverrides ? [tab('operations', 'Операции')] : []),
   tab('raw', 'RAW'),
 ];
 const callHasError = (call: TraceCall): boolean => (
   call.kind === 'error'
   || (call.kind === 'llm' && call.response !== undefined && llmResponseStatus(call.response.payload) === 'error')
-  || (call.kind === 'tool' && toolResult(call.response?.payload ?? {}).success === false)
+  || (call.kind === 'tool' && (toolResult(call.response?.payload ?? {}).success === false || toolResult(call.response?.payload ?? {}).failure !== undefined))
 );
 const isDocumentMemoryExecutor = (executor: TraceExecutorRun): boolean => executor.executorSlug === 'document_memory_extractor';
 const isDocumentMemoryStage = (stage: TraceStage): boolean => stage.executorRuns.some(isDocumentMemoryExecutor);
+const isOrdinaryAgentExecutor = (executor: TraceExecutorRun): boolean => (
+  executor.kind === 'agent'
+  && !['document_memory_extractor', 'checkpoint'].includes(executor.executorSlug)
+);
 export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
   if (target.kind === 'stage' && target.stage.kind === 'route_policy') return [tab('info', 'Инфо'), tab('route_policy', 'Рекомендация'), tab('raw', 'RAW')];
   if (target.kind === 'stage' && isDocumentMemoryStage(target.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
   if (target.kind === 'step' && isDocumentMemoryStage(target.step.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
   if (target.kind === 'stage') return [tab('info', 'Инфо'), ...(target.stage.plan ? [tab('plan', 'План')] : []), ...(target.stage.executorRuns.some((item) => hasResult(item.result)) ? [tab('result', 'Результат')] : []), ...(target.stage.failure ? [tab('error', 'Ошибка')] : []), tab('raw', 'RAW')];
-  if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), ...(target.step.executorRuns.some((item) => hasResult(item.result)) ? [tab('result', 'Результат')] : []), tab('raw', 'RAW')];
+  if (target.kind === 'step') return [tab('info', 'Инфо'), tab('task', 'Задача'), ...(target.step.kind === 'planner_decision' && target.step.stage.fullPlan ? [tab('plan', 'План')] : []), ...(target.step.executorRuns.some((item) => hasResult(item.result)) ? [tab('result', 'Результат')] : []), tab('raw', 'RAW')];
   if (target.kind === 'executor') {
     if (target.executor.kind === 'route_policy') return [tab('info', 'Инфо'), tab('route_policy', 'Рекомендация'), tab('raw', 'RAW')];
     if (isDocumentMemoryExecutor(target.executor)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
     if (target.executor.executorSlug === 'checkpoint') return [tab('info', 'Инфо'), tab('checkpoint', 'Решение'), tab('raw', 'RAW')];
+    if (isOrdinaryAgentExecutor(target.executor)) return [
+      tab('task', 'Задача'),
+      ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : []),
+      ...(target.executor.memoryContext ? [tab('memory', 'Память')] : []),
+      ...executorSnapshotTabs(target.executor),
+    ];
     const primary = target.executor.kind === 'planner'
       ? target.stage.plan ? [tab('plan', 'План')] : (hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])
       : target.executor.kind === 'preflight' ? [tab('result', 'Маршрут')]
@@ -620,7 +738,7 @@ export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[
               : target.executor.kind === 'fact_compactor' ? [tab('task', 'Задача'), ...(target.executor.memoryResult ? [tab('facts', 'Решения')] : []), ...(target.executor.memoryResult?.decisions.some((item) => item.outcome === 'published') ? [tab('published', 'Опубликовано')] : [])]
               : [tab('task', 'Задача'), ...(hasResult(target.executor.result) ? [tab('result', 'Результат')] : [])];
     return [tab('info', 'Инфо'), ...primary,
-      ...(target.executor.kind === 'planner' && target.executor.input ? [tab('input', 'Вход')] : []),
+      ...(target.executor.kind === 'planner' && hasInspectorData(target.executor.input) ? [tab('input', 'Вход')] : []),
       ...(target.executor.memoryContext ? [tab('memory', 'Память')] : []), ...executorSnapshotTabs(target.executor)];
   }
   if (target.kind === 'error') return [tab('info', 'Инфо'), tab('error', 'Ошибка'), tab('raw', 'RAW')];
@@ -858,16 +976,62 @@ function latestPayload(events: RuntimeJournalEvent[], eventType: string): Record
   return [...events].reverse().find((event) => event.event_type === eventType)?.payload;
 }
 
+function accessSnapshotItem(value: unknown): TraceAccessItem | undefined {
+  const item = asRecord(value);
+  if (!item) return undefined;
+  const kind = item.kind;
+  const status = item.status;
+  if ((kind !== 'agent' && kind !== 'source' && kind !== 'tool')
+    || (status !== 'available' && status !== 'unavailable' && status !== 'limited' && status !== 'unknown')) return undefined;
+  return {
+    kind,
+    key: asString(item.key) || asString(item.label) || kind,
+    label: asString(item.label) || asString(item.key) || 'Без названия',
+    status,
+    reasonCode: asString(item.reason_code) || undefined,
+    reason: asString(item.reason) || undefined,
+    riskLevel: asString(item.risk_level) || undefined,
+    description: asString(item.description) || undefined,
+    sourceLabel: asString(item.source_label) || undefined,
+    children: Array.isArray(item.children)
+      ? item.children.map(accessSnapshotItem).filter((child): child is TraceAccessItem => Boolean(child))
+      : [],
+  };
+}
+
+function accessSnapshotFor(
+  state: SandboxTraceState,
+  owner: TraceEntity,
+  expectedType: TraceAccessSnapshot['entityType'],
+): TraceAccessSnapshot | undefined {
+  const ownerAndChildEvents = [owner, ...owner.childKeys
+    .map((key) => state.entitiesByKey[key])
+    .filter((child): child is TraceEntity => Boolean(child) && child.parentKey === owner.key)]
+    .flatMap((entity) => eventsFor(state, entity));
+  const payload = latestPayload(ownerAndChildEvents.filter((event) => (
+    event.event_type === 'access_snapshot'
+    && event.payload.entity_type === expectedType
+    && (event.parent_entity_type ?? asString(event.payload.parent_entity_type)) === owner.type
+    && (event.parent_entity_id ?? asString(event.payload.parent_entity_id)) === owner.id
+  )), 'access_snapshot');
+  if (!payload) return undefined;
+  const entityType = payload.entity_type;
+  if ((entityType !== 'planner' && entityType !== 'agent' && entityType !== 'preflight') || entityType !== expectedType) return undefined;
+  return {
+    entityType,
+    agentDescription: asString(payload.agent_description) || undefined,
+    items: Array.isArray(payload.items)
+      ? payload.items.map(accessSnapshotItem).filter((item): item is TraceAccessItem => Boolean(item))
+      : [],
+  };
+}
+
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.length > 0) : [];
 }
 
-function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePreflight | undefined {
-  const entity = executor.childKeys
-    .map((key) => state.entitiesByKey[key])
-    .find((child): child is TraceEntity => Boolean(child) && child.type === 'preflight');
-  if (!entity) return undefined;
-  const events = eventsFor(state, entity);
+function preflightFromEvents(events: RuntimeJournalEvent[], defaultStatus: string): TracePreflight | undefined {
+  if (!events.some((event) => ['preflight_completed', 'preflight_failed', 'preflight_snapshot', 'preflight_started'].includes(event.event_type))) return undefined;
   const payload = latestPayload(events, 'preflight_completed')
     ?? latestPayload(events, 'preflight_failed')
     ?? latestPayload(events, 'preflight_snapshot')
@@ -875,7 +1039,7 @@ function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePre
     ?? {};
   const missing = asRecord(payload.missing) ?? {};
   return {
-    status: asString(payload.status) || entity.status || 'unknown',
+    status: asString(payload.status) || defaultStatus || 'unknown',
     mode: asString(payload.mode) || undefined,
     durationMs: asNumber(payload.duration_ms),
     missing: {
@@ -887,6 +1051,13 @@ function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePre
     dataInstancesCount: asNumber(payload.data_instances_count),
     // Access decisions have their own inspector tab; do not repeat them in validation.
   };
+}
+
+function preflightFor(state: SandboxTraceState, executor: TraceEntity): TracePreflight | undefined {
+  const entity = executor.childKeys
+    .map((key) => state.entitiesByKey[key])
+    .find((child): child is TraceEntity => Boolean(child) && child.type === 'preflight');
+  return entity ? preflightFromEvents(eventsFor(state, entity), entity.status) : undefined;
 }
 
 function routeFor(calls: TraceCall[], ownerEvents: RuntimeJournalEvent[] = []): TraceRoute | undefined {
@@ -968,6 +1139,8 @@ function toolOverridesFor(events: RuntimeJournalEvent[]): TraceToolOverrideSnaps
       const toolId = asString(row.discovered_tool_id);
       return toolId ? [{
         toolId,
+        operationSlug: asString(row.operation_slug) || undefined,
+        operationName: asString(row.operation_name) || undefined,
         publicationConfigured: typeof row.publication_configured === 'boolean' ? row.publication_configured : undefined,
         publishedEffective: typeof row.published_effective === 'boolean' ? row.published_effective : undefined,
         configuredSemantics: row.configured,
@@ -1094,13 +1267,19 @@ function messageTranscript(messages: Array<{ role: string; content: ParsedConten
   }).join('\n\n');
 }
 
-function toolResultSummary(success: boolean | undefined, data: unknown): string {
+function toolResultSummary(success: boolean | undefined, data: unknown, returnedCount?: number, sourceTotal?: number, storedDescriptor = false): string {
   const record = asRecord(data) ?? {};
-  const total = asNumber(record.total) ?? asNumber(record.count);
-  if (total !== undefined) return `Получено: ${total}`;
-  if (Array.isArray(data)) return `Получено элементов: ${data.length}`;
-  if (Object.keys(record).length) return `Получено полей: ${Object.keys(record).length}`;
-  return success === false ? 'Операция завершилась ошибкой' : 'Операция выполнена';
+  const total = sourceTotal ?? asNumber(record.total) ?? asNumber(record.count);
+  if (storedDescriptor) {
+    const rowCount = returnedCount ?? asNumber(record.row_count);
+    return rowCount !== undefined ? `Результат сохранён отдельно · строк в результате: ${new Intl.NumberFormat('ru-RU').format(rowCount)}` : 'Результат сохранён отдельно';
+  }
+  if (returnedCount !== undefined && total !== undefined) return `Получено строк: ${returnedCount} из ${total}`;
+  if (returnedCount !== undefined) return `Получено строк: ${returnedCount}`;
+  if (total !== undefined) return `Всего в источнике: ${total}`;
+  if (Array.isArray(data)) return data.length ? `В ответе: ${data.length} элементов` : 'Ответ пустой';
+  if (Object.keys(record).length) return 'Получены данные';
+  return success === false ? 'Операция не выполнена' : success === true ? 'Операция выполнена без данных' : 'Результат не подтверждён';
 }
 
 function responseViewFor(
@@ -1123,8 +1302,18 @@ function responseViewFor(
         success: result.success,
         message: result.message,
         data: sanitizeDisplay(result.data),
-        summary: toolResultSummary(result.success, result.data),
-        truncated: payload.truncated === true,
+        summary: toolResultSummary(result.success, result.data, result.returnedCount, result.sourceTotal, result.storedDescriptor),
+        truncated: result.truncated,
+        resultId: result.resultId,
+        delivery: result.delivery,
+        storedDescriptor: result.storedDescriptor,
+        inlineComplete: result.inlineComplete,
+        sourceComplete: result.sourceComplete,
+        sourceTotal: result.sourceTotal,
+        returnedCount: result.returnedCount,
+        receivedCount: result.receivedCount,
+        queryComplete: result.queryComplete,
+        failure: result.failure,
       };
     })()
     : undefined;
@@ -1144,6 +1333,34 @@ function responseViewFor(
     })),
     toolResult: toolResultView,
   };
+}
+
+/** Find the complete tool reply recorded in a later request from the same owner. */
+function recordedInlineToolData(state: SandboxTraceState, response: RuntimeJournalEvent): { found: boolean; data?: unknown } {
+  if (toolResult(response.payload).inlineComplete !== true) return { found: false };
+  const callId = asString(response.payload.call_id) || asString(response.entity_id);
+  const owner = response.parent_entity_id ?? response.payload.parent_entity_id;
+  const ownerType = response.parent_entity_type ?? response.payload.parent_entity_type;
+  if (!callId || !owner || !ownerType) return { found: false };
+  for (const id of state.eventIdsBySequence) {
+    const event = state.eventsById[id];
+    if (!event || event.sequence <= response.sequence || event.event_type !== 'llm_request'
+      || (event.parent_entity_id ?? event.payload.parent_entity_id) !== owner
+      || (event.parent_entity_type ?? event.payload.parent_entity_type) !== ownerType) continue;
+    const messages = Array.isArray(event.payload.messages) ? event.payload.messages : [];
+    for (const value of messages) {
+      const message = asRecord(value);
+      if (!message || message.role !== 'tool' || message.tool_call_id !== callId) continue;
+      const parsed = parseCallContent(message.content);
+      const content = asRecord(parsed.data);
+      const meta = asRecord(content?._runtime_result);
+      if (!content || meta?.inline_complete !== true || meta.delivery !== 'inline') continue;
+      for (const key of ['rows', 'data', 'value']) {
+        if (Object.prototype.hasOwnProperty.call(content, key)) return { found: true, data: sanitizeDisplay(content[key]) };
+      }
+    }
+  }
+  return { found: false };
 }
 
 function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | null {
@@ -1224,7 +1441,7 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
       : isTool
         ? callDisplayName(asString(request.payload.tool) || 'Tool')
         : isError
-          ? asString(request.payload.error) || asString(request.payload.message) || 'Ошибка'
+          ? safeFailureMessage(request.payload.category ?? request.payload.error_type, request.payload.error_code ?? request.payload.code)
           : asString(request.payload.question)
             || asString(request.payload.message)
             || asString(request.payload.summary)
@@ -1258,6 +1475,13 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
   };
   call.requestView = requestViewFor(call.kind, request.payload);
   call.responseView = responseViewFor(call.kind, response, linkedToolCalls);
+  if (isTool && response && call.responseView?.toolResult) {
+    const inline = recordedInlineToolData(state, response);
+    if (inline.found) {
+      call.responseView.toolResult.inlineDataAvailable = true;
+      call.responseView.toolResult.inlineData = inline.data;
+    }
+  }
   call.errorView = presentation.error;
   return call;
 }
@@ -1375,12 +1599,314 @@ function resultOutputFrom(payload: Record<string, unknown>): unknown {
   return undefined;
 }
 
+const agentCompletionValues = new Set<TraceAgentCompletion>(['fulfilled', 'needs', 'unfulfillable']);
+const agentOutcomeValues = new Set<TraceAgentOutcome>(['completed', 'needs_dependency', 'unfulfillable']);
+
+type AgentResponseSource = 'task_result' | 'declaration';
+
+function normalizedStructuredData(
+  value: Record<string, unknown>,
+  source: AgentResponseSource,
+): { hasValue: boolean; value?: unknown } {
+  const outputs = asRecord(value.outputs);
+  const hasDirectField = Object.prototype.hasOwnProperty.call(value, 'structured_response');
+  const direct = value.structured_response;
+  if (direct !== undefined && direct !== null) return { hasValue: true, value: direct };
+  if (outputs && Object.keys(outputs).length) {
+    if (direct === null && Object.prototype.hasOwnProperty.call(outputs, 'structured_response')) {
+      return { hasValue: true, value: outputs.structured_response };
+    }
+    const entries = Object.entries(outputs);
+    const slots = entries.map(([, raw]) => asRecord(raw));
+    const isLegacySlotMap = slots.every((slot) => slot !== undefined
+      && (slot.kind === 'value' || slot.kind === 'evidence' || slot.kind === 'artifact'));
+    if (isLegacySlotMap) {
+      const valueSlots = Object.fromEntries(entries.flatMap(([key], index) => {
+        const slot = slots[index];
+        return slot?.kind === 'value' && Object.prototype.hasOwnProperty.call(slot, 'value')
+        ? [[key, slot.value]]
+        : [];
+    }));
+      return Object.keys(valueSlots).length ? { hasValue: true, value: valueSlots } : { hasValue: false };
+    }
+    // In a TaskResult, outputs is a compatibility projection of structured data.
+    // In a legacy declaration, plain outputs are still accepted as domain data.
+    if (source === 'declaration' || !hasDirectField) return { hasValue: true, value: outputs };
+  }
+  // TaskResult serializes its default null even when the agent omitted this field;
+  // a declaration preserves explicit null through model field presence.
+  if (hasDirectField && direct === null) return source === 'declaration'
+    ? { hasValue: true, value: null }
+    : { hasValue: false };
+  return { hasValue: false };
+}
+
+const safeActionLabel = (value: unknown): string | undefined => {
+  const action = asString(value);
+  return ({
+    reconfigure_credentials: 'Проверить учётные данные',
+    grant_access: 'Запросить доступ',
+    provide_input: 'Добавить недостающие данные',
+    retry_later: 'Повторить позже',
+    none: undefined,
+  } as Record<string, string | undefined>)[action];
+};
+
+function agentSourceViews(value: unknown): TraceAgentSourceView[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((raw): TraceAgentSourceView[] => {
+    const source = asRecord(raw);
+    if (!source) return [];
+    const candidateUrl = asString(source.url) || asString(source.uri);
+    let href: string | undefined;
+    let urlLabel: string | undefined;
+    if (candidateUrl) {
+      try {
+        const parsed = new URL(candidateUrl);
+        if ((parsed.protocol === 'https:' || parsed.protocol === 'http:') && !parsed.username && !parsed.password) {
+          href = parsed.href;
+          urlLabel = parsed.hostname;
+        }
+      } catch {
+        // Non-absolute or unknown source references remain plain, non-clickable data.
+      }
+    }
+    const label = asString(source.title) || asString(source.label) || asString(source.name) || urlLabel;
+    return label ? [{ label, ...(href ? { href } : {}) }] : [];
+  });
+}
+
+function agentDiagnosticViews(value: unknown): TraceAgentDiagnosticView[] {
+  if (!Array.isArray(value) || !value.length) return [];
+  const knownLabels: Record<string, string> = {
+    schema_deviation: 'Данные отличаются от рекомендованного формата',
+    advisory_schema_invalid: 'Не удалось проверить рекомендованный формат',
+  };
+  const knownDetails: Record<string, string> = {
+    schema_deviation: 'Некоторые поля не совпали с рекомендуемым описанием. Полученные значения сохранены в результате.',
+    advisory_schema_invalid: 'Рекомендуемую схему не удалось проверить. Просмотрите сохранённый результат ниже.',
+  };
+  const counts = new Map<string, { count: number; detail?: string }>();
+  for (const raw of value) {
+    const code = asString(asRecord(raw)?.code);
+    const label = knownLabels[code] ?? 'Есть технические замечания к результату';
+    const current = counts.get(label);
+    counts.set(label, { count: (current?.count ?? 0) + 1, detail: knownDetails[code] ?? current?.detail });
+  }
+  return [...counts].map(([label, value]) => ({ label, count: value.count, ...(value.detail ? { details: [value.detail] } : {}) }));
+}
+
+function agentResponseFrom(
+  taskResult: Record<string, unknown>,
+  lifecycle: Record<string, unknown>,
+  calls: TraceCall[],
+  source: AgentResponseSource,
+  failureMessage?: string,
+): TraceAgentResponseView {
+  const structured = normalizedStructuredData(taskResult, source);
+  const completionValue = asString(taskResult.completion);
+  const outcomeValue = asString(taskResult.outcome);
+  const needs = Array.isArray(taskResult.needs) ? taskResult.needs.flatMap((raw): TraceAgentNeedView[] => {
+    const need = asRecord(raw);
+    if (!need) return [];
+    const kind = asString(need.kind);
+    const description = asString(need.description)
+      || ({ data: 'Нужны данные', artifact: 'Нужен файл', decision: 'Нужно решение' } as Record<string, string>)[kind];
+    if (!description) return [];
+    return [{
+      description,
+      ...(kind === 'data' || kind === 'artifact' || kind === 'decision' ? { kind } : {}),
+      ...(typeof need.required === 'boolean' ? { required: need.required } : {}),
+    }];
+  }) : [];
+  const seenArtifactIds = new Set<string>();
+  const attachments = Array.isArray(taskResult.attachments) ? taskResult.attachments.flatMap((raw): TraceAgentArtifactView[] => {
+    const attachment = asRecord(raw);
+    const artifactId = asString(attachment?.artifact_id);
+    const fileName = asString(attachment?.file_name) || asString(attachment?.filename);
+    if (!artifactId || !fileName || attachment?.deleted === true || seenArtifactIds.has(artifactId)) return [];
+    seenArtifactIds.add(artifactId);
+    return [{
+      artifactId,
+      fileName,
+      ...(asString(attachment?.description) ? { description: asString(attachment?.description) } : {}),
+      ...(asString(attachment?.content_type) ? { contentType: asString(attachment?.content_type) } : {}),
+      ...(asNumber(attachment?.size_bytes) !== undefined ? { sizeBytes: asNumber(attachment?.size_bytes) } : {}),
+    }];
+  }) : [];
+  const verified = asRecord(taskResult.verified);
+  const receipts = Array.isArray(verified?.receipts) ? verified.receipts : [];
+  const agentOperationLabel = (operation: string): string => ({
+    netbox_get_objects: 'Получение объектов NetBox',
+    'result.sql': 'Анализ сохранённых данных',
+    'result.analyze': 'Анализ сохранённых данных',
+  } as Record<string, string>)[operation.toLowerCase()] || callDisplayName(operation);
+  const actions = receipts.flatMap((raw): TraceAgentActionView[] => {
+    const receipt = asRecord(raw);
+    if (receipt?.success !== true) return [];
+    const operation = asString(receipt.canonical_operation) || asString(receipt.operation);
+    if (!operation) return [];
+    const analysis = asRecord(receipt.analysis);
+    return [{
+      label: agentOperationLabel(operation),
+      retrieval: receipt.retrieval === true,
+      ...(typeof receipt.inline_complete === 'boolean' ? { inlineComplete: receipt.inline_complete } : {}),
+      ...(typeof receipt.source_complete === 'boolean' ? { sourceComplete: receipt.source_complete } : {}),
+      ...(typeof analysis?.query_complete === 'boolean' ? { queryComplete: analysis.query_complete } : {}),
+    }];
+  });
+  const limitation = asRecord(taskResult.limitation);
+  const reasonLabels: Record<string, string> = {
+    required_artifact_missing: 'Не создан обязательный файл',
+  };
+  const limitationCode = asString(limitation?.code) || asString(taskResult.reason_code);
+  const limitationMessage = reasonLabels[limitationCode] || asString(limitation?.message);
+  const interaction = [...calls].reverse().find((call) => (
+    (call.kind === 'clarify' || call.kind === 'confirm') && !call.response
+  ));
+  const declarationInteraction = asRecord(taskResult.interaction);
+  const interactionQuestion = interaction?.requestView.question || asString(declarationInteraction?.question) || undefined;
+  const interactionMessage = interaction?.requestView.message;
+  const interactionResponseType = asString(interaction?.request.payload.response_type)
+    || asString(declarationInteraction?.response_type);
+  const interactionOptions = Array.isArray(interaction?.request.payload.options)
+    ? interaction.request.payload.options.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+    : Array.isArray(declarationInteraction?.options)
+      ? declarationInteraction.options.filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
+      : [];
+  const missingInputs = lifecycle.missing_inputs ?? taskResult.missing_inputs;
+  const completion = agentCompletionValues.has(completionValue as TraceAgentCompletion)
+    ? completionValue as TraceAgentCompletion : undefined;
+  const outcome = agentOutcomeValues.has(outcomeValue as TraceAgentOutcome)
+    ? outcomeValue as TraceAgentOutcome : undefined;
+  const answerValue = asString(taskResult.answer);
+  const description = asString(taskResult.description);
+  const enumValues = new Set(['fulfilled', 'needs', 'unfulfillable', 'interaction']);
+  const answer = answerValue || (description && !enumValues.has(description.toLowerCase()) ? description : undefined);
+  return {
+    ...(answer ? { answer } : {}),
+    ...(failureMessage ? { failureMessage } : {}),
+    hasStructuredData: structured.hasValue,
+    ...(structured.hasValue ? { structuredData: structured.value } : {}),
+    ...(completion ? { completion } : {}),
+    ...(outcome ? { outcome } : {}),
+    ...(typeof lifecycle.sufficient_for_phase === 'boolean' ? { sufficientForPhase: lifecycle.sufficient_for_phase } : {}),
+    ...(hasDisplayContent(missingInputs)
+      ? { missingInputs } : {}),
+    needs,
+    ...(limitationMessage ? {
+      limitation: {
+        message: limitationMessage,
+        ...(safeActionLabel(limitation?.action) ? { actionLabel: safeActionLabel(limitation?.action) } : {}),
+      },
+    } : {}),
+    artifacts: attachments,
+    sources: agentSourceViews(taskResult.sources),
+    actions,
+    diagnostics: agentDiagnosticViews(taskResult.diagnostics),
+    ...(interaction || interactionQuestion || interactionMessage || interactionResponseType || interactionOptions.length ? {
+      interaction: {
+        kind: interaction?.kind === 'confirm' || interactionResponseType === 'boolean' ? 'confirmation' : 'input',
+        ...(interactionQuestion ? { question: interactionQuestion } : {}),
+        ...(interactionMessage ? { message: interactionMessage } : {}),
+        ...(interactionResponseType === 'boolean' || interaction?.kind === 'confirm' ? { responseTypeLabel: 'Ответ «да» или «нет»' }
+          : interactionResponseType === 'text' ? { responseTypeLabel: 'Текстовый ответ' } : {}),
+        options: interactionOptions,
+      },
+    } : {}),
+  };
+}
+
+function legacyAgentEndResult(lifecycle: Record<string, unknown>): { value: Record<string, unknown>; source: AgentResponseSource } | undefined {
+  const value: Record<string, unknown> = {};
+  const summary = asString(lifecycle.summary) || asString(lifecycle.message);
+  if (summary) value.answer = summary;
+  if (Object.prototype.hasOwnProperty.call(lifecycle, 'output')) value.structured_response = lifecycle.output;
+  const completion = asString(lifecycle.completion);
+  if (agentCompletionValues.has(completion as TraceAgentCompletion)) value.completion = completion;
+  const outcome = asString(lifecycle.outcome);
+  if (agentOutcomeValues.has(outcome as TraceAgentOutcome)) value.outcome = outcome;
+  for (const key of ['needs', 'limitation', 'sources', 'diagnostics', 'verified']) {
+    if (lifecycle[key] !== undefined) value[key] = lifecycle[key];
+  }
+  if (lifecycle.attachments !== undefined) value.attachments = lifecycle.attachments;
+  else if (lifecycle.artifacts !== undefined) value.attachments = lifecycle.artifacts;
+  return Object.keys(value).length ? { value, source: 'declaration' } : undefined;
+}
+
+function ownedLegacyAgentFinal(state: SandboxTraceState, entity: TraceEntity): Record<string, unknown> | undefined {
+  return state.eventIdsBySequence
+    .map((id) => state.eventsById[id])
+    .filter((event): event is RuntimeJournalEvent => Boolean(event))
+    .reverse()
+    .find((event) => event.event_type === 'final' && (
+      (event.parent_entity_type === entity.type && event.parent_entity_id === entity.id)
+      || (event.entity_type === entity.type && event.entity_id === entity.id)
+      || (asString(event.payload.parent_entity_type) === entity.type && asString(event.payload.parent_entity_id) === entity.id)
+    ))?.payload;
+}
+
+function isLegacyCompletionEnvelope(value: Record<string, unknown>): boolean {
+  const allowedFields = new Set([
+    'completion', 'answer', 'report', 'interaction', 'structured_response',
+    'needs', 'outputs', 'coverage', 'limitation',
+  ]);
+  if (!agentCompletionValues.has(asString(value.completion) as TraceAgentCompletion)
+    || Object.keys(value).some((key) => !allowedFields.has(key))) return false;
+  if (value.answer !== undefined && value.answer !== null && typeof value.answer !== 'string') return false;
+  if (value.report !== undefined && typeof value.report !== 'string') return false;
+  if (value.needs !== undefined && !Array.isArray(value.needs)) return false;
+  if (value.outputs !== undefined && !asRecord(value.outputs)) return false;
+  if (value.coverage !== undefined && !Array.isArray(value.coverage)) return false;
+  if (value.interaction !== undefined && value.interaction !== null && !asRecord(value.interaction)) return false;
+  if (value.limitation !== undefined && value.limitation !== null && !asRecord(value.limitation)) return false;
+  return true;
+}
+
+function legacyFinalResult(payload: Record<string, unknown> | undefined): { value: Record<string, unknown>; source: AgentResponseSource } | undefined {
+  if (!payload) return undefined;
+  const content = payload.content;
+  if (typeof content !== 'string') {
+    if (content === undefined) return undefined;
+    return {
+      value: { structured_response: content, ...(payload.sources !== undefined ? { sources: payload.sources } : {}) },
+      source: 'declaration',
+    };
+  }
+  const parsed = parseCallContent(content);
+  const record = asRecord(parsed.data);
+  if (record && isLegacyCompletionEnvelope(record)) {
+    const adapted = { ...record };
+    if (adapted.answer === undefined && typeof adapted.report === 'string') adapted.answer = adapted.report;
+    if (adapted.sources === undefined && payload.sources !== undefined) adapted.sources = payload.sources;
+    return { value: adapted, source: 'declaration' };
+  }
+  if (parsed.kind === 'json' && parsed.data !== undefined) {
+    return {
+      value: {
+        structured_response: parsed.data,
+        ...(payload.sources !== undefined ? { sources: payload.sources } : {}),
+      },
+      source: 'declaration',
+    };
+  }
+  return content.trim() ? {
+    value: { answer: content, ...(payload.sources !== undefined ? { sources: payload.sources } : {}) },
+    source: 'declaration',
+  } : undefined;
+}
+
 function resultMessageFrom(payload: Record<string, unknown>): string | undefined {
   for (const key of ['user_message', 'safe_message', 'operator_message', 'message', 'error']) {
     const value = asString(payload[key]);
     if (value) return value;
   }
   return undefined;
+}
+
+function safeAgentFailureMessage(payload: Record<string, unknown>): string {
+  return asString(payload.safe_message) || asString(payload.user_message)
+    || safeFailureMessage(payload.category ?? payload.error_type, payload.error_code ?? payload.code);
 }
 
 function documentMemoryResult(events: RuntimeJournalEvent[]): Record<string, unknown> | undefined {
@@ -1411,6 +1937,10 @@ function executorResultFor(
   const executorEvents = eventsFor(state, entity);
   const ended = [...executorEvents].reverse().find((event) => event.event_type === 'agent_end');
   const isSynthesizer = executorSlug === 'synthesizer';
+  const isOrdinaryAgent = executorKindFor(executorSlug) === 'agent'
+    && !['document_memory_extractor', 'checkpoint'].includes(executorSlug);
+  const legacyAgentFinal = isOrdinaryAgent ? ownedLegacyAgentFinal(state, entity) : undefined;
+  const legacyAgentResponse = isOrdinaryAgent ? legacyFinalResult(legacyAgentFinal) : undefined;
   const final = isSynthesizer
     ? [...executorEvents].reverse().find((event) => event.event_type === 'final_answer_marker' || (event.event_type === 'status' && event.payload.stage === 'final_answer_marker'))
       ?? state.eventIdsBySequence
@@ -1428,9 +1958,26 @@ function executorResultFor(
       || (event.parent_entity_type === entity.type && event.parent_entity_id === entity.id)
     ));
   const endPayload = asRecord(ended?.payload) ?? {};
-  const finalPayload = asRecord(final?.payload) ?? {};
+  const finalPayload = asRecord(final?.payload) ?? legacyAgentFinal ?? {};
   const errorPayload = asRecord(error?.payload) ?? {};
-  const terminalResult = asRecord(endPayload.result) ?? {};
+  const terminalResultRecord = asRecord(endPayload.result);
+  const terminalResult = terminalResultRecord ?? {};
+  const legacyEndResponse = isOrdinaryAgent && !terminalResultRecord && !legacyAgentResponse
+    ? legacyAgentEndResult(endPayload)
+    : undefined;
+  const agentTaskResult = isOrdinaryAgent
+    ? terminalResultRecord ? { value: terminalResult, source: 'task_result' as const }
+      : legacyAgentResponse ?? legacyEndResponse ?? { value: {}, source: 'task_result' as const }
+    : undefined;
+  const agentResponse = agentTaskResult
+    ? agentResponseFrom(
+      agentTaskResult.value,
+      endPayload,
+      calls,
+      agentTaskResult.source,
+      error ? safeAgentFailureMessage(errorPayload) : undefined,
+    )
+    : undefined;
   const memoryOutput = executorSlug === 'document_memory_extractor'
     ? documentMemoryResult(executorEvents)
     : undefined;
@@ -1441,6 +1988,9 @@ function executorResultFor(
   const declaration = parsedFinal && ['fulfilled', 'needs', 'unfulfillable'].includes(asString(parsedFinal.completion))
     ? parsedFinal : undefined;
   let output = memoryOutput ?? resultOutputFrom(resultPayload);
+  if (agentResponse) {
+    output = agentResponse.hasStructuredData ? agentResponse.structuredData : agentResponse.answer;
+  }
   if (memoryOutput === undefined && declaration) {
     output = declaration.structured_response !== undefined && declaration.structured_response !== null
       ? declaration.structured_response : declaration.answer ?? declaration.structured_response;
@@ -1450,22 +2000,41 @@ function executorResultFor(
   const failed = toolCalls.filter((call) => toolResult(call.response?.payload ?? {}).success === false).length;
   const outcome = resultPayload.outcome ?? resultPayload.completion;
   const lifecycleStatus = asString(resultPayload.status).toLowerCase();
+  const agentStatusClaim = isOrdinaryAgent
+    ? (() => {
+        const agentOutcome = asString(resultPayload.outcome).toLowerCase();
+        if (agentOutcome === 'completed' || agentOutcome === 'fulfilled') return 'completed';
+        if (agentOutcome === 'needs_dependency' || agentOutcome === 'needs' || agentOutcome === 'interaction') return 'waiting';
+        if (agentOutcome === 'unfulfillable') return 'unfulfillable';
+        const completion = asString(resultPayload.completion).toLowerCase();
+        if (completion === 'fulfilled') return 'completed';
+        if (completion === 'needs' || completion === 'interaction') return 'waiting';
+        if (completion === 'unfulfillable') return 'unfulfillable';
+        return undefined;
+      })()
+    : undefined;
   const statusValue = ['failed', 'error', 'aborted', 'cancelled', 'canceled', 'paused', 'waiting', 'waiting_input'].includes(lifecycleStatus)
-    ? resultPayload.status : (outcome ?? resultPayload.status ?? entity.status);
+    ? resultPayload.status
+    : isOrdinaryAgent && (lifecycleStatus === 'completed' || !lifecycleStatus) && agentStatusClaim
+      ? agentStatusClaim
+      : (outcome ?? resultPayload.status ?? entity.status);
   const status = resultStatusOf(error ? 'failed' : statusValue);
   return {
     name: executorName,
     status,
     statusLabel: traceResultStatusLabel(status),
     output: output === undefined ? undefined : sanitizeDisplay(parseCallContent(output).data ?? output),
-    message: resultMessageFrom(errorPayload) ?? resultMessageFrom(resultPayload)
-      ?? (asString(declaration?.answer) || undefined),
-    completionKind: asString(endPayload.completion_kind) || undefined,
+    message: isOrdinaryAgent
+      ? agentResponse?.failureMessage ?? agentResponse?.answer
+      : resultMessageFrom(errorPayload) ?? resultMessageFrom(resultPayload)
+        ?? (asString(declaration?.answer) || undefined),
+    completionKind: asString(endPayload.completion_kind) || agentResponse?.completion,
     sufficientForPhase: typeof endPayload.sufficient_for_phase === 'boolean' ? endPayload.sufficient_for_phase : undefined,
-    missingInputs: endPayload.missing_inputs,
-    needs: endPayload.needs ?? (Array.isArray(declaration?.needs) && declaration.needs.length ? declaration.needs : undefined),
+    missingInputs: endPayload.missing_inputs ?? agentTaskResult?.value.missing_inputs,
+    needs: endPayload.needs ?? agentTaskResult?.value.needs ?? (Array.isArray(declaration?.needs) && declaration.needs.length ? declaration.needs : undefined),
     artifacts: endPayload.artifacts ?? endPayload.attachments ?? resultPayload.attachments ?? resultPayload.artifacts,
     sources: resultPayload.sources,
+    ...(agentResponse ? { agentResponse } : {}),
     operations: { total: toolCalls.length, succeeded, failed },
   };
 }
@@ -1545,7 +2114,9 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
   const latestCall = calls[calls.length - 1];
   const terminalCalls = calls.filter((call) => call.info.status !== 'running' && call.info.status !== 'waiting_retry');
   const result = executorResultFor(state, entity, executorName, slug, calls);
-  const projectedEntity = ['failed', 'unfulfillable', 'aborted', 'paused', 'waiting'].includes(result.status)
+  const projectedEntity = result.agentResponse && !['unknown', 'running'].includes(result.status)
+    ? { ...entity, status: result.status }
+    : ['failed', 'unfulfillable', 'aborted', 'paused', 'waiting'].includes(result.status)
     ? { ...entity, status: result.status }
     : entity.status === 'running' && result.status === 'completed' && latestCall && latestCall.info.status !== 'running' && latestCall.info.status !== 'waiting_retry'
       ? { ...entity, status: latestCall.info.status === 'ok' ? 'completed' : 'failed' }
@@ -1576,6 +2147,7 @@ function executorFor(state: SandboxTraceState, entity: TraceEntity): TraceExecut
     memoryContext: memoryContextFor(executorEvents, calls),
     preflight: preflightFor(state, entity),
     prompt: promptFor(executorEvents, calls),
+    accessSnapshot: accessSnapshotFor(state, entity, 'agent'),
     access: accessFor(latestPayload(executorEvents, 'rbac_snapshot')?.rbac) ?? preflightFor(state, entity)?.access,
     limits,
     toolOverrides: toolOverridesFor(executorEvents),
@@ -1623,7 +2195,7 @@ function synthesizerExecutorFor(state: SandboxTraceState, entity: TraceEntity): 
   return executor;
 }
 
-function planForStage(state: SandboxTraceState, iteration: TraceEntity): PlanViewModel | undefined {
+function planForStage(state: SandboxTraceState, iteration: TraceEntity, number: number): { delta?: PlanViewModel; full?: PlanViewModel } {
   const events = state.eventIdsBySequence
     .map((id) => state.eventsById[id])
     .filter((event): event is RuntimeJournalEvent => Boolean(event));
@@ -1635,14 +2207,15 @@ function planForStage(state: SandboxTraceState, iteration: TraceEntity): PlanVie
       || asString(event.payload.iteration_id) === iteration.id
     )
   ));
-  if (planEvent) return projectPlan(planEvent.payload);
+  if (planEvent) return projectPlanHistory(events, planEvent, number);
   const plannerResponse = [...events].reverse().find((event) => (
     event.event_type === 'llm_response'
     && event.payload.purpose === 'planning_decision'
     && asString(event.parent_entity_type ?? event.payload.parent_entity_type) === 'planner_iteration'
     && asString(event.parent_entity_id ?? event.payload.parent_entity_id) === iteration.id
   ));
-  return plannerResponse ? projectPlan(llmResponseContent(plannerResponse.payload)) : undefined;
+  const fallback = plannerResponse ? projectPlan(llmResponseContent(plannerResponse.payload)) : undefined;
+  return { delta: fallback, full: fallback ? { ...fallback, historyIncomplete: true } : undefined };
 }
 
 function failureForIteration(state: SandboxTraceState, iteration: TraceEntity): TraceStageFailure | undefined {
@@ -1738,6 +2311,7 @@ function plannerExecutorFor(state: SandboxTraceState, iteration: TraceEntity): T
     prompt: promptFor(eventsFor(state, iteration), calls),
     access: accessFor(latestPayload(eventsFor(state, iteration), 'rbac_snapshot')?.rbac)
       ?? accessFor(orchestratorSnapshot?.rbac),
+    accessSnapshot: accessSnapshotFor(state, iteration, 'planner'),
   };
 }
 
@@ -1967,7 +2541,8 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
           .filter((executor): executor is TraceExecutorRun => Boolean(executor))
       ));
       const plannerExecutor = plannerExecutorFor(state, entity);
-      const plan = planForStage(state, entity);
+      const planViews = planForStage(state, entity, number);
+      const plan = planViews.delta;
       const plannedTaskSteps = plannedTaskEntities.map((taskEntity) => {
         const relatedSteps = stepEntities.filter((stepEntity) => (
           eventsFor(state, stepEntity).some((event) => asString(event.payload.task_entity_id) === taskEntity.id)
@@ -2017,6 +2592,7 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
         label: iterationLabel(iterationType, number),
         task,
         plan,
+        fullPlan: planViews.full,
         steps: [],
         executorRuns,
         metrics: aggregateMetrics(metricsFor(state, entity), executorRuns.map((executor) => executor.metrics)),
@@ -2143,6 +2719,8 @@ export function projectTraceStages(state: SandboxTraceState): TraceStage[] {
                 task: 'Разбор запроса и выбор маршрута', executorType: 'ОРКЕСТРАТОР', executorName: 'Предварительная маршрутизация',
                 executorSlug: 'turn_preflight', kind: 'preflight', calls, result, route: routeFor(calls, eventsFor(state, entity)),
                 info: executorInfoFor(result, calls, metrics.elapsedMs), metrics,
+                preflight: preflightFromEvents(eventsFor(state, entity), entity.status),
+                accessSnapshot: accessSnapshotFor(state, entity, 'preflight'),
                 memoryContext: memoryContextFor(eventsFor(state, entity), calls),
                 prompt: promptFor(eventsFor(state, entity), calls),
               } satisfies TraceExecutorRun];
@@ -2229,8 +2807,10 @@ function safeRunError(events: RuntimeJournalEvent[]): string | undefined {
     if (event.event_type !== 'error' && event.event_type !== 'run_failed') continue;
     const payload = event.payload;
     if (!failedRun && (payload.recoverable === true || payload.retryable === true)) continue;
-    const message = asString(payload.safe_message) || asString(payload.user_message) || asString(payload.message) || asString(payload.error);
-    if (message) return message;
+    if (payload.category !== undefined || payload.error_type !== undefined || payload.error_code !== undefined || payload.code !== undefined
+      || payload.safe_message !== undefined || payload.user_message !== undefined || payload.message !== undefined || payload.error !== undefined) {
+      return safeFailureMessage(payload.category ?? payload.error_type, payload.error_code ?? payload.code);
+    }
   }
   return undefined;
 }

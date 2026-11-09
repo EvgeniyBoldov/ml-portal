@@ -61,6 +61,7 @@ describe('plan inspection projection', () => {
           status: undefined,
           dependencies: ['Найти шаблон'],
           expectedOutputs: ['Готовый файл'],
+          expectedResultDescriptions: ['Готовый файл'],
           inputs: undefined,
         },
       ],
@@ -104,5 +105,16 @@ describe('task response presentation', () => {
         contract: { response_spec: { mode: 'structured' } },
       }).expectedOutputs
     ).toEqual(['Структурированный ответ; схема рекомендательная']);
+    expect(projectPlanTask({ task_id: 'data', response_spec: { mode: 'structured' } }).responseFormat)
+      .toBe('Структурированные данные');
+    expect(projectPlanTask({
+      task_id: 'data',
+      response_spec: { mode: 'structured' },
+      expected_outputs: [{ key: 'devices', description: 'Найти и сохранить устройства' }],
+    })).toMatchObject({
+      expectedOutputs: ['Структурированный ответ; схема рекомендательная'],
+      expectedResultDescriptions: ['Найти и сохранить устройства'],
+      responseFormat: 'Структурированные данные',
+    });
   });
 });

@@ -9,8 +9,26 @@ export interface PlanTaskViewModel {
   status?: string;
   dependencies: string[];
   expectedOutputs: string[];
+  expectedResultDescriptions?: string[];
+  responseFormat?: string;
   inputs?: unknown;
+  iterationNumber?: number;
+  change?: 'new' | 'continuation' | 'superseded' | 'excluded' | 'cancelled' | 'partial' | 'unresolved';
+  relatedTaskIds?: string[];
+  changeReason?: string;
+  inactive?: boolean;
 }
+
+export interface PlanCheckpointViewModel {
+  id: string;
+  iteration: number;
+  declaredNext?: string;
+  effectiveNext?: string;
+  reason?: string;
+  decided: boolean;
+}
+
+export type PlanEntry = { kind: 'task'; task: PlanTaskViewModel } | { kind: 'checkpoint'; checkpoint: PlanCheckpointViewModel };
 
 export interface PlanViewModel {
   iteration?: number;
@@ -18,6 +36,8 @@ export interface PlanViewModel {
   goal?: string;
   trigger?: string;
   tasks: PlanTaskViewModel[];
+  entries?: PlanEntry[];
+  historyIncomplete?: boolean;
 }
 
 const record = (value: unknown): Record<string, unknown> => {
@@ -48,6 +68,7 @@ export function taskStatusLabel(value: unknown): string | undefined {
         pending: 'Ожидает',
         running: 'Выполняется',
         waiting_retry: 'Ожидает повтора',
+        waiting_input: 'Ожидает ответа',
         waiting_confirmation: 'Ожидает подтверждения',
         needs_dependency: 'Требуются данные',
         blocked: 'Заблокирована',
@@ -85,6 +106,22 @@ export function projectPlanTask(
   const title =
     text(task.title ?? task.name ?? intent ?? objective ?? taskId) ??
     'Задача без названия';
+  const responseMode = text(
+    record(task.response_spec ?? record(task.contract).response_spec).mode
+  );
+  const responseFormat = responseMode
+    ? ({
+        any: 'Свободный ответ',
+        text: 'Текст',
+        structured: 'Структурированные данные',
+        artifact: 'Файл',
+      } as Record<string, string>)[responseMode]
+    : undefined;
+  const expectedResultDescriptions = Array.isArray(task.expected_outputs)
+    ? task.expected_outputs
+        .map(item => text(record(item).description ?? record(item).key) ?? '')
+        .filter(Boolean)
+    : [];
   return {
     taskId,
     kind,
@@ -120,6 +157,8 @@ export function projectPlanTask(
             )
             .filter(Boolean)
         : [],
+    ...(expectedResultDescriptions.length ? { expectedResultDescriptions } : {}),
+    ...(responseFormat ? { responseFormat } : {}),
     inputs: kind === 'agent' ? (task.inputs ?? task.task_inputs) : undefined,
   };
 }

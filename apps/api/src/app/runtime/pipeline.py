@@ -2214,6 +2214,14 @@ class RuntimePipeline:
             for item in candidates
             if str((item or {}).get("slug") or "").strip()
         })
+        candidate_agent_details = {
+            slug: {
+                "label": str((item or {}).get("name") or slug)[:255],
+                "description": str((item or {}).get("description") or "").strip()[:600] or None,
+            }
+            for item in candidates
+            if (slug := str((item or {}).get("slug") or "").strip())
+        }
         allowed_slugs = sorted({
             str((item or {}).get("slug") or "").strip()
             for item in filtered
@@ -2223,6 +2231,7 @@ class RuntimePipeline:
         audit_payload = {
             "default_collection_allow": default_collection_allow,
             "candidates": candidate_slugs,
+            "candidate_agent_details": candidate_agent_details,
             "allowed": allowed_slugs,
             "denied_by_rbac": denied_slugs,
             "before_count": len(candidates),

@@ -38,6 +38,26 @@ async def test_publication_false_removes_candidate_before_operation_resolution()
 
 
 @pytest.mark.asyncio
+async def test_override_snapshot_has_human_operation_labels_without_catalog_lookup():
+    resolver = ToolResolver(session=SimpleNamespace())
+    result = await resolver.resolve(
+        discovered_tool=_discovered_tool(),
+        instance=SimpleNamespace(slug="records"),
+        provider=SimpleNamespace(slug="records-provider"),
+        runtime_domain="collection.table",
+        context_domains=["collection.table"],
+        sandbox_tool_overrides=SandboxToolOverrides(
+            semantics={"discovered-1": {"title": "Curated search"}}
+        ),
+    )
+
+    assert result is not None
+    assert result.sandbox_override_snapshot["discovered_tool_id"] == "discovered-1"
+    assert result.sandbox_override_snapshot["operation_slug"] == "records.search"
+    assert result.sandbox_override_snapshot["operation_name"] == "Curated search"
+
+
+@pytest.mark.asyncio
 async def test_semantic_overrides_are_applied_without_schema_or_risk_downgrade():
     resolver = ToolResolver(session=SimpleNamespace())
 
@@ -83,4 +103,6 @@ async def test_semantic_overrides_are_applied_without_schema_or_risk_downgrade()
     }
     assert result.sandbox_override_snapshot["configured"]["risk_level"] == "safe"
     assert result.sandbox_override_snapshot["effective"]["risk_level"] == "destructive"
+    assert result.sandbox_override_snapshot["operation_slug"] == "records.search"
+    assert result.sandbox_override_snapshot["operation_name"] == "Curated search"
 

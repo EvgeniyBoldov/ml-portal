@@ -10,6 +10,10 @@ config_file = "agents/architect.toml"
 description = "Разработчик фронтенда React/TypeScript для ML Portal. Выбирай для задач в apps/web, UI и frontend API-клиенте."
 config_file = "agents/frontend.toml"
 
+[agents.designer]
+description = "Визуальный дизайнер и ревьювер интерфейсов ML Portal. Смотрит на веб-приложение в отдельном Chromium-контейнере, сверяет его с существующей дизайн-системой и предлагает обоснованные улучшения компонентов, состояний и адаптивного поведения."
+config_file = "agents/designer.toml"
+
 [agents.backend]
 description = "Разработчик бэкенда FastAPI/Python для ML Portal. Выбирай для задач в apps/api, runtime, workers, persistence и backend API."
 config_file = "agents/backend.toml"

@@ -127,11 +127,26 @@ class RunSession:
             await self._emit(RuntimeEvent.tool_result(
                 tool=str(payload.get("tool") or "operation"),
                 call_id=str(payload.get("call_id") or uuid4()),
-                success=bool(payload.get("success")), data=payload.get("data"),
+                success=payload.get("success"), data=payload.get("data"),
                 parent_entity_type="agent_execution", parent_entity_id=str(self.run_id),
                 agent_slug=self.agent_slug, agent_execution_id=str(self.run_id),
                 safe_message=payload.get("safe_message"), error_code=payload.get("error_code"),
                 retryable=payload.get("retryable"),
+                user_message=payload.get("user_message"),
+                operator_message=payload.get("operator_message"),
+                source=payload.get("source"), debug=payload.get("debug"),
+                envelope=payload.get("result_envelope"),
+                sources=payload.get("sources"),
+                reused=payload.get("reused"),
+                reused_from_call_id=payload.get("reused_from_call_id"),
+                truncated=payload.get("truncated"),
+                result_id=payload.get("result_id"),
+                result_inline_complete=payload.get("result_inline_complete"),
+                result_source_complete=payload.get("result_source_complete"),
+                result_delivery=payload.get("result_delivery"),
+                result_row_count=payload.get("result_row_count"),
+                result_source_total=payload.get("result_source_total"),
+                mcp_failure=payload.get("mcp_failure"),
             ))
             return
         event_type = {

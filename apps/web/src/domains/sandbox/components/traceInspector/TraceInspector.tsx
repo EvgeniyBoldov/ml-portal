@@ -1,24 +1,29 @@
-import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorJsonBlock, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorExpandableValue, InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorJsonBlock, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
-import { memoryContextFromTool, type TraceInspectionTarget } from '../../traceProjection';
+import { memoryContextFromTool, type TraceExecutorRun, type TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
 import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
 import { ExecutorResultView, MemoryExtractionResultView, StageResultView, StepResultView } from './ResultViews';
 import { callDisplayName } from '../../callInspection';
-import { callPresentation, formatCallDuration } from '../../callPresentation';
+import { callPresentation, callStatusPresentation, formatCallDuration } from '../../callPresentation';
 import type { ToolNameMap } from '../../callInspection';
 import { PlanTaskCard } from './PlanTaskCard';
 import { traceStatusLabel, traceStatusTone } from '../../traceStatus';
-import { CheckpointViewer, ExecutorInfoViewer, FactsViewer, LimitsViewer, MemoryContextViewer, PromptViewer, RawEventsViewer, RbacViewer, RouteViewer, TaskViewer, ToolOverridesViewer } from './viewers';
+import { AccessSnapshotViewer, AgentLimitsViewer, CheckpointViewer, ExecutorInfoViewer, FactsViewer, LimitsViewer, MemoryContextViewer, PromptViewer, RawEventsViewer, RbacViewer, RouteViewer, TaskViewer, ToolOverridesViewer } from './viewers';
+import { AgentInspectorHeader } from './viewers/AgentInspectorHeader';
+import { AgentResultViewer } from './viewers/AgentResultViewer';
 import { RoutePolicyViewer } from './viewers/RoutePolicyViewer';
 
-interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; }
+interface Props { target: TraceInspectionTarget | null; trace: SandboxTraceState | null; toolNames?: ToolNameMap; sessionId?: string; }
 function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
   return traceStatusTone(status);
 }
 const isDocumentMemoryExecutor = (executorSlug: string | undefined): boolean => executorSlug === 'document_memory_extractor';
+const isOrdinaryAgent = (executor: TraceExecutorRun): boolean => (
+  executor.kind === 'agent' && !['document_memory_extractor', 'checkpoint'].includes(executor.executorSlug)
+);
 
-export function TraceInspector({ target, trace, toolNames }: Props) {
+export function TraceInspector({ target, trace, toolNames, sessionId }: Props) {
   if (!target) return null;
   const entity = target.kind === 'stage' ? target.stage.entity
     : target.kind === 'step' ? target.step.entity
@@ -39,7 +44,7 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
         : undefined;
   const common = <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={traceStatusLabel(entity.status)} tone={statusTone(entity.status)} /></InspectorFieldRow>
-    {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Длительность"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
+    {targetMetrics?.elapsedMs ? <InspectorFieldRow label="Время исполнения"><InspectorScalar value={`${(targetMetrics.elapsedMs / 1000).toFixed(1)} с`} /></InspectorFieldRow> : null}
     {targetMetrics?.calls ? <InspectorFieldRow label="Вызовы"><InspectorScalar value={targetMetrics.calls} /></InspectorFieldRow> : null}
     {targetMetrics?.successfulCalls ? <InspectorFieldRow label="Успешно"><InspectorScalar value={targetMetrics.successfulCalls} /></InspectorFieldRow> : null}
     {targetMetrics?.failedCalls ? <InspectorFieldRow label="Ошибки"><InspectorScalar value={targetMetrics.failedCalls} /></InspectorFieldRow> : null}
@@ -61,8 +66,8 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'route_policy' && target.kind === 'stage') return <RoutePolicyViewer decision={target.stage.routePolicy} />;
     if (tab === 'route_policy' && target.kind === 'executor' && target.executor.kind === 'route_policy') return <RoutePolicyViewer decision={target.executor.routePolicy} />;
     if (tab === 'info') return common;
-    if (tab === 'plan') return <PlanView plan={stage.plan} />;
-    if (tab === 'task' && target.kind === 'executor') return <TaskViewer task={selectedTask} />;
+    if (tab === 'plan') return <PlanView plan={target.kind === 'stage' || target.kind === 'step' ? stage.fullPlan ?? stage.plan : stage.plan} />;
+    if (tab === 'task' && target.kind === 'executor') return <TaskViewer task={selectedTask} variant={isOrdinaryAgent(target.executor) ? 'agent' : 'standard'} />;
     if (tab === 'input' && target.kind === 'executor' && target.executor.kind === 'planner') return <InspectorFieldGroup>
       <InspectorFieldRow label="Вход planner"><InspectorJsonBlock value={target.executor.input} /></InspectorFieldRow>
     </InspectorFieldGroup>;
@@ -75,34 +80,51 @@ export function TraceInspector({ target, trace, toolNames }: Props) {
     if (tab === 'result' && target.kind === 'stage') return <StageResultView stage={target.stage} />;
     if (tab === 'result' && target.kind === 'step' && target.step.executorRuns.length === 1 && isDocumentMemoryExecutor(target.step.executorRuns[0].executorSlug)) return <MemoryExtractionResultView result={target.step.executorRuns[0].result} />;
     if (tab === 'result' && target.kind === 'step') return <StepResultView step={target.step} />;
-    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : target.executor.kind === 'preflight' ? <RouteViewer route={target.executor.route} /> : isDocumentMemoryExecutor(target.executor.executorSlug) ? <MemoryExtractionResultView result={target.executor.result} /> : <ExecutorResultView executor={target.executor} />;
+    if (tab === 'result' && target.kind === 'executor') return target.executor.kind === 'planner' ? <PlanView plan={stage.plan} /> : target.executor.kind === 'preflight' ? <RouteViewer route={target.executor.route} /> : isDocumentMemoryExecutor(target.executor.executorSlug) ? <MemoryExtractionResultView result={target.executor.result} /> : isOrdinaryAgent(target.executor) ? target.executor.result.agentResponse ? <AgentResultViewer response={target.executor.result.agentResponse} /> : <div>Исполнитель не записал содержательный результат.</div> : <ExecutorResultView executor={target.executor} />;
     if (tab === 'prompt' && target.kind === 'executor') return <PromptViewer prompt={target.executor.prompt} />;
-    if (tab === 'rbac' && target.kind === 'executor') return <RbacViewer access={target.executor.access} />;
-    if (tab === 'limits' && target.kind === 'executor') return <LimitsViewer limits={target.executor.limits} />;
+    if (tab === 'rbac' && target.kind === 'executor') return target.executor.accessSnapshot
+      ? <AccessSnapshotViewer snapshot={target.executor.accessSnapshot} />
+      : target.executor.kind === 'planner' && target.executor.access
+        ? <RbacViewer access={target.executor.access} /> : <AccessSnapshotViewer />;
+    if (tab === 'limits' && target.kind === 'executor') return isOrdinaryAgent(target.executor)
+      ? <AgentLimitsViewer limits={target.executor.limits} statistics={target.executor.info.statistics} />
+      : <LimitsViewer limits={target.executor.limits} />;
     if (tab === 'operations' && target.kind === 'executor') return <ToolOverridesViewer snapshot={target.executor.toolOverrides} />;
     if (tab === 'error' && target.kind === 'call' && target.call.kind === 'llm') return <LlmErrorView call={target.call} />;
     if (tab === 'error' && (target.kind === 'error' || target.kind === 'call')) {
       const error = target.call.errorView;
+      const callStatus = callStatusPresentation(target.call.info.status);
       return <InspectorFieldGroup>
-        <InspectorFieldRow label="Статус"><InspectorStatus label="Ошибка" tone="danger" /></InspectorFieldRow>
+        <InspectorFieldRow label="Статус"><InspectorStatus label={callStatus.label} tone={callStatus.tone} /></InspectorFieldRow>
         {error ? <>
           <InspectorFieldRow label="Название ошибки"><InspectorScalar value={error.name} /></InspectorFieldRow>
           {error.code ? <InspectorFieldRow label="Код ошибки"><InspectorScalar value={error.code} /></InspectorFieldRow> : null}
           {error.message ? <InspectorFieldRow label="Сообщение"><InspectorScalar value={error.message} /></InspectorFieldRow> : null}
           {error.statusCode !== undefined ? <InspectorFieldRow label="HTTP-статус"><InspectorScalar value={error.statusCode} /></InspectorFieldRow> : null}
           {error.providerCode ? <InspectorFieldRow label="Код провайдера"><InspectorScalar value={error.providerCode} /></InspectorFieldRow> : null}
+          {error.diagnostic !== undefined ? <InspectorFieldRow label="Технические сведения"><details><summary>Показать технические сведения</summary><InspectorJsonBlock value={error.diagnostic} /></details></InspectorFieldRow> : null}
           {error.retryable !== undefined ? <InspectorFieldRow label="Можно повторить"><InspectorStatus label={error.retryable ? 'Да' : 'Нет'} tone={error.retryable ? 'warn' : 'neutral'} /></InspectorFieldRow> : null}
           {error.retryAfterMs !== undefined ? <InspectorFieldRow label="Повтор через"><InspectorScalar value={formatCallDuration(error.retryAfterMs)} /></InspectorFieldRow> : null}
         </> : <InspectorFieldRow label="Сообщение">Нет данных</InspectorFieldRow>}
       </InspectorFieldGroup>;
     }
     if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.requestView.question ?? target.call.requestView.message} /></InspectorFieldGroup>;
-    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView call={target.call} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? (target.call.responseView?.content?.data !== undefined ? JSON.stringify(target.call.responseView.content.data, null, 2) : 'Ожидается')} /></InspectorFieldGroup>;
+    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView key={target.key} call={target.call} sessionId={sessionId} runId={trace?.runId ?? undefined} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? (target.call.responseView?.content?.data !== undefined ? JSON.stringify(target.call.responseView.content.data, null, 2) : 'Ожидается')} /></InspectorFieldGroup>;
     if (tab === 'raw' && (target.kind === 'call' || target.kind === 'error')) {
       return <RawEventsViewer events={callPresentation(target.call).rawEvents.map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     }
     if (tab === 'raw') return <RawEventsViewer events={entity.eventIds.map((id) => trace?.eventsById[id]).filter((event): event is NonNullable<typeof event> => Boolean(event)).map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     return <InspectorFieldGroup><InspectorFieldRow label="Данные">Нет данных</InspectorFieldRow></InspectorFieldGroup>;
   };
-  return <InspectorPanel header={<InspectorHeader tone={traceStatusTone(entity.status)} kindLabel={kindLabel} title={title} />}><InspectorTabs entityId={target.key} tabs={tabs} render={render} /></InspectorPanel>;
+  const ordinaryAgentTarget = target.kind === 'executor' && isOrdinaryAgent(target.executor);
+  const header = ordinaryAgentTarget
+    ? <AgentInspectorHeader executor={target.executor} />
+    : <InspectorHeader tone={traceStatusTone(entity.status)} kindLabel={kindLabel} title={title} />;
+  return <InspectorPanel header={header}><InspectorTabs
+    entityId={target.key}
+    tabs={tabs}
+    defaultTab={ordinaryAgentTarget ? 'task' : 'info'}
+    render={render}
+    onActiveTabChange={ordinaryAgentTarget ? () => document.dispatchEvent(new CustomEvent('agent-inspector-section-change')) : undefined}
+  /></InspectorPanel>;
 }

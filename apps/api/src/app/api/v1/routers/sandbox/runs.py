@@ -21,6 +21,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.chat import Chats
+from app.models.runtime_observability import RuntimeExecutionEvent
 from app.models.sandbox import SandboxBranch, SandboxOverrideSnapshot
 from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
@@ -36,11 +37,13 @@ from app.schemas.sandbox import (
 )
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
 from app.schemas.runtime_events import RuntimeJournalEventResponse
+from app.schemas.sandbox_results import SandboxResultDescriptor, SandboxResultList, SandboxResultPage
 from app.services.chat_attachment_service import ChatAttachmentService, ChatAttachmentNotFoundError
 from app.services.chat_context_service import ChatContextService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_visibility import make_sandbox_upload_chat_name
 from app.services.sandbox_service import SandboxService
+from app.services.sandbox_result_browser import ResultRowTooLarge, SandboxResultBrowser
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_resume_checkpoint_service import (
@@ -59,6 +62,74 @@ from .helpers import check_session_owner, tenant_uuid, user_uuid
 logger = get_logger(__name__)
 
 router = APIRouter()
+
+
+async def _result_scope(
+    db: AsyncSession, user: UserCtx, session_id: uuid.UUID, run_id: uuid.UUID,
+) -> dict[str, Any]:
+    svc = SandboxService(db)
+    await check_session_owner(svc, session_id, user)
+    run = await svc.get_run(run_id)
+    if run is None or run.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Run not found")
+    owner = user_uuid(user)
+    tenant = await db.scalar(select(RuntimeExecutionEvent.tenant_id).where(
+        RuntimeExecutionEvent.run_id == run_id,
+        RuntimeExecutionEvent.origin == "sandbox",
+        RuntimeExecutionEvent.user_id == owner,
+        RuntimeExecutionEvent.tenant_id.is_not(None),
+    ).order_by(RuntimeExecutionEvent.sequence).limit(1))
+    if tenant is None:
+        raise HTTPException(status_code=404, detail="Run result scope not found")
+    return {"run_id": str(run_id), "tenant_id": tenant, "user_id": owner}
+
+
+@router.get("/sessions/{session_id}/runs/{run_id}/results", response_model=SandboxResultList)
+async def list_run_results(
+    session_id: uuid.UUID, run_id: uuid.UUID,
+    agent_execution_id: Optional[uuid.UUID] = None,
+    offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin),
+) -> dict[str, Any]:
+    scope = await _result_scope(db, user, session_id, run_id)
+    items = await SandboxResultBrowser().list_results(
+        **scope, offset=offset, limit=limit + 1,
+        agent_execution_id=str(agent_execution_id) if agent_execution_id else None,
+    )
+    return {"items": items[:limit], "next_offset": offset + limit if len(items) > limit else None}
+
+
+@router.get("/sessions/{session_id}/runs/{run_id}/results/{result_id}/metadata", response_model=SandboxResultDescriptor)
+async def get_run_result_metadata(
+    session_id: uuid.UUID, run_id: uuid.UUID, result_id: uuid.UUID,
+    db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin),
+) -> dict[str, Any]:
+    scope = await _result_scope(db, user, session_id, run_id)
+    result = await SandboxResultBrowser().get_metadata(**scope, result_id=result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Result not found or expired")
+    return result
+
+
+@router.get("/sessions/{session_id}/runs/{run_id}/results/{result_id}", response_model=SandboxResultPage)
+async def read_run_result(
+    session_id: uuid.UUID, run_id: uuid.UUID, result_id: uuid.UUID,
+    offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+    revision: Optional[int] = Query(None, ge=1),
+    db: AsyncSession = Depends(db_session), user: UserCtx = Depends(require_admin),
+) -> dict[str, Any]:
+    scope = await _result_scope(db, user, session_id, run_id)
+    try:
+        result = await SandboxResultBrowser().read_page(
+            **scope, result_id=result_id, offset=offset, limit=limit, revision=revision,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ResultRowTooLarge as exc:
+        raise HTTPException(status_code=413, detail="Result row exceeds the browser response limit") from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Result not found or expired")
+    return result
 
 _JOURNAL_WIRE_FIELDS = {
     "type", "run_id", "event_id", "sequence", "occurred_at", "entity_type",

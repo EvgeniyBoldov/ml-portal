@@ -41,7 +41,7 @@ class GraphPlanner:
         persist_memory: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
         ctx: ToolContext | None = None,
         interaction_answers: list[dict[str, Any]] | None = None,
-        **_: Any,
+        **runtime_context: Any,
     ) -> IterationProposal:
         answers = interaction_answers or []
         matching_answer = next((row for row in reversed(answers)
@@ -62,6 +62,30 @@ class GraphPlanner:
             ))
         tools = RoleMemoryTools(session=self._session, ctx=ctx)
         descriptors = await tools.descriptors()
+        audit = dict(runtime_context.get("planner_rbac_audit") or {})
+        allowed_agents = set(audit.get("allowed") or [])
+        agent_details = audit.get("candidate_agent_details") if isinstance(audit.get("candidate_agent_details"), dict) else {}
+        agent_items = []
+        for slug in sorted(set(audit.get("candidates") or [])):
+            available = slug in allowed_agents
+            metadata = agent_details.get(slug) if isinstance(agent_details.get(slug), dict) else {}
+            agent_items.append({"kind": "agent", "key": slug, "label": str(metadata.get("label") or slug),
+                "status": "available" if available else "unavailable",
+                **({"description": metadata["description"]} if metadata.get("description") else {}),
+                **({} if available else {"reason_code": "blocked_by_rbac", "reason": "Недоступен по правам доступа"})})
+        tool_items = [{"kind": "tool", "key": str(item.get("name") or item.get("tool") or ""),
+            "label": str(item.get("label") or item.get("name") or item.get("tool") or "Инструмент"),
+            "status": "available",
+            **({"description": str(item["description"]).strip()[:600]} if item.get("description") else {}),
+            "source_label": "Система",
+            **({"risk_level": item["risk_level"]} if item.get("risk_level") else {})}
+            for item in descriptors if item.get("name") or item.get("tool")]
+        if event_sink:
+            await event_sink(RuntimeEvent.access_snapshot(
+                entity_type="planner", entity_id=planner_iteration_trace_id,
+                parent_entity_type="planner_iteration", parent_entity_id=planner_iteration_trace_id,
+                items=[*agent_items, *tool_items],
+            ))
         role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
         # Editable role instructions and the generated protocol use one compiler.
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(

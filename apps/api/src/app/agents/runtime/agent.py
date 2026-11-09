@@ -96,6 +96,7 @@ from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
+from portal_mcp_contract import MCPFailureCategory, public_user_message
 from app.runtime.redactor import RuntimeRedactor
 from app.agents.context import ToolResult
 from app.services.tool_result_store import ToolResultStore
@@ -111,6 +112,35 @@ if TYPE_CHECKING:
     from app.agents.execution_preflight import ExecutionRequest
 
 logger = get_logger(__name__)
+
+
+_RUNTIME_OPERATION_USER_MESSAGES: Dict[RuntimeErrorCode, str] = {
+    RuntimeErrorCode.OPERATION_UNAVAILABLE: "The requested operation is unavailable.",
+    RuntimeErrorCode.OPERATION_AMBIGUOUS: "The requested operation could not be identified.",
+    RuntimeErrorCode.OPERATION_INVALID_ARGS: "The operation request needs different input.",
+    RuntimeErrorCode.OPERATION_TIMEOUT: "The operation took too long to complete.",
+    RuntimeErrorCode.OPERATION_EXECUTION_FAILED: "The operation could not be completed.",
+    RuntimeErrorCode.OPERATION_CONFIRMATION_REQUIRED: "The operation needs your confirmation.",
+    RuntimeErrorCode.AGENT_WALL_TIME_EXCEEDED: "The operation exceeded its time limit.",
+    RuntimeErrorCode.AGENT_RUNTIME_EXCEPTION: "The operation could not be completed.",
+}
+
+
+def _safe_tool_user_message(error_code: Any, mcp_failure: Any) -> str:
+    """Return only a catalog-backed message suitable for the semantic trace."""
+    if isinstance(mcp_failure, dict):
+        category = mcp_failure.get("category")
+        try:
+            return public_user_message(MCPFailureCategory(str(category)))
+        except ValueError:
+            return public_user_message(MCPFailureCategory.UNKNOWN)
+    try:
+        typed_code = RuntimeErrorCode(str(error_code))
+    except ValueError:
+        return "The operation could not be completed."
+    return _RUNTIME_OPERATION_USER_MESSAGES.get(
+        typed_code, "The operation could not be completed."
+    )
 
 
 def _checkpoint_receipt(value: Any) -> dict[str, Any]:
@@ -1690,6 +1720,10 @@ class AgentToolRuntime(BaseRuntime):
             # may have forced a pointer even for an initially small payload.
             context_meta = json.loads(result_text).get("_runtime_result", {})
             event_inline_complete = context_meta.get("inline_complete", False)
+        mcp_failure = result.metadata.get("mcp_failure") if isinstance(result.metadata.get("mcp_failure"), dict) else None
+        safe_user_message = (
+            None if result.success else _safe_tool_user_message(raw_error_code, mcp_failure)
+        )
         safe_result_projection = ({
             "result_id": stored_result.get("result_id"),
             "sql_ref": stored_result.get("sql_ref"),
@@ -1720,6 +1754,8 @@ class AgentToolRuntime(BaseRuntime):
                     "result_id", "row_count", "source_count", "source_result_ids", "query_result_stored", "query_complete",
                 ) if key in result.data
             })
+        result_row_count = safe_result_projection.get("row_count") if isinstance(safe_result_projection, dict) else None
+        result_source_total = safe_result_projection.get("source_total") if isinstance(safe_result_projection, dict) else None
         envelope = OperationResultEnvelope(
             operation_slug=operation_call.tool_name,
             call_id=operation_call.id,
@@ -1763,7 +1799,7 @@ class AgentToolRuntime(BaseRuntime):
             error_code=raw_error_code,
             retryable=result.metadata.get("retryable"),
             safe_message=None if result.success else str(result.error or ""),
-            user_message=result.metadata.get("user_message"),
+            user_message=safe_user_message,
             operator_message=result.metadata.get("operator_message"),
             source=result.metadata.get("source"),
             debug=result.metadata.get("debug"),
@@ -1771,6 +1807,8 @@ class AgentToolRuntime(BaseRuntime):
             result_inline_complete=event_inline_complete,
             result_source_complete=event_source_complete,
             result_delivery=result.delivery,
+            result_row_count=result_row_count,
+            result_source_total=result_source_total,
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
@@ -1786,8 +1824,8 @@ class AgentToolRuntime(BaseRuntime):
             "data": safe_result_projection if result.success else None,
             "error": None if result.success else str(result.error or ""),
             "safe_message": None if result.success else str(result.error or ""),
-            "user_message": result.metadata.get("user_message"),
-            "mcp_failure": result.metadata.get("mcp_failure") if isinstance(result.metadata.get("mcp_failure"), dict) else None,
+            "user_message": safe_user_message,
+            "mcp_failure": mcp_failure,
             "operator_message": result.metadata.get("operator_message"),
             "source": result.metadata.get("source"),
             "debug": result.metadata.get("debug"),
@@ -1795,6 +1833,12 @@ class AgentToolRuntime(BaseRuntime):
             "retryable": result.metadata.get("retryable"),
             "result_envelope": envelope.to_metadata(),
             "result_delivery": result.delivery,
+            "result_id": event_result_id,
+            "result_inline_complete": event_inline_complete,
+            "result_source_complete": event_source_complete,
+            "result_row_count": result_row_count,
+            "result_source_total": result_source_total,
+            "truncated": sse_truncated if sse_truncated else None,
             "sources": list(sources or []),
             "agent_slug": agent_slug,
             "agent_execution_id": agent_execution_id,

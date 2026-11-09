@@ -823,7 +823,7 @@ export function ConfigPanel({
   return (
     <div className={styles.panel}>
       {isEntityInspectorMode ? (
-        <TraceInspector target={traceTarget ?? null} trace={traceState ?? null} toolNames={toolNames} />
+        <TraceInspector target={traceTarget ?? null} trace={traceState ?? null} toolNames={toolNames} sessionId={sessionId} />
       ) : (
       <>
       <div className={styles.header}>

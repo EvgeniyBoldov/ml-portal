@@ -1,8 +1,8 @@
 import type { RuntimeJournalEvent } from './traceState';
 import type { TraceCall } from './traceProjection';
-import { llmOutcome, llmResponseStatus, toolResult, type LlmOutcome } from './callInspection';
+import { llmOutcome, llmResponseStatus, safeFailureMessage, toolResult, type LlmOutcome } from './callInspection';
 
-export type CallPresentationStatus = 'running' | 'waiting_retry' | 'ok' | 'error';
+export type CallPresentationStatus = 'running' | 'waiting_retry' | 'ok' | 'error' | 'unknown';
 
 export type CallErrorDetails = {
   name: string;
@@ -12,6 +12,7 @@ export type CallErrorDetails = {
   providerCode?: string;
   retryable?: boolean;
   retryAfterMs?: number;
+  diagnostic?: unknown;
 };
 
 export type CallPresentation = {
@@ -65,9 +66,10 @@ function errorForLlm(payload: Record<string, unknown>, emptyResponse: boolean): 
 function errorForTool(payload: Record<string, unknown>): CallErrorDetails {
   const result = toolResult(payload);
   return {
-    name: textField(payload.error_type) ?? textField(payload.error_code) ?? 'Ошибка выполнения инструмента',
-    code: textField(payload.error_code),
+    name: result.failure ? 'Операция не выполнена' : 'Ошибка выполнения операции',
+    code: result.failure?.code ?? textField(payload.error_code),
     message: result.message,
+    diagnostic: result.diagnostic,
     statusCode: numberField(payload.status_code),
     providerCode: textField(payload.provider_code),
     retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,
@@ -104,14 +106,23 @@ export function callPresentation(call: TraceCall): CallPresentation {
 
   if (call.kind === 'error') {
     const payload = call.request.payload;
+    const code = textField(payload.error_code) ?? textField(payload.code);
+    const category = textField(payload.category) ?? textField(payload.error_type);
+    const diagnostic = {
+      safe_message: payload.safe_message,
+      user_message: payload.user_message,
+      message: payload.message,
+      error: payload.error,
+    };
     return { ...base, status: 'error', error: {
-      name: textField(payload.error_type) ?? textField(payload.error_code) ?? 'Ошибка выполнения',
-      code: textField(payload.error_code),
-      message: textField(payload.safe_message) ?? textField(payload.user_message) ?? textField(payload.message) ?? textField(payload.error),
+      name: 'Ошибка выполнения',
+      code,
+      message: safeFailureMessage(category, code),
       statusCode: numberField(payload.status_code),
       providerCode: textField(payload.provider_code),
       retryable: typeof payload.retryable === 'boolean' ? payload.retryable : undefined,
       retryAfterMs: numberField(payload.retry_after_ms),
+      diagnostic,
     } };
   }
   if (!response) return { ...base, status: call.retryEvents.length ? 'waiting_retry' : 'running' };
@@ -146,11 +157,14 @@ export function callPresentation(call: TraceCall): CallPresentation {
     if (call.retryEvents.length && call.retryEvents[call.retryEvents.length - 1].sequence > call.response!.sequence) {
       return { ...base, status: 'waiting_retry' };
     }
-    const failed = toolResult(response).success === false;
+    const result = toolResult(response);
+    const inProgress = response.terminal === false || response.status === 'running' || response.status === 'pending';
+    const failed = result.success === false;
+    const inconsistent = result.failure?.inconsistentSuccess === true;
     return {
       ...base,
-      status: failed ? 'error' : 'ok',
-      error: failed ? errorForTool(response) : undefined,
+      status: inconsistent ? 'unknown' : failed ? 'error' : inProgress ? 'running' : result.success === true ? 'ok' : 'unknown',
+      error: failed || inconsistent ? errorForTool(response) : undefined,
     };
   }
 
@@ -161,6 +175,7 @@ export function callStatusPresentation(status: CallPresentationStatus): { label:
   if (status === 'waiting_retry') return { label: 'Ожидает повтора', tone: 'warn' };
   if (status === 'error') return { label: 'Ошибка', tone: 'danger' };
   if (status === 'running') return { label: 'Выполняется', tone: 'warn' };
+  if (status === 'unknown') return { label: 'Результат не подтверждён', tone: 'warn' };
   return { label: 'Готово', tone: 'success' };
 }
 

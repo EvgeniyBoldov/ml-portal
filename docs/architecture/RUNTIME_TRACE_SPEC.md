@@ -11,6 +11,11 @@ contract in [`CHAT_CONTEXT_MEMORY.md`](CHAT_CONTEXT_MEMORY.md) consumes a typed
 runtime outcome projection and never scans, replays, copies, or summarizes raw
 journal rows.
 
+Journal events use the `TOOL_RESULTS_RETENTION_DAYS` setting, shared with
+Result Store datasets. Celery Beat runs the expired-event cleanup hourly; the
+event timestamp and configured cutoff determine eligibility, independently of
+the cleanup interval.
+
 ## Event identity and hierarchy
 
 Every row has an event `id`, `run_id`, monotonic `sequence`, `event_type`,
@@ -99,6 +104,26 @@ operator/model diagnostic data; it is not the public chat error text. Docker
 logs keep correlation and factual status fields, not source error bodies.
 See [MCP Adapter](MCP_ADAPTER.md) for the canonical model and wire locations.
 
+Tool-result events preserve an unknown outcome: when success was not
+established, `success` is omitted and `status` is `unknown`. Consumers must not
+coerce that state to failure or success. Consumers must also treat conflicting
+terminal success/failure evidence across a legacy envelope as unknown. The
+event may also carry `user_message`,
+the catalog-backed safe explanation; `safe_message`, `operator_message`,
+`debug`, and the versioned failure object are diagnostic fields and must not be
+used as unfiltered user-facing copy.
+
+Optional result facts are independent: `result_id` points to stored data;
+`result_delivery` describes storage delivery; `result_inline_complete` says
+whether the model received its complete result; `result_source_complete` says
+whether source coverage was complete; `result_row_count` and
+`result_source_total` are counts when known; `truncated` describes the event
+payload. A result payload may separately carry `query_complete`. Missing
+fields mean unknown, and numeric zero is a present value. In particular,
+`result_inline_complete=true` does not guarantee that the journal/SSE event
+contains the complete result. Stored-result events commonly carry only a
+bounded descriptor; full data remains in Result Store.
+
 Root-role `memory.search` calls are direct children of the preflight orchestrator
 or planner iteration. Their `tool_call` is admitted before execution and their
 `tool_result` closes the same call on success, failure or cancellation, with
@@ -176,6 +201,14 @@ retry number and safe error classification.
 change a declared synthesis hand-off to `effective_next=planner`; the frontend
 must update that checkpoint only from this event, not directly from an agent
 error. Independent tasks may still run between the error and the decision.
+
+Sandbox projects a planner's iteration proposal as a labelled change view and
+replays applied proposals of the same plan into an accumulated stage view.
+`continue_with_tasks` links the prior task to new continuations; exclusion,
+partial acceptance and unresolved dispositions retain their distinct meanings.
+The accumulated historical stage excludes future proposals and bounds task and
+checkpoint state before the next applied iteration. Missing earlier proposals or
+referenced tasks are reported as incomplete history, never guessed by task text.
 
 `turn_preflight` is the final root routing entity for new implicit turns,
 regardless of the root policy match. Its LLM input includes the typed
@@ -396,12 +429,68 @@ view. The `route_policy` inspector shows the advisory recommendation before
 TurnPreflight; TurnPreflight's decision inspector shows the final route and
 whether it accepted, modified or rejected the recommendation.
 
-The result projection reads the owned `final` event when `agent_end` contains
-only lifecycle metadata. A protocol-v2 completion is displayed through its
-`structured_response` (or text `answer`), preserving empty objects/lists, false,
-zero and null. Raw intermediate `llm_response` events are not final results.
-Lifecycle errors remain authoritative even if the model claimed success.
-This applies to both Sandbox and admin executor/step result tabs.
+For ordinary agents, the result projection first reads `agent_end.result` when
+it contains the orchestrated `TaskResult`; it does not render that protocol
+envelope. When the terminal event has only lifecycle metadata, it reads a
+`final` event explicitly owned by that `agent_execution`. Older lifecycle-only
+records may supply a curated legacy result on `agent_end`. It never associates
+a neighboring execution's final event by sequence or time, and intermediate
+`llm_response` events are not final results. The projected `AgentResponse`
+keeps text, structured data, registered files, safe source links, needs,
+limitation, interaction, phase sufficiency, verified actions and diagnostics
+independent. Tool actions are already visible in the trace and are not repeated
+in the result inspector. Sources and interaction options remain complete in the
+typed projection; the UI previews ten entries and explicitly reveals
+the remainder. Presence-aware normalization preserves false, zero, null, empty
+objects and lists where source presence can be established; a missing terminal
+result is distinct from an explicitly empty value. Lifecycle errors remain
+authoritative over a model success claim. This shared projection feeds Sandbox
+and admin result views.
+
+Ordinary agent inspectors use a dedicated header (recorded agent name and role
+description when available, normalized effective execution status, elapsed
+execution time) and open on `Задача`. Resource usage is combined with local
+limits in `Лимиты и расход`, with one row per parameter and three visible
+columns (parameter, usage, limit). Recorded remaining budget and overage are
+visible directly. Normal usage uses the bar without a duplicate success badge;
+the budget-time explanation disclosure is omitted.
+Warning/exceeded states are visible without opening details. The
+status reflects authoritative lifecycle failure/cancellation/pause and business
+outcome, not raw coroutine completion; needs/unfulfillable outcomes are not
+displayed as success. They omit the redundant `Инфо` tab. The task view shows
+goal, distinct instructions, inputs, dependencies and expected outputs without
+repeating task status; an explicitly empty input object is labelled
+«Дополнительных параметров нет». A recorded response format is a separate
+field from independently projected expected result descriptions; planner
+retains its existing expected-output view. Planner, checkpoint and document-memory
+inspectors keep their specialized views. Semantic agent result files use the
+canonical artifact download route, and external source links are restricted to
+absolute HTTP(S) URLs without embedded credentials. Private runtime references
+and envelope metadata remain available only in `RAW`, while meaningful
+identifiers and keys in domain structured results are preserved. A known
+missing required artifact limitation receives a localized explanation.
+
+Agents use the same shared tab navigation as the planner, including its existing
+horizontal tab strip. Switching sections closes their full-view dialogs. Full result
+view keeps the readable data presentation and exposes JSON as an explicit
+mode. Memory group views show recorded facts, prompt supports document search
+and original text, and RAW keeps original payloads in collapsible searchable
+events. These changes do not alter event ownership or protocol normalization.
+
+For ordinary agents the shared projection normalizes the result, info and
+entity status consistently: `fulfilled` maps to `completed`, `needs` to
+`waiting`, and `unfulfillable` remains a non-success business outcome.
+Authoritative lifecycle failure, cancellation, pause or waiting takes
+precedence over the declaration claim. A legacy `interaction` completion claim
+maps to `waiting`; an explicitly recorded runtime pause remains authoritative.
+
+A legacy `final` may carry citations in sidecar `payload.sources` next to
+`payload.content`; the projection converts these entries to citation DTOs.
+Legacy JSON is treated as a completion declaration only when it has a valid
+completion and the strict allowed-field/type shape. Completionless JSON and
+objects with additional domain keys remain structured data, even when they also
+contain a valid completion field. Final ownership must match the selected
+`agent_execution`; neighboring finals are not associated by ordering.
 
 Run duration ends at `run_end`. Admin agent-run endpoints return only the closed
 agent subgraph, excluding root run events; for such journals with no `run_start`,

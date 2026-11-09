@@ -37,7 +37,10 @@ File indexing/search and agent notes are outside this inventory change.
 Tool results are temporary run-scoped datasets, not long-term Memory or prompt
 text. Successful results selected for Store delivery are redacted and persisted
 in the dedicated `postgres-tool-results` database, including empty and
-single-record responses.
+single-record responses. Datasets expire after `TOOL_RESULTS_RETENTION_DAYS`
+(default 7, configurable from 1 to 30 days); an hourly cleanup task deletes
+expired payloads. Runtime journal events use the same setting and have their
+own hourly cleanup task.
 An opaque UUID `result_id`, deterministically derived from the run and initial
 tool call ID, identifies a dataset. Source pages append to that identity; SQL
 output creates a new dataset. The original call ID remains explicit metadata.
@@ -276,6 +279,15 @@ of treating the descriptor as another source payload.
 
 For stored datasets, traces/SSE previews and model messages are separate projections. Traces contain
 metadata, revisions and references. The complete payload remains in the store.
+The trace inspector displays a complete tool reply when it can match it by call
+ID and owner in a later recorded LLM request. Otherwise it previews data in the
+tool-result event. In sandbox, a stored descriptor can be opened through the
+metadata endpoint and paginated dataset API. Interpret
+`result_inline_complete` as completeness of model delivery only. Source coverage
+(`result_source_complete`), query execution (`query_complete`), event truncation
+and the counts `result_row_count`/`result_source_total` remain separate facts;
+missing flags are unknown rather than false. The sandbox result browsing API
+provides separately authorized, paginated access to retained dataset rows.
 
 ## Agent response protocol v2
 

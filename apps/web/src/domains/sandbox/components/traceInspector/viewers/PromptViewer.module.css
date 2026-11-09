@@ -1,0 +1,91 @@
+.root {
+  display: grid;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.action {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: var(--sp-2) var(--sp-3);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.action:focus-visible,
+.section > summary:focus-visible {
+  outline: 2px solid var(--border-focus, var(--text-primary));
+  outline-offset: 2px;
+}
+
+.sections {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.section {
+  min-width: 0;
+  border-bottom: 1px solid var(--border-color);
+  padding: 0 0 var(--sp-2);
+}
+
+.section > summary {
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.section > summary + * {
+  margin-top: var(--sp-2);
+}
+
+.empty {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.modalToolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--sp-3);
+}
+
+.fullDocument {
+  max-height: 70vh;
+  overflow: auto;
+  padding: 0 var(--sp-2);
+}
+
+.fullDocument section + section {
+  margin-top: var(--sp-4);
+  border-top: 1px solid var(--border-color);
+  padding-top: var(--sp-3);
+}
+
+.fullDocument h3 {
+  margin: 0 0 var(--sp-2);
+  font-size: var(--font-size-md);
+}
+
+.original {
+  max-height: 70vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font: inherit;
+}
+

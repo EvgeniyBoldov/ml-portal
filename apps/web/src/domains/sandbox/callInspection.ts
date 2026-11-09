@@ -12,6 +12,9 @@ const HIDDEN_KEYS = new Set([
   'template_schema', 'runtime_schema', 'schema', 'locator', 'artifact_id',
   '_progress', 'agent_slug', 'structured_input', 'step_kind', 'native_tool_calling',
   'response_length', 'reused_from_call_id', 'user_message', 'operator_message',
+  'mcp_failure', 'result_envelope',
+  'result_id', 'source_result_id', 'source_result_ids', 'sql_ref', 'query_sql',
+  'collection_id', 'provider_id', 'data_instance_id', 'credential_id',
 ]);
 
 const LABELS: Record<string, string> = {
@@ -139,18 +142,161 @@ export function llmMessages(payload: Record<string, unknown>): Array<{ role: str
   });
 }
 
-export function toolResult(payload: Record<string, unknown>): { success?: boolean; message?: string; data: unknown; details: DisplayEntry[] } {
+export type ToolFailure = { category?: string; code?: string; userMessage: string; details?: unknown; inconsistentSuccess?: boolean };
+
+export const safeFailureMessage = (category: unknown, code: unknown): string => {
+  const categoryKey = typeof category === 'string' ? category.toLowerCase() : '';
+  const codeKey = typeof code === 'string' ? code.toLowerCase() : '';
+  const mcpCategories: Record<string, string> = {
+    input: 'Источник отклонил параметры запроса.',
+    auth: 'Сервис отклонил данные авторизации.',
+    access: 'У учётной записи нет доступа к запрошенным данным.',
+    availability: 'Сервис операции временно недоступен.',
+    rate_limit: 'Сервис временно ограничил частоту запросов.',
+    unknown: 'Операция не выполнена.',
+  };
+  if (mcpCategories[categoryKey]) return mcpCategories[categoryKey];
+  const runtimeCodes: Record<string, string> = {
+    operation_unavailable: 'Операция сейчас недоступна.',
+    operation_ambiguous: 'Не удалось однозначно выбрать операцию.',
+    operation_invalid_args: 'Не удалось выполнить операцию: проверьте переданные параметры.',
+    operation_timeout: 'Операция не завершилась вовремя.',
+    operation_execution_failed: 'Не удалось выполнить операцию.',
+    operation_confirmation_required: 'Для продолжения требуется подтверждение.',
+    agent_wall_time_exceeded: 'Время выполнения задачи исчерпано.',
+    agent_required_operation_call_missing: 'Не выполнена обязательная операция.',
+    agent_max_tool_calls_exceeded: 'Достигнут предел числа операций.',
+    agent_max_retries_exceeded: 'Не удалось выполнить операцию после повторных попыток.',
+    agent_non_retryable_operation_failure: 'Операция не выполнена и не может быть повторена автоматически.',
+    agent_no_successful_operation_result: 'Операция не вернула подтверждённый результат.',
+    agent_runtime_exception: 'Во время выполнения возникла проблема.',
+    agent_precheck_failed: 'Не удалось подготовить исполнение задачи.',
+    agent_unavailable: 'Исполнитель задачи временно недоступен.',
+    agent_no_operations: 'Для задачи не настроены доступные операции.',
+    budget_exceeded: 'Лимит выполнения задачи исчерпан.',
+    llm_timeout: 'Модель не ответила вовремя.',
+    llm_context_window_exceeded: 'Запрос не помещается в доступный контекст модели.',
+    llm_input_limit_exceeded: 'Размер запроса превышает допустимый предел модели.',
+    llm_output_limit_exceeded: 'Размер ответа превышает допустимый предел модели.',
+    turn_preflight_unavailable: 'Не удалось проверить готовность и выбрать маршрут.',
+  };
+  if (runtimeCodes[codeKey]) return runtimeCodes[codeKey];
+  return 'Операция не выполнена.';
+};
+
+function recordAt(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+
+function failureFrom(payload: Record<string, unknown>): ToolFailure | undefined {
+  const envelope = recordAt(payload.result_envelope);
+  const nested = recordAt(payload.result);
+  const candidates = [payload.mcp_failure, envelope?.failure, nested?.failure, payload.failure];
+  for (const candidate of candidates) {
+    const failure = recordAt(candidate);
+    if (!failure || failure.version !== 1) continue;
+    const category = typeof failure.category === 'string' ? failure.category : undefined;
+    const code = typeof failure.code === 'string' ? failure.code : undefined;
+    const details = {
+      kind: failure.kind,
+      category: failure.category,
+      code: failure.code,
+      message: failure.message,
+      stage: failure.stage,
+      http_status: failure.http_status,
+      rpc_code: failure.rpc_code,
+      details: failure.details ?? failure.source_error ?? failure.error,
+    };
+    return { category, code, userMessage: safeFailureMessage(category, code), details };
+  }
+  return undefined;
+}
+
+export function toolResult(payload: Record<string, unknown>): { success?: boolean; message?: string; data: unknown; details: DisplayEntry[]; failure?: ToolFailure; diagnostic?: unknown; resultId?: string; delivery?: string; storedDescriptor: boolean; inlineComplete?: boolean; sourceComplete?: boolean; sourceTotal?: number; returnedCount?: number; receivedCount?: number; queryComplete?: boolean; truncated: boolean } {
   const nested = asRecord(payload.result);
-  const success = typeof payload.success === 'boolean' ? payload.success : typeof nested.success === 'boolean' ? nested.success : undefined;
-  const message = typeof payload.safe_message === 'string' ? payload.safe_message : typeof nested.safe_message === 'string' ? nested.safe_message : undefined;
+  const envelope = asRecord(payload.result_envelope);
+  const failure = failureFrom(payload);
+  const explicitOutcomes = [payload.success, envelope.success, nested.success]
+    .filter((value): value is boolean => typeof value === 'boolean');
+  const statusOutcomes = [payload.status, envelope.status, nested.status].flatMap((status) => {
+    if (status === 'succeeded' || status === 'success' || status === 'completed') return [true];
+    if (status === 'failed' || status === 'error') return [false];
+    return [];
+  });
+  const explicitSuccess = explicitOutcomes[0];
+  const outcomes = [...explicitOutcomes, ...statusOutcomes];
+  const conflictingOutcomes = new Set(outcomes).size > 1;
+  const inconsistent = conflictingOutcomes || Boolean(failure && outcomes.includes(true));
+  const success = inconsistent ? undefined : failure ? false : explicitSuccess ?? statusOutcomes[0];
+  if (inconsistent && failure) failure.inconsistentSuccess = true;
+  const safeMessage = [payload.user_message, envelope.user_message, nested.user_message]
+    .find((value) => typeof value === 'string' && value.trim());
+  const legacyCode = payload.error_code ?? nested.error_code;
+  const legacyFailure = explicitOutcomes.includes(false) || statusOutcomes.includes(false);
+  const legacySafeMessage = payload.safe_message ?? nested.safe_message;
+  const knownLegacyMessage = legacyFailure && failure === undefined
+    && typeof legacySafeMessage === 'string'
+    && legacySafeMessage.trim() === 'q is required'
+    ? 'Не задан поисковый запрос.'
+    : undefined;
+  const legacyDiagnostics = legacyFailure ? {
+    category: payload.error_type ?? nested.error_type,
+    code: legacyCode,
+    safe_message: payload.safe_message ?? nested.safe_message,
+    message: payload.message ?? nested.message,
+    error: payload.error ?? nested.error,
+  } : undefined;
+  const message = failure?.userMessage ?? knownLegacyMessage ?? (typeof safeMessage === 'string' ? safeMessage : legacyFailure ? safeFailureMessage(undefined, legacyCode) : undefined);
+  const rawData = nested.data ?? envelope.data ?? payload.data;
+  const dataRecord = asRecord(rawData);
+  const runtimeResult = recordAt(dataRecord?._runtime_result);
+  const descriptorRecord = runtimeResult ?? dataRecord;
+  const dataMeta = asRecord(dataRecord?.meta);
+  const isResultPage = Boolean(dataRecord && Array.isArray(dataRecord.value) && dataMeta);
+  const delivery = [payload.result_delivery, envelope.result_delivery, nested.result_delivery, runtimeResult?.delivery]
+    .find((value): value is string => typeof value === 'string');
+  const resultId = [payload.result_id, envelope.result_id, nested.result_id, dataRecord?.result_id, runtimeResult?.result_id]
+    .find((value): value is string => typeof value === 'string');
+  const hasInlinePayload = Boolean(dataRecord && (
+    Array.isArray(dataRecord.value) || Array.isArray(dataRecord.rows) || Array.isArray(dataRecord.sample)
+      || typeof dataRecord.text === 'string' || dataRecord.data !== undefined
+  ));
+  const strongLegacyDescriptor = Boolean(resultId && descriptorRecord && (
+    typeof descriptorRecord.sql_ref === 'string' || typeof descriptorRecord.payload_type === 'string'
+  ));
+  const storedDescriptor = !hasInlinePayload && (
+    (delivery === 'stored' && Boolean(resultId) && Boolean(descriptorRecord && (
+      'row_count' in descriptorRecord || 'payload_type' in descriptorRecord || 'observed_schema' in descriptorRecord
+    ))) || (delivery === undefined && strongLegacyDescriptor)
+  );
+  const inlineComplete = [payload.result_inline_complete, envelope.result_inline_complete, nested.result_inline_complete, runtimeResult?.inline_complete]
+    .find((value): value is boolean => typeof value === 'boolean');
+  const countValue = [payload.result_row_count, envelope.result_row_count, nested.result_row_count, dataRecord?.row_count, runtimeResult?.row_count, dataMeta?.row_count, dataMeta?.returned_count, isResultPage ? (dataRecord?.value as unknown[]).length : undefined, payload.returned_count, envelope.returned_count, nested.returned_count, payload.row_count, nested.row_count]
+    .find((value) => typeof value === 'number' && Number.isFinite(value));
+  const sourceTotalValue = [payload.result_source_total, envelope.result_source_total, nested.result_source_total, dataRecord?.source_total, runtimeResult?.source_total, dataMeta?.source_total, isResultPage ? dataMeta?.total : undefined, dataRecord?.total, nested.source_total, nested.total]
+    .find((value) => typeof value === 'number' && Number.isFinite(value));
+  const receivedValue = [payload.returned_count, envelope.returned_count, nested.returned_count, dataRecord?.returned_count, runtimeResult?.returned_count, dataMeta?.returned_count, isResultPage ? (dataRecord?.value as unknown[]).length : undefined]
+    .find((value) => typeof value === 'number' && Number.isFinite(value) && value >= 0);
   return {
     success,
     message,
-    data: nested.data ?? payload.data,
+    data: rawData,
+    failure,
+    diagnostic: failure?.details ?? legacyDiagnostics,
+    resultId,
+    delivery: delivery ?? (storedDescriptor ? 'stored' : undefined),
+    storedDescriptor,
+    inlineComplete: [payload.result_inline_complete, envelope.result_inline_complete, nested.result_inline_complete, runtimeResult?.inline_complete].find((value): value is boolean => typeof value === 'boolean'),
+    sourceComplete: [payload.result_source_complete, envelope.result_source_complete, nested.result_source_complete, runtimeResult?.source_complete, dataRecord?.source_complete, dataMeta?.source_complete, isResultPage ? dataMeta?.complete : undefined].find((value): value is boolean => typeof value === 'boolean'),
+    sourceTotal: typeof sourceTotalValue === 'number' ? sourceTotalValue : undefined,
+    returnedCount: typeof countValue === 'number' ? countValue : undefined,
+    receivedCount: typeof receivedValue === 'number' ? receivedValue : undefined,
+    queryComplete: [payload.query_complete, envelope.query_complete, nested.query_complete, runtimeResult?.query_complete, dataRecord?.query_complete, dataMeta?.query_complete].find((value): value is boolean => typeof value === 'boolean'),
+    truncated: payload.truncated === true || envelope.truncated === true || nested.truncated === true || runtimeResult?.sample_complete === false,
     details: toDisplayEntries({
       ...payload,
       ...nested,
-      success: success === true ? 'Успешно' : success === false ? 'Ошибка' : undefined,
+      success: inconsistent ? 'Неизвестно: противоречивый результат' : success === true ? 'Успешно' : success === false ? 'Ошибка' : undefined,
       safe_message: message,
     }),
   };

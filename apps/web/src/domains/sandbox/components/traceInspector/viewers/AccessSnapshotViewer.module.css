@@ -1,0 +1,29 @@
+.statusCell {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+
+.secondary {
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  overflow-wrap: anywhere;
+}
+
+.nameCell {
+  overflow-wrap: anywhere;
+  font-weight: var(--font-weight-medium);
+}
+
+.sourceBadge { margin-top: 4px; font-weight: normal; }
+.descriptionDisclosure { margin-top: 5px; color: var(--text-secondary); font-size: var(--text-xs); font-weight: normal; overflow-wrap: anywhere; }
+.descriptionDisclosure summary { width: fit-content; cursor: pointer; }
+.descriptionDisclosure span { display: block; padding-top: 4px; }
+.limitLabel { display: grid; min-width: 0; gap: 4px; justify-items: start; }
+.limitUsage { display: grid; min-width: 0; gap: 3px; }
+.usageDetail { color: var(--text-secondary); font-size: var(--text-xs); overflow-wrap: anywhere; }
+.usageBar { width: 100%; max-width: 130px; height: 6px; accent-color: var(--success); }
+.usageBar[data-tone='warn'] { accent-color: var(--warning); }
+.usageBar[data-tone='danger'] { accent-color: var(--danger); }

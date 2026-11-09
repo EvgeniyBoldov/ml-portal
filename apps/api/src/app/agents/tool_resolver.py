@@ -222,6 +222,8 @@ class ToolResolver:
             },
             sandbox_override_snapshot={
                 "discovered_tool_id": discovered_tool_id or None,
+                "operation_slug": raw_operation_name,
+                "operation_name": effective_semantics["title"],
                 "configured": dict(configured_semantics),
                 "effective": {
                     key: effective_semantics[key]

@@ -39,7 +39,8 @@ async def test_system_tool_uses_stable_data_instance_sentinel() -> None:
     )
 
     instance = SimpleNamespace(id=uuid4(), slug="system", url=None, is_local=True, health_status="healthy")
-    discovered_tool = SimpleNamespace(slug="file.read", source="local", domains=["system"])
+    discovered_tool = SimpleNamespace(slug="file.read", source="local", domains=["system"],
+        description="Read the selected file")
 
     built = await builder._build_single_operation(
         capability=CapabilityCandidate(
@@ -64,6 +65,8 @@ async def test_system_tool_uses_stable_data_instance_sentinel() -> None:
     operation, target_credentials = built
     assert target_credentials is None
     assert operation.scope == "system"
+    assert operation.discovery_description == "Read the selected file"
+    assert "discovery_description" not in operation.model_dump()
     assert operation.data_instance_id == "system"
     assert operation.data_instance_slug == "system"
     assert operation.target.data_instance_id == "system"

@@ -199,3 +199,8 @@ review/
 # Local agent instructions
 AGENTS.md
 .codex/
+!.codex/
+.codex/*
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/designer.toml

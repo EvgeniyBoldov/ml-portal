@@ -34,7 +34,6 @@ logger = get_logger(__name__)
 
 # Retention periods (days)
 AUDIT_LOG_RETENTION_DAYS = 7
-RUNTIME_EVENT_RETENTION_DAYS = 7
 DEFAULT_LIFECYCLE_RETENTION_DAYS = 14
 DETACHED_CHAT_ATTACHMENT_RETENTION_HOURS = 24
 ORPHAN_CHAT_ATTACHMENT_GRACE_MINUTES = 15
@@ -110,25 +109,31 @@ def cleanup_old_runtime_events(self):
     """
     Delete canonical runtime journal events older than retention period.
     
-    Runs daily via Celery beat.
+    Runs hourly via Celery beat using the Result Store retention setting.
     """
     import asyncio
     
     async def _cleanup():
         async with get_worker_session() as session:
-            cutoff_date = datetime.utcnow() - timedelta(days=RUNTIME_EVENT_RETENTION_DAYS)
-            result = await session.execute(
-                delete(RuntimeExecutionEvent).where(RuntimeExecutionEvent.occurred_at < cutoff_date)
+            retention_days = get_settings().TOOL_RESULTS_RETENTION_DAYS
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=retention_days)
+            async with worker_transaction(session, "cleanup_old_runtime_events"):
+                result = await session.execute(
+                    delete(RuntimeExecutionEvent).where(RuntimeExecutionEvent.occurred_at < cutoff_date)
+                )
+                deleted_count = result.rowcount or 0
+                await session.execute(
+                    delete(RuntimeEventSequence).where(~RuntimeEventSequence.run_id.in_(
+                        select(RuntimeExecutionEvent.run_id).distinct()
+                    ))
+                )
+
+            logger.info(
+                "Deleted %s runtime events older than %s (%s-day retention)",
+                deleted_count,
+                cutoff_date,
+                retention_days,
             )
-            deleted_count = result.rowcount
-            await session.execute(
-                delete(RuntimeEventSequence).where(~RuntimeEventSequence.run_id.in_(
-                    select(RuntimeExecutionEvent.run_id).distinct()
-                ))
-            )
-            await session.commit()
-            
-            logger.info(f"Deleted {deleted_count} runtime events older than {cutoff_date}")
             return deleted_count
     
     try:

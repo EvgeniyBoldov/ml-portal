@@ -67,8 +67,55 @@ describe('call presentation', () => {
       info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
     };
 
-    expect(callPresentation(call)).toMatchObject({ status: 'error', durationMs: 4000, error: { message: 'Недоступно' } });
+    expect(callPresentation(call)).toMatchObject({ status: 'error', durationMs: 4000, error: { message: 'Операция не выполнена.' } });
     expect(formatCallDuration(callPresentation(call).durationMs)).toBe('4.0 с');
+  });
+
+  it('keeps missing tool outcome unknown and treats MCP v1 failure as refusal', () => {
+    const request = event(1, 'tool_call', { tool: 'inventory.search' });
+    const unknownResponse = event(2, 'tool_result', { data: {} });
+    const call: TraceCall = {
+      entity: { ...entity('tool-1'), key: 'tool_call:tool-1', type: 'tool_call' },
+      events: [request, unknownResponse], request, response: unknownResponse, retryEvents: [], linkedToolCalls: [], kind: 'tool', title: 'inventory.search',
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
+    };
+    expect(callPresentation(call).status).toBe('unknown');
+    expect(callPresentation(call).error).toBeUndefined();
+
+    const conflicting = event(3, 'tool_result', { success: true, result: { success: false, status: 'failed' } });
+    expect(callPresentation({ ...call, response: conflicting, events: [request, conflicting] }).status).toBe('unknown');
+
+    const refused = event(4, 'tool_result', { success: true, mcp_failure: { version: 1, kind: 'rpc', category: 'access', code: -32001, message: 'forbidden details', details: 'private debug' } });
+    expect(callPresentation({ ...call, response: refused, events: [request, refused] })).toMatchObject({
+      status: 'unknown',
+      error: { message: 'У учётной записи нет доступа к запрошенным данным.' },
+    });
+  });
+
+  it('keeps legacy exception text out of standalone error presentation', () => {
+    const raw = 'SQLAlchemy asyncpg UndefinedColumnError: SELECT data FROM private_table';
+    const errorEvent = event(1, 'error', { error_type: 'UndefinedColumnError', safe_message: raw, message: raw, error: raw });
+    const call: TraceCall = {
+      entity: { ...entity('error-1'), key: 'error:error-1', type: 'error' },
+      events: [errorEvent], request: errorEvent, retryEvents: [], linkedToolCalls: [], kind: 'error', title: 'Ошибка выполнения',
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
+    };
+    const presentation = callPresentation(call);
+    expect(presentation.error?.message).toBe('Операция не выполнена.');
+    expect(presentation.error?.diagnostic).toMatchObject({ safe_message: raw, message: raw, error: raw });
+    expect(presentation.error?.message).not.toContain('SQLAlchemy');
+  });
+
+  it('keeps explicit empty success green and nonterminal tool calls running', () => {
+    const request = event(1, 'tool_call', { tool: 'inventory.search' });
+    const success = event(2, 'tool_result', { success: true, data: [] });
+    const call: TraceCall = {
+      entity: { ...entity('tool-1'), key: 'tool_call:tool-1', type: 'tool_call' },
+      events: [request, success], request, response: success, retryEvents: [], linkedToolCalls: [], kind: 'tool', title: 'inventory.search',
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
+    };
+    expect(callPresentation(call).status).toBe('ok');
+    expect(callPresentation({ ...call, response: event(3, 'tool_result', { success: true, terminal: false }) }).status).toBe('running');
   });
 
   it('does not mark a native tool call with an empty text body as an LLM error', () => {

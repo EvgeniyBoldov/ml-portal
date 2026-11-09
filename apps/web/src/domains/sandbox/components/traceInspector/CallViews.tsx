@@ -1,19 +1,22 @@
 import { InspectorExpandableValue, InspectorFieldGroup, InspectorFieldRow, InspectorScalar, InspectorStatus, InspectorTextBlock } from '@/shared/ui/Inspector';
 import { memoryContextFromTool, type TraceCall } from '../../traceProjection';
-import { callDisplayName, type ToolNameMap } from '../../callInspection';
+import { callDisplayName, toDisplayEntries, type ToolNameMap } from '../../callInspection';
 import { callStatusPresentation, formatCallDuration } from '../../callPresentation';
 import { MemoryContextViewer } from './viewers/MemoryContextViewer';
 import { ExtractionResultViewer } from './viewers/ExtractionResultViewer';
 import { PlanView } from './TraceDataViews';
-import { InspectorStack } from './InspectorPrimitives';
+import { InspectorSection, InspectorStack } from './InspectorPrimitives';
+import { ToolDataViewer } from './ToolDataViewer';
+import { StoredResultCard } from './StoredResultCard';
+import { ToolResultMeta } from './ToolResultMeta';
 import styles from './CallViews.module.css';
 
 export function LlmTokenUsage({ input, output, total }: { input?: number; output?: number; total?: number }) {
   const format = (value: number | undefined) => value === undefined ? '—' : new Intl.NumberFormat('ru-RU').format(value);
   return <div className={styles.tokenUsage} aria-label="Расход токенов">
-    <span className={styles.tokensIn}>in {format(input)}</span>
-    <span className={styles.tokensOut}>out {format(output)}</span>
-    <span className={styles.tokensTotal}>all {format(total)}</span>
+    <span className={styles.tokensIn}>Вход: {format(input)}</span>
+    <span className={styles.tokensOut}>Выход: {format(output)}</span>
+    <span className={styles.tokensTotal}>Всего: {format(total)}</span>
   </div>;
 }
 
@@ -125,28 +128,61 @@ export const LlmResponseView = LlmResponseSnapshotView;
 
 export function ToolRequest({ value }: { value: unknown }) {
   const empty = value === undefined || value === null || (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length);
-  return <InspectorFieldGroup><InspectorFieldRow label="Аргументы">
-    {empty ? <InspectorScalar value="Нет аргументов" /> : <InspectorExpandableValue value={value} title="Аргументы tool-вызова" />}
-  </InspectorFieldRow></InspectorFieldGroup>;
+  const fields = toDisplayEntries(value);
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const referenceLabels: Record<string, string> = {
+    result_id: 'Набор данных', source_result_id: 'Источник результата', artifact_id: 'Файл',
+    collection_id: 'Коллекция', data_instance_id: 'Источник данных', provider_id: 'Провайдер', credential_id: 'Учётные данные',
+  };
+  const references = Object.entries(referenceLabels).flatMap(([key, label]) => {
+    const value = record[key];
+    if (value === undefined || value === null || value === '') return [];
+    const isUuid = typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
+    const display = isUuid
+      ? key.includes('result') ? 'Ранее полученный набор данных'
+        : key === 'artifact_id' ? 'Выбранный файл'
+          : key === 'collection_id' ? 'Выбранная коллекция'
+            : key === 'credential_id' ? 'Настроенные учётные данные' : 'Подключённый источник данных'
+      : value;
+    return [{ label, value: display }];
+  });
+  return <InspectorFieldGroup>
+    {empty ? <InspectorFieldRow label="Параметры"><InspectorScalar value="Параметры не переданы" /></InspectorFieldRow> : null}
+    {[...references, ...fields].map((field) => <InspectorFieldRow key={field.label} label={field.label}>
+      {typeof field.value === 'string' || typeof field.value === 'number' || typeof field.value === 'boolean'
+        ? <InspectorScalar value={field.value} />
+        : <InspectorExpandableValue value={field.value} title={field.label} />}
+    </InspectorFieldRow>)}
+    {!empty && !references.length && !fields.length ? <InspectorFieldRow label="Аргументы"><InspectorExpandableValue value={value} title="Параметры операции" /></InspectorFieldRow> : null}
+  </InspectorFieldGroup>;
 }
 
 export function ToolRequestView({ call }: { call: TraceCall }) {
   return <ToolRequest value={call.requestView.arguments} />;
 }
 
-export function ToolResponse({ call }: { call: TraceCall }) {
+export function ToolResponse({ call, sessionId, runId }: { call: TraceCall; sessionId?: string; runId?: string }) {
   const presentation = call.info;
   const result = call.responseView?.toolResult;
   if (!result) return <InspectorFieldGroup><InspectorFieldRow label="Статус"><InspectorStatus label={presentation.status === 'waiting_retry' ? 'Ожидает повтора' : 'Ожидается'} tone="warn" /></InspectorFieldRow></InspectorFieldGroup>;
   const memory = memoryContextFromTool(call);
   if (memory) return <MemoryContextViewer context={memory} />;
+  const recorded = result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data as Record<string, unknown> : undefined;
+  const inlineKey = recorded && ['rows', 'value', 'data'].find(key => Object.prototype.hasOwnProperty.call(recorded, key));
+  const hasEventInline = result.delivery === 'stored' && !result.storedDescriptor && (Array.isArray(result.data) || Boolean(inlineKey));
+  const hasInlineData = result.inlineComplete === true && (result.inlineDataAvailable === true || hasEventInline);
+  const hasStoredCard = !hasInlineData && result.delivery === 'stored' && Boolean(result.resultId && sessionId && runId);
+  const hasData = hasInlineData || (result.data !== undefined && result.data !== null && !hasStoredCard);
+  const visibleResult = hasInlineData ? { ...result, data: result.inlineDataAvailable ? result.inlineData : inlineKey && recorded ? recorded[inlineKey] : result.data, storedDescriptor: false } : result;
   return <InspectorStack><InspectorFieldGroup>
-    <InspectorFieldRow label="Статус"><InspectorStatus label={result.success === false ? 'Ошибка' : 'Успешно'} tone={result.success === false ? 'danger' : 'success'} /></InspectorFieldRow>
-    <InspectorFieldRow label="Краткий результат"><InspectorScalar value={result.summary} /></InspectorFieldRow>
+    <InspectorFieldRow label="Статус"><InspectorStatus label={result.success === false ? 'Не выполнено' : result.success === true ? 'Выполнено' : 'Результат не подтверждён'} tone={result.success === false ? 'danger' : result.success === true ? 'success' : 'warn'} /></InspectorFieldRow>
+    {!hasStoredCard && !hasData ? <InspectorFieldRow label="Результат"><InspectorScalar value={result.summary} /></InspectorFieldRow> : null}
     {result.message ? <InspectorFieldRow label="Сообщение"><InspectorExpandableValue value={result.message} title="Сообщение tool-вызова" /></InspectorFieldRow> : null}
-    {result.data !== undefined && result.data !== null ? <InspectorFieldRow label="Данные"><InspectorExpandableValue value={result.data} title="Результат tool-вызова" /></InspectorFieldRow> : null}
-    {result.truncated ? <InspectorFieldRow label="Данные"><InspectorStatus label="Сокращены" tone="warn" /></InspectorFieldRow> : null}
   </InspectorFieldGroup>
+    {hasStoredCard && result.resultId && sessionId && runId ? <StoredResultCard key={result.resultId} sessionId={sessionId} runId={runId} resultId={result.resultId} traceData={result.data} returnedCount={result.returnedCount} sourceTotal={result.sourceTotal} result={result} /> : <>
+      {hasData ? <InspectorSection title="Результат"><ToolDataViewer result={visibleResult} /></InspectorSection> : null}
+      <ToolResultMeta result={result} inlineResult={hasInlineData} />
+    </>}
     <ExtractionResultViewer extraction={call.extraction} />
   </InspectorStack>;
 }

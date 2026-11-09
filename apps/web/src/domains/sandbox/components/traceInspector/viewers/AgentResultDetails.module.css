@@ -1,0 +1,18 @@
+.list { display: grid; gap: 8px; margin: 0; padding-left: 18px; min-width: 0; }
+.list li { min-width: 0; overflow-wrap: anywhere; }
+.list li > a { overflow-wrap: anywhere; }
+.meta { display: block; margin-top: 3px; color: var(--text-secondary); font-size: var(--font-size-xs, 12px); overflow-wrap: anywhere; }
+.more { margin-top: 6px; color: var(--text-secondary); font-size: var(--font-size-xs, 12px); }
+.more summary { cursor: pointer; color: var(--text-primary); }
+.needList,
+.diagnosticList { list-style: none; padding: 0; }
+.needCard,
+.diagnosticCard { min-width: 0; padding: var(--sp-2, 8px); border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); background: var(--bg-secondary); }
+.needCard { display: grid; gap: var(--sp-2, 8px); }
+.needDescription { font-weight: 600; overflow-wrap: anywhere; }
+.needBadges { display: flex; flex-wrap: wrap; gap: var(--sp-1, 4px); }
+.diagnosticList { gap: var(--sp-2, 8px); }
+.diagnosticHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--sp-2, 8px); font-weight: 600; }
+.diagnosticDetails { margin-top: var(--sp-1, 4px); color: var(--text-secondary); font-size: var(--font-size-xs, 12px); }
+.diagnosticDetails summary { width: fit-content; cursor: pointer; color: var(--text-primary); }
+.diagnosticDetails p { margin: var(--sp-1, 4px) 0 0; overflow-wrap: anywhere; }

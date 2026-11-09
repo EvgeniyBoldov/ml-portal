@@ -19,7 +19,7 @@ function StatisticValue({ statistic }: { statistic: TraceExecutorStatistic }) {
 export function ExecutorInfoViewer({ info }: { info: TraceExecutorInfoView }) {
   return <InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={info.statusLabel} tone={tone(info.status)} /></InspectorFieldRow>
-    {info.durationMs !== undefined ? <InspectorFieldRow label="Длительность"><InspectorScalar value={duration(info.durationMs)} /></InspectorFieldRow> : null}
+    {info.durationMs !== undefined ? <InspectorFieldRow label="Время исполнения"><InspectorScalar value={duration(info.durationMs)} /></InspectorFieldRow> : null}
     {info.statistics.map((statistic) => <InspectorFieldRow key={statistic.key} label={statistic.label}><StatisticValue statistic={statistic} /></InspectorFieldRow>)}
   </InspectorFieldGroup>;
 }

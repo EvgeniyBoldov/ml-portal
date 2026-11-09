@@ -1,0 +1,40 @@
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2, 8px);
+  min-width: 0;
+  width: 100%;
+}
+
+.identity {
+  min-width: 0;
+}
+
+.name {
+  display: block;
+  color: var(--text-primary, #1a1a1a);
+  font-size: var(--font-size-sm, 14px);
+  overflow-wrap: anywhere;
+}
+
+.description {
+  margin: var(--sp-1, 4px) 0 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: var(--font-size-xs, 12px);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.statusLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2, 8px);
+  min-width: 0;
+}
+
+.duration {
+  color: var(--text-secondary, #6b7280);
+  font-size: var(--font-size-xs, 12px);
+}
+

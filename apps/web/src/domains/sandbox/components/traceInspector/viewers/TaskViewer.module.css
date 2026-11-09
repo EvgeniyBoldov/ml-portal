@@ -1,0 +1,26 @@
+.goal {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-md, var(--font-size-sm));
+  line-height: var(--line-height-normal, 1.5);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.instructions {
+  color: var(--text-secondary);
+}
+
+.instructions > summary {
+  color: var(--text-link, var(--text-primary));
+  cursor: pointer;
+}
+
+.instructions > p {
+  margin: var(--sp-2) 0 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-normal, 1.5);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

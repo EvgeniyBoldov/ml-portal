@@ -20,7 +20,30 @@ import type {
 
 const BASE = '/sandbox';
 
+export interface SandboxResultMetadata {
+  result_id: string;
+  operation: string;
+  row_count: number;
+  source_total: number | null;
+  source_complete: boolean;
+  revision: number;
+  observed_schema: Record<string, unknown>;
+  expires_at: string;
+}
+
+export interface SandboxResultPage extends SandboxResultMetadata {
+  rows: unknown[];
+  offset: number;
+  next_offset: number | null;
+}
+
 export const sandboxApi = {
+  getResultMetadata: (sessionId: string, runId: string, resultId: string): Promise<SandboxResultMetadata> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/runs/${runId}/results/${resultId}/metadata`),
+  getResultPage: (sessionId: string, runId: string, resultId: string, offset: number, revision: number): Promise<SandboxResultPage> =>
+    apiRequest(`${BASE}/sessions/${sessionId}/runs/${runId}/results/${resultId}`, {
+      query: { offset, limit: 20, revision },
+    }),
   // ── Sessions ────────────────────────────────────────────────────────────
 
   listSessions: (params?: {

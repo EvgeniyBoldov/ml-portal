@@ -23,6 +23,5 @@ export function CheckpointViewer({ decision }: { decision: TraceCheckpointDecisi
     {decision.declaredNext ? <InspectorFieldRow label="Планировщик предложил"><InspectorScalar value={destinationLabel(decision.declaredNext)} /></InspectorFieldRow> : null}
     {decision.decided ? <InspectorFieldRow label="Фактический переход"><InspectorScalar value={destinationLabel(decision.effectiveNext)} /></InspectorFieldRow> : null}
     {decision.reason ? <InspectorFieldRow label="Причина"><InspectorScalar value={reasonLabel(decision.reason)} /></InspectorFieldRow> : null}
-    {decision.iterationId ? <InspectorFieldRow label="Итерация плана"><InspectorScalar value={decision.iterationId} /></InspectorFieldRow> : null}
   </InspectorFieldGroup>;
 }

@@ -61,6 +61,41 @@ class RoutingStatus(str, Enum):
     UNAVAILABLE = "unavailable"
 
 
+def _build_access_items(*, operations: List[Any], missing: Any,
+                        configured_operations: List[Dict[str, Any]],
+                        denied_source_keys: set[str]) -> List[dict]:
+    """Project preflight's effective tools without leaking raw routing diagnostics."""
+    items: Dict[str, dict] = {}
+    for operation in operations:
+        tool_key = str(getattr(operation, "operation_slug", "")).strip()
+        if not tool_key:
+            continue
+        items[tool_key] = {"kind": "tool", "key": tool_key,
+                "label": str(getattr(operation, "name", None) or tool_key),
+                "status": "available", "risk_level": str(getattr(operation, "risk_level", "unknown")),
+                **({"description": str(operation.discovery_description).strip()[:600]}
+                   if getattr(operation, "discovery_description", None) else {}),
+                "source_label": ("Система" if getattr(operation, "scope", None) == "system" else
+                    str(getattr(operation, "provider_instance_slug", None) or getattr(operation, "data_instance_slug", "")))}
+    for operation in configured_operations:
+        key = str(operation.get("key") or "").strip()
+        if not key:
+            continue
+        source_key = str(operation.get("source_key") or "").strip()
+        reason_code = "blocked_by_rbac" if source_key in denied_source_keys else "tool_unavailable"
+        reason = "Недоступен по правам доступа" if reason_code == "blocked_by_rbac" else "Не прошёл проверку доступности"
+        items.setdefault(key, {"kind": "tool", "key": key, "label": str(operation.get("label") or key),
+            "status": "unavailable", "reason_code": reason_code, "reason": reason,
+            **({"description": str(operation["description"]).strip()[:600]} if operation.get("description") else {}),
+            "source_label": str(operation.get("source_label") or "Система"),
+            **({"risk_level": operation["risk_level"]} if operation.get("risk_level") else {})})
+    for tool_key in getattr(missing, "tools", []) or []:
+        key = str(tool_key)
+        items.setdefault(key, {"kind": "tool", "key": key, "label": key,
+            "status": "unavailable", "reason_code": "tool_unavailable", "reason": "Инструмент недоступен"})
+    return list(items.values())
+
+
 @dataclass
 class ExecutionRequest:
     """Запрос на выполнение агента."""
@@ -399,6 +434,20 @@ class ExecutionPreflight:
                 limits=exec_request.limit_data,
                 rbac_audit=exec_request.rbac_audit,
             )
+            access_items = _build_access_items(
+                operations=exec_request.resolved_operations, missing=operation_result.missing,
+                configured_operations=exec_request.rbac_audit.get("configured_operations", []),
+                denied_source_keys=set(exec_request.rbac_audit.get("denied_by_rbac", [])) |
+                    set(exec_request.rbac_audit.get("denied_by_capability", [])),
+            )
+            await emit(
+                RuntimeEventType.ACCESS_SNAPSHOT,
+                entity_type="preflight",
+                entity_id=trace_parent_id or str(run_id),
+                parent_entity_type="agent_execution" if trace_parent_id else "orchestrator",
+                parent_entity_id=trace_parent_id or str(run_id),
+                items=access_items,
+            )
 
             return exec_request
 
@@ -516,6 +565,15 @@ class ExecutionPreflight:
             for inst in before_instances
             if str(inst.collection_slug or inst.slug or "").strip()
         })
+        candidate_source_details = {
+            key: {
+                "label": str(getattr(inst, "name", None) or key)[:255],
+                "description": str(getattr(inst, "description", None) or getattr(inst, "data_description", None) or
+                    getattr(inst, "usage_purpose", None) or "").strip()[:600] or None,
+            }
+            for inst in before_instances
+            if (key := str(inst.collection_slug or inst.slug or "").strip())
+        }
         bound_collections = sorted({
             str(inst.collection_slug or "").strip()
             for inst in before_instances
@@ -528,9 +586,20 @@ class ExecutionPreflight:
             "capability_bound_collection_ids": sorted(capability_ids) if capability_ids is not None else [],
             "capability_bound_collections": bound_collections,
             "candidates": all_candidates,
+            "candidate_source_details": candidate_source_details,
             "allowed": allowed_after_filter,
             "denied_by_capability": sorted(set(by_capability_denied)),
             "denied_by_rbac": sorted(set(by_rbac_denied)),
+            "configured_operations": [
+                {"key": str(op.operation_slug), "label": str(op.name or op.operation_slug),
+                 "source_key": str(op.collection_slug or op.data_instance_slug or ""),
+                 "scope": str(op.scope),
+                 "description": str(op.discovery_description or "").strip()[:600] or None,
+                 "source_label": ("Система" if op.scope == "system" else
+                     str(op.provider_instance_slug or op.data_instance_slug or "")),
+                 "risk_level": str(op.risk_level)}
+                for op in operation_result.resolved_operations
+            ],
             "before_count": before_count,
             "after_count": len(filtered_instances),
         }

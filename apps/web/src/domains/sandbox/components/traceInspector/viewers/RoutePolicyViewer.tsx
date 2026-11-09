@@ -20,6 +20,8 @@ const routeLabels: Record<string, string> = {
   tool_call: 'Вызов инструмента',
 };
 
+const isOpaqueId = (value: string): boolean => /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(value);
+
 export function RoutePolicyViewer({
   decision,
 }: {
@@ -44,10 +46,7 @@ export function RoutePolicyViewer({
       {!isRecommendation && decision.route ? <InspectorFieldRow label="Исторический маршрут">
         <InspectorScalar value={routeLabels[decision.route] ?? decision.route} />
       </InspectorFieldRow> : null}
-      {decision.recommendationId ? <InspectorFieldRow label="ID рекомендации">
-        <InspectorScalar value={decision.recommendationId} />
-      </InspectorFieldRow> : null}
-      {decision.ruleId ? (
+      {decision.ruleId && !isOpaqueId(decision.ruleId) ? (
         <InspectorFieldRow label="Правило">
           <InspectorScalar value={decision.ruleId} />
         </InspectorFieldRow>

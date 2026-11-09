@@ -84,13 +84,13 @@ function statusClass(status: string): string {
 function Metrics({ metrics, hideElapsed }: { metrics: TraceMetrics; hideElapsed?: boolean }) {
   if ((!metrics.elapsedMs || hideElapsed) && !metrics.tokens && !metrics.retries && !metrics.calls) return null;
   return (
-    <div className={styles.metrics}>
-      {metrics.calls ? <span>calls: {metrics.calls}</span> : null}
-      {metrics.successfulCalls ? <span>ok: {metrics.successfulCalls}</span> : null}
-      {metrics.failedCalls ? <span>errors: {metrics.failedCalls}</span> : null}
-      {metrics.tokens ? <span>tokens: {metrics.tokens}</span> : null}
-      {!hideElapsed && metrics.elapsedMs ? <span>time: {formatDuration(metrics.elapsedMs)}</span> : null}
-      {metrics.retries ? <span>retry: {metrics.retries}</span> : null}
+    <div className={styles.metrics} aria-label="Метрики выполнения">
+      {metrics.calls ? <span>Вызовы: {metrics.calls}</span> : null}
+      {metrics.successfulCalls ? <span>Успешно: {metrics.successfulCalls}</span> : null}
+      {metrics.failedCalls ? <span>Ошибки: {metrics.failedCalls}</span> : null}
+      {metrics.tokens ? <span>Токены: {metrics.tokens}</span> : null}
+      {!hideElapsed && metrics.elapsedMs ? <span title="Фактическое время выполнения этапа">Время исполнения: {formatDuration(metrics.elapsedMs)}</span> : null}
+      {metrics.retries ? <span>Повторы: {metrics.retries}</span> : null}
     </div>
   );
 }
@@ -113,7 +113,7 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
       <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage, tabs: [] } : { kind: 'call', key: call.entity.key, call, executor, stage, tabs: [] }))}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
-        <span className={`${styles.callStatus} ${call.info.status === 'error' ? styles.callStatusError : call.info.status === 'ok' ? styles.callStatusComplete : call.info.status === 'waiting_retry' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{call.info.outcome?.count ? <span className={styles.callStatusCount}>· {call.info.outcome.count}</span> : null}</span>
+        <span className={`${styles.callStatus} ${call.info.status === 'error' ? styles.callStatusError : call.info.status === 'ok' ? styles.callStatusComplete : call.info.status === 'waiting_retry' || call.info.status === 'unknown' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{call.info.outcome?.count ? <span className={styles.callStatusCount}>· {call.info.outcome.count}</span> : null}</span>
       </button>
     </div>
   );

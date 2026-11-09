@@ -5,6 +5,7 @@
  */
 import { useParams, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSandboxSession } from '../hooks/useSandboxSession';
 import { useSandboxRun } from '../hooks/useSandboxRun';
@@ -31,7 +32,7 @@ const CONFIG_WIDTH_KEY = 'sandbox.config.width';
 const HANDLE_WIDTH = 8;
 const SIDEBAR_MIN = 220;
 const SIDEBAR_MAX = 520;
-const CONFIG_MIN = 260;
+const CONFIG_MIN = 320;
 const CONFIG_MAX = 680;
 const CHAT_MIN = 420;
 
@@ -57,16 +58,19 @@ export default function SandboxSessionPage() {
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
     const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed) ? parsed : 280;
+    return Number.isFinite(parsed)
+      ? clamp(parsed, SIDEBAR_MIN, SIDEBAR_MAX)
+      : 280;
   });
   const [configWidth, setConfigWidth] = useState<number>(() => {
     const raw = window.localStorage.getItem(CONFIG_WIDTH_KEY);
     const parsed = raw ? Number(raw) : NaN;
-    return Number.isFinite(parsed) ? parsed : 320;
+    return Number.isFinite(parsed)
+      ? clamp(parsed, CONFIG_MIN, CONFIG_MAX)
+      : 420;
   });
-  const [isCompactLayout, setIsCompactLayout] = useState<boolean>(
-    window.innerWidth < 1200
-  );
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const isCompactLayout = viewportWidth < 1200;
 
   const sandboxRun = useSandboxRun(sessionId ?? '');
 
@@ -211,10 +215,36 @@ export default function SandboxSessionPage() {
   }, [configWidth]);
 
   useEffect(() => {
-    const onResize = () => setIsCompactLayout(window.innerWidth < 1200);
+    const onResize = () => {
+      const viewport = window.innerWidth;
+      setViewportWidth(viewport);
+      if (viewport >= 1200) {
+        const nextSidebarWidth = clamp(
+          sidebarWidth,
+          SIDEBAR_MIN,
+          Math.max(
+            SIDEBAR_MIN,
+            Math.min(
+              SIDEBAR_MAX,
+              viewport - CONFIG_MIN - CHAT_MIN - HANDLE_WIDTH * 2
+            )
+          )
+        );
+        setSidebarWidth(nextSidebarWidth);
+        const maxRight = Math.max(
+          CONFIG_MIN,
+          Math.min(
+            CONFIG_MAX,
+            viewport - nextSidebarWidth - CHAT_MIN - HANDLE_WIDTH * 2
+          )
+        );
+        setConfigWidth(current => clamp(current, CONFIG_MIN, maxRight));
+      }
+    };
+    onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, []);
+  }, [sidebarWidth]);
 
   // Early returns after all hooks are called
   if (isLoading) {
@@ -230,7 +260,8 @@ export default function SandboxSessionPage() {
     );
   }
 
-  const startSidebarResize = () => {
+  const startSidebarResize = (startEvent: ReactPointerEvent<HTMLDivElement>) => {
+    startEvent.preventDefault();
     const onMove = (event: PointerEvent) => {
       const viewport = window.innerWidth;
       const maxLeft = Math.min(
@@ -244,12 +275,15 @@ export default function SandboxSessionPage() {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
-  const startConfigResize = () => {
+  const startConfigResize = (startEvent: ReactPointerEvent<HTMLDivElement>) => {
+    startEvent.preventDefault();
     const onMove = (event: PointerEvent) => {
       const viewport = window.innerWidth;
       const rawRight = viewport - event.clientX;
@@ -264,9 +298,11 @@ export default function SandboxSessionPage() {
     const onUp = () => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
   };
 
   const gridColumns = isCompactLayout
@@ -343,7 +379,41 @@ export default function SandboxSessionPage() {
         <div
           className={styles.resizer}
           role="separator"
-          aria-label="Resize sidebar"
+          aria-label="Изменить ширину навигации"
+          aria-orientation="vertical"
+          aria-valuenow={sidebarWidth}
+          aria-valuemin={SIDEBAR_MIN}
+          aria-valuemax={Math.max(
+            SIDEBAR_MIN,
+            Math.min(
+              SIDEBAR_MAX,
+              window.innerWidth - configWidth - CHAT_MIN - HANDLE_WIDTH * 2
+            )
+          )}
+          tabIndex={0}
+          onKeyDown={event => {
+            const maxLeft = Math.max(
+              SIDEBAR_MIN,
+              Math.min(
+                SIDEBAR_MAX,
+                window.innerWidth - configWidth - CHAT_MIN - HANDLE_WIDTH * 2
+              )
+            );
+            const value =
+              event.key === 'Home'
+                ? SIDEBAR_MIN
+                : event.key === 'End'
+                  ? maxLeft
+                  : event.key === 'ArrowLeft'
+                    ? sidebarWidth - 16
+                    : event.key === 'ArrowRight'
+                      ? sidebarWidth + 16
+                      : undefined;
+            if (value !== undefined) {
+              event.preventDefault();
+              setSidebarWidth(clamp(value, SIDEBAR_MIN, maxLeft));
+            }
+          }}
           onPointerDown={startSidebarResize}
         />
       )}
@@ -381,7 +451,41 @@ export default function SandboxSessionPage() {
         <div
           className={styles.resizer}
           role="separator"
-          aria-label="Resize config panel"
+          aria-label="Изменить ширину инспектора"
+          aria-orientation="vertical"
+          aria-valuenow={configWidth}
+          aria-valuemin={CONFIG_MIN}
+          aria-valuemax={Math.max(
+            CONFIG_MIN,
+            Math.min(
+              CONFIG_MAX,
+              window.innerWidth - sidebarWidth - CHAT_MIN - HANDLE_WIDTH * 2
+            )
+          )}
+          tabIndex={0}
+          onKeyDown={event => {
+            const maxRight = Math.max(
+              CONFIG_MIN,
+              Math.min(
+                CONFIG_MAX,
+                window.innerWidth - sidebarWidth - CHAT_MIN - HANDLE_WIDTH * 2
+              )
+            );
+            const value =
+              event.key === 'Home'
+                ? CONFIG_MIN
+                : event.key === 'End'
+                  ? maxRight
+                  : event.key === 'ArrowLeft'
+                    ? configWidth + 16
+                    : event.key === 'ArrowRight'
+                      ? configWidth - 16
+                      : undefined;
+            if (value !== undefined) {
+              event.preventDefault();
+              setConfigWidth(clamp(value, CONFIG_MIN, maxRight));
+            }
+          }}
           onPointerDown={startConfigResize}
         />
       )}

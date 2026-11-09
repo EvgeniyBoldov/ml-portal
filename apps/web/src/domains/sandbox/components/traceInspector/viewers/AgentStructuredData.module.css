@@ -1,0 +1,36 @@
+.preview { display: grid; gap: var(--sp-2, 8px); min-width: 0; }
+.scalar { overflow-wrap: anywhere; }
+.emptyValue { color: var(--text-secondary); font-style: italic; }
+.scalarList { margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.scalarList li + li { margin-top: 3px; }
+.object { display: grid; gap: 7px; margin: 0; min-width: 0; }
+.objectGroups { display: grid; gap: var(--sp-2, 8px); min-width: 0; }
+.entry { display: grid; grid-template-columns: minmax(74px, 38%) minmax(0, 1fr); gap: 8px; min-width: 0; }
+.entry dt { color: var(--text-secondary); overflow-wrap: anywhere; }
+.entry dd { margin: 0; min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.nestedList { display: grid; gap: 6px; margin: 0; padding-left: 18px; overflow-wrap: anywhere; }
+.nestedPreview { display: block; max-width: 100%; color: var(--text-secondary); overflow-wrap: anywhere; white-space: pre-wrap; }
+.longText { display: block; min-width: 0; overflow-wrap: anywhere; }
+.longText summary { width: fit-content; margin-top: var(--sp-1, 4px); cursor: pointer; color: var(--text-link, var(--text-primary)); font-size: var(--font-size-xs, 12px); }
+.fullText { display: block; margin-top: var(--sp-1, 4px); white-space: pre-wrap; overflow-wrap: anywhere; }
+.recordGroups { display: grid; gap: var(--sp-2, 8px); min-width: 0; }
+.recordGroup { min-width: 0; padding: var(--sp-2, 8px); border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); background: var(--bg-secondary); }
+.recordGroup h5 { margin: 0 0 var(--sp-2, 8px); color: var(--text-secondary); font-size: var(--font-size-xs, 12px); font-weight: 600; }
+.complexGroups { display: grid; gap: var(--sp-2, 8px); min-width: 0; }
+.complexGroup { min-width: 0; padding: var(--sp-2, 8px); border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); background: var(--bg-secondary); }
+.complexGroup h5 { margin: 0 0 var(--sp-2, 8px); color: var(--text-primary); font-size: var(--font-size-sm, 14px); font-weight: 600; overflow-wrap: anywhere; }
+.longFields { display: grid; gap: var(--sp-2, 8px); min-width: 0; }
+.longField { min-width: 0; padding: var(--sp-2, 8px); border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); }
+.longField summary { cursor: pointer; color: var(--text-primary); font-weight: 600; overflow-wrap: anywhere; }
+.longField p { margin: var(--sp-2, 8px) 0 0; color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; }
+.more { display: block; margin-top: 6px; color: var(--text-secondary); font-size: var(--font-size-xs, 12px); }
+.expand { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--text-link, var(--text-primary)); cursor: pointer; font-size: var(--font-size-xs, 12px); text-decoration: underline; }
+.expand:focus-visible { outline: 2px solid var(--text-link, var(--text-primary)); outline-offset: 2px; }
+.fullView { display: grid; gap: var(--space-3); min-width: 0; }
+.viewModes { display: flex; gap: var(--space-2); border-bottom: 1px solid var(--border-color); padding-bottom: var(--space-2); }
+.viewModes button { border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); background: var(--bg-hover); color: var(--text-primary); padding: 5px 10px; cursor: pointer; font: inherit; font-size: var(--font-size-sm, 14px); }
+.viewModes button[aria-pressed='true'] { border-color: var(--primary); background: var(--bg-elevated); }
+.viewModes button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.fullHuman { min-width: 0; }
+.deepDetails { min-width: 0; padding: var(--sp-2, 8px); border: 1px solid var(--border-color); border-radius: var(--radius-md, 8px); }
+.deepDetails summary { color: var(--text-primary); cursor: pointer; font-size: var(--font-size-sm, 14px); font-weight: 600; overflow-wrap: anywhere; }

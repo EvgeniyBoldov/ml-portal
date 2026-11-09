@@ -710,6 +710,31 @@ class RuntimeEvent:
 - new runtime emits only canonical `tool_request` / `tool_result` journal events;
 - transport aliases do not create persisted compatibility events.
 
+### Sandbox access snapshot
+
+`access_snapshot` is an additive journal event consumed by the sandbox inspector's
+unified «Доступ» view. Its `items` contain stable slugs, display labels, effective
+availability (`available | unavailable | limited | unknown`), optional short
+safe reason fields, optional `description` and `source_label`, risk level, and
+nested `children` where applicable. Agent snapshots may also include optional
+top-level `agent_description`. Descriptions are bounded presentation text and
+remain optional for compatibility with older traces. `source_label` names the
+source/provider for a tool; system tools use `Система`. It is
+an inventory projection, not an authorization source. Planner snapshots list
+RBAC-filtered candidate agents and its direct role tools; agent snapshots list
+configured source candidates with effective collection tools nested under each
+source and system-scope tools as direct items; preflight snapshots list its direct tools. A missing/unreported fact must stay
+`unknown`; raw errors, credential payloads, and internal IDs are not part of
+this contract. The event's `entity_type` is the logical snapshot category
+(`planner | agent | preflight`); `parent_entity_type` and `parent_entity_id`
+identify the canonical journal owner used for trace correlation. Planner role
+tools come from its resolved `RoleMemoryTools` descriptors, not a global tool
+catalog. Agent preflight audits retain configured operation slugs so an
+operation filtered out by RBAC can still be shown as unavailable under its
+source. Agent/source descriptions come from resolved records; tool descriptions
+come from resolved discovery metadata. Missing descriptions remain absent
+rather than being inferred from a slug.
+
 ## Context Snapshot Contract
 
 Все lifecycle `*_start` события могут нести `context_snapshot` для фиксации состояния на момент старта сущности:
