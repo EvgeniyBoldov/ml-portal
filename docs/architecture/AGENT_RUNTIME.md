@@ -64,6 +64,26 @@ their nested contents are arbitrary JSON values, with non-finite numbers rejecte
 This validates the machine API envelope, not an agent-specific business schema.
 The response agent slug is set by the server from the resolved agent.
 
+For asynchronous execution send `{"agent":"agent_slug","data":{},"async":true}`.
+The endpoint validates access and returns HTTP 202 with `{"id":"<uuid>"}` after
+the request is persisted. A Celery dispatcher starts queued work; permissions and
+agent configuration are checked again at execution. A lost worker is retried
+after a lease (`SHADOW_INVOCATION_LEASE_SECONDS`, default one hour); execution
+may therefore happen more than once.
+
+`GET /api/v1/agents/shadow/results` requires Bearer authentication and returns
+only the caller's completed or failed tasks that have not been acknowledged.
+`GET /api/v1/agents/shadow/results/{id}` returns the caller's task in any state,
+including after acknowledgement; another user's ID returns 404. Each item has
+`id`, `agent`, `status` (`queued`, `running`, `completed`, `failed`), `result`,
+`error`, `created_at` and `delivered_at`. Failed tasks have a generic error.
+Reads do not change delivery state. After successfully receiving and processing a
+result, the client calls `POST /api/v1/agents/shadow/results/{id}/ack`; it is
+idempotent and rejects unfinished tasks. Until acknowledged a result may be
+returned repeatedly, including to concurrent consumers. Records remain in the
+database after acknowledgement. The worker and Celery beat must be running;
+beat retries publication of queued or expired-lease work after broker failures.
+
 The route resolves the user's current active default tenant membership from the
 existing membership resolver. The user's identity/scopes and existing effective
 agent RBAC apply to the entire execution; identities cannot be overridden in the

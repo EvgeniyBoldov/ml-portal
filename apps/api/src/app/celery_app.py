@@ -37,6 +37,7 @@ app = Celery(
         "app.workers.tasks_memory",
         # Shadow document study tasks
         "app.workers.tasks_shadow_document_memory",
+        "app.workers.tasks_shadow_invocations",
         "app.workers.tasks_hipporag_document",
         "app.workers.tasks_long_memory_documents",
     ],
@@ -50,6 +51,11 @@ celery_app = app
 def build_default_beat_schedule() -> dict:
     """Return canonical periodic task schedule for the platform."""
     return {
+        "shadow-invocation-dispatch": {
+            "task": "app.workers.tasks_shadow_invocations.dispatch_shadow_invocations",
+            "schedule": 15.0,
+            "options": {"queue": "maintenance.default"},
+        },
         "long-memory-document-operations": {
             "task": "app.workers.tasks_long_memory_documents.reconcile_long_memory_documents",
             "schedule": 15.0,
@@ -206,6 +212,8 @@ app.conf.task_queues = (
 
 # Маршрутизация задач по очередям
 app.conf.task_routes = {
+    "app.workers.tasks_shadow_invocations.execute_shadow_invocation": {"queue": "maintenance.default", "priority": 1},
+    "app.workers.tasks_shadow_invocations.dispatch_shadow_invocations": {"queue": "maintenance.default", "priority": 1},
     # RAG ingest pipeline tasks
     "app.workers.tasks_rag_ingest.extract.extract_document": {"queue": "ingest.extract", "priority": 7},
     "app.workers.tasks_rag_ingest.normalize.normalize_document": {"queue": "ingest.normalize", "priority": 6},
@@ -298,6 +306,7 @@ else:
     # LongMemory switches require durable queue recovery even on test stands
     # with general periodic maintenance disabled.
     app.conf.beat_schedule = {
+        "shadow-invocation-dispatch": build_default_beat_schedule()["shadow-invocation-dispatch"],
         "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"],
         "long-memory-document-operations": build_default_beat_schedule()["long-memory-document-operations"],
         "memory-finalize-outbox-reconcile": build_default_beat_schedule()["memory-finalize-outbox-reconcile"],

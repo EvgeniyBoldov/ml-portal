@@ -33,7 +33,10 @@
 `POST /api/v1/agents/shadow/invoke` принимает `{"agent":"slug","data":{}}`
 с Bearer access token пользователя и возвращает `{"agent":"slug","result":{}}`.
 Настройте формат JSON-объекта в версии агента; исполнитель ожидает его в
-`structured_response` внутреннего completion-протокола. Shadow пока работает
+`structured_response` внутреннего completion-протокола. Для фонового режима укажите `"async": true`, получите ID и заберите готовые
+результаты через `GET /api/v1/agents/shadow/results` под тем же пользователем;
+после получения подтвердите каждый через `POST /api/v1/agents/shadow/results/{id}/ack`.
+Shadow пока работает
 без MCP и памяти. Его запуски доступны в текущем инспекторе согласно уровню
 логирования. [Контракт и ограничения](../architecture/AGENT_RUNTIME.md#shadow-api-invocation).
 

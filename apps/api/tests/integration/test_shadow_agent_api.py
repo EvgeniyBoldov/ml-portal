@@ -23,6 +23,13 @@ def api(monkeypatch):
     app.dependency_overrides[db_session] = lambda: session
     app.dependency_overrides[get_llm_client] = lambda: AsyncMock()
     user_id, tenant_id = uuid4(), uuid4()
+    from app.services import bearer_authentication_service
+    auth_session = AsyncMock()
+    auth_session.__aenter__.return_value = auth_session
+    auth_session.get.return_value = SimpleNamespace(id=user_id, email="shadow-test@example.test", is_enabled=True, is_admin=False)
+    auth_session.execute.return_value.scalars.return_value.all.return_value = []
+    monkeypatch.setattr(bearer_authentication_service, "get_session_factory", lambda: lambda: auth_session)
+    monkeypatch.setattr(bearer_authentication_service, "ApiTokensRepository", lambda session: SimpleNamespace(active_tenant_ids=AsyncMock(return_value=[str(tenant_id)])))
     memberships = AsyncMock(return_value=[tenant_id])
     monkeypatch.setattr(module, "resolve_active_user_tenant_ids", memberships)
     invoke = AsyncMock(return_value=ShadowAgentResponse(agent="shadow-a", result={"ok": True}))
@@ -43,7 +50,7 @@ async def test_bearer_invocation_uses_token_user_and_current_membership(api):
     kwargs = api.invoke.call_args.kwargs
     assert kwargs["user_id"] == api.user_id
     assert kwargs["tenant_id"] == api.tenant_id
-    assert kwargs["scopes"] == ["invoke"]
+    assert kwargs["scopes"] == []
     assert kwargs["request_id"]
 
 
@@ -133,3 +140,48 @@ async def test_domain_failures_are_json_http_errors(api, error, status):
     assert response.status_code == status
     assert response.headers["content-type"] == "application/problem+json"
     assert isinstance(response.json(), dict)
+
+
+@pytest.mark.asyncio
+async def test_async_invocation_returns_id_and_authenticated_identity(api, monkeypatch):
+    invocation_id = uuid4()
+    enqueue = AsyncMock(return_value=invocation_id)
+    monkeypatch.setattr(module, "ShadowInvocationService", lambda *_: SimpleNamespace(enqueue=enqueue))
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        response = await client.post("/api/v1/agents/shadow/invoke", headers={"Authorization": f"Bearer {api.token}"},
+                                     json={"agent": "shadow-a", "data": {}, "async": True})
+    assert response.status_code == 202
+    assert response.json() == {"id": str(invocation_id)}
+    assert enqueue.call_args.kwargs["user_id"] == api.user_id
+    assert enqueue.call_args.kwargs["tenant_id"] == api.tenant_id
+    api.invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_result_listing_uses_authenticated_identity(api, monkeypatch):
+    listing = AsyncMock(return_value=[])
+    monkeypatch.setattr(module, "ShadowInvocationService", lambda *_: SimpleNamespace(list_ready=listing))
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        response = await client.get("/api/v1/agents/shadow/results", headers={"Authorization": f"Bearer {api.token}"})
+    assert response.status_code == 200
+    assert response.json() == []
+    listing.assert_awaited_once_with(api.user_id)
+
+
+@pytest.mark.asyncio
+async def test_result_by_id_and_ack_use_authenticated_identity(api, monkeypatch):
+    from datetime import datetime, timezone
+    from app.schemas.shadow_agents import ShadowAgentTask
+    invocation_id = uuid4()
+    get = AsyncMock(return_value=ShadowAgentTask(id=invocation_id, agent="shadow-a", status="running", created_at=datetime.now(timezone.utc)))
+    acknowledge = AsyncMock()
+    monkeypatch.setattr(module, "ShadowInvocationService", lambda *_: SimpleNamespace(get=get, acknowledge=acknowledge))
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        headers = {"Authorization": f"Bearer {api.token}"}
+        response = await client.get(f"/api/v1/agents/shadow/results/{invocation_id}", headers=headers)
+        ack = await client.post(f"/api/v1/agents/shadow/results/{invocation_id}/ack", headers=headers)
+    assert response.status_code == 200
+    assert response.json()["status"] == "running"
+    assert ack.status_code == 204
+    get.assert_awaited_once_with(invocation_id, api.user_id)
+    acknowledge.assert_awaited_once_with(invocation_id, api.user_id)

@@ -217,7 +217,9 @@ See [Runtime Interactions](architecture/RUNTIME_INTERACTIONS.md).
 через `POST /api/v1/agents/shadow/invoke` от пользователя Bearer access token
 или персонального API-токена из профиля с существующим RBAC; не входит в каталог планера. В первой версии выполняет
 LLM-задачу без инструментов, чата и памяти, возвращает JSON `agent/result`
-и использует текущий журнал запусков. Подробности — [Agent Runtime](architecture/AGENT_RUNTIME.md#shadow-api-invocation).
+и использует текущий журнал запусков. Для фонового запуска `async: true`
+возвращает ID; результат доступен автору через Shadow API с подтверждением
+получения. Подробности — [Agent Runtime](architecture/AGENT_RUNTIME.md#shadow-api-invocation).
 
 ### 6.2 Tool и Tool Instance данные
 

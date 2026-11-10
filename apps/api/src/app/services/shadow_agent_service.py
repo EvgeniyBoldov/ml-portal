@@ -12,8 +12,8 @@ from app.agents.context import RuntimeDependencies, ToolContext
 from app.core.db import get_session_factory
 from app.core.exceptions import ConflictError, ExternalServiceError, ForbiddenError
 from app.core.http.clients import LLMClientProtocol
-from app.models.agent import AgentType
-from app.models.agent_version import AgentVersionStatus
+from app.models.agent import Agent, AgentType
+from app.models.agent_version import AgentVersion, AgentVersionStatus
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import OrchestrationPhase, RuntimeEvent
 from app.runtime.orchestrator_contracts import (
@@ -34,10 +34,7 @@ class ShadowAgentService:
         self.session = session
         self.executor = AgentExecutor(session=session, llm_client=llm_client)
 
-    async def invoke(
-        self, request: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID,
-        scopes: list[str], request_id: str,
-    ) -> ShadowAgentResponse:
+    async def validate(self, request: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID) -> tuple[Agent, AgentVersion]:
         agents = AgentService(self.session)
         agent = await agents.get_agent_by_slug(request.agent)
         permissions = await PermissionService(self.session).resolve_permissions(
@@ -52,6 +49,13 @@ class ShadowAgentService:
             raise ConflictError("Shadow invocation requires a published agent version")
         if version.requires_fresh_retrieval:
             raise ConflictError("Shadow LLM-only invocation cannot require fresh retrieval")
+        return agent, version
+
+    async def invoke(
+        self, request: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID,
+        scopes: list[str], request_id: str,
+    ) -> ShadowAgentResponse:
+        agent, version = await self.validate(request, user_id=user_id, tenant_id=tenant_id)
         platform_config = await RuntimeConfigService(self.session).get_pipeline_config()
         run_id, execution_id = uuid4(), uuid4()
         level = RuntimeLoggingLevel.parse(agent.logging_level)

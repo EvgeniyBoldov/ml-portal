@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     MEMORY_SEARCH_BACKEND: str = Field(default="hipporag", pattern="^(hipporag|legacy)$")
     HIPPO_WORKER_URL: str = Field(default="http://hipporag:8080")
     HIPPO_CALLBACK_URL: str = Field(default="http://api:8000/api/v1/internal/hipporag")
+    SHADOW_INVOCATION_LEASE_SECONDS: int = Field(default=3600, ge=60, le=86400)
     HIPPO_OPERATION_LEASE_SECONDS: int = Field(default=60, ge=60, le=3600)
     HIPPO_OPERATION_MAX_ATTEMPTS: int = Field(default=4, ge=1, le=20)
     HIPPO_OPERATION_RETRY_DELAY_SECONDS: int = Field(default=60, ge=1, le=3600)
