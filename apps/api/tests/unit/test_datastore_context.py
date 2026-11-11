@@ -97,8 +97,11 @@ async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_
     from app.services.runtime_event_logger import RuntimeLoggingLevel
 
     catalog = [dataset("own", "consumer"), dataset("dependency", "producer"), dataset("hidden", "sibling")]
-    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog",
-                        AsyncMock(return_value=(catalog, "available")))
+    load_catalog = AsyncMock(side_effect=[
+        ([dataset("stale", "consumer")], "available"),
+        (catalog, "available"),
+    ])
+    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", load_catalog)
     runtime = AgentToolRuntime(Mock())
     runtime.llm.call = AsyncMock(return_value='{"completion":"fulfilled","answer":"Done"}')
     runtime.config_resolver.resolve = AsyncMock(return_value=(
@@ -123,6 +126,7 @@ async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_
     request = SimpleNamespace(agent=SimpleNamespace(slug="research"), resolved_operations=[],
         resolved_data_instances=[], rbac_audit={}, partial_mode_warning=None, run_id=uuid4())
     _ = [event async for event in runtime.execute(request, [{"role": "user", "content": "Review"}], ctx)]
+    assert load_catalog.await_count == 2
     messages = runtime.llm.call.await_args.kwargs["messages"]
     inventories = [item["content"] for item in messages if item.get("content", "").startswith("[Datastore")]
     assert len(inventories) == 1

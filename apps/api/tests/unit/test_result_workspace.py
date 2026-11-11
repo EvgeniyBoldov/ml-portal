@@ -59,14 +59,15 @@ def test_profile_never_cuts_json_and_describes_heterogeneous_rows():
     assert _profile_rows([{"id": i} for i in range(10)])[3] is False
 
 
-def test_stored_descriptor_explains_read_vs_load():
+def test_stored_result_has_actionable_read_pointer():
     data = {"result_id": str(uuid4()), "sql_ref": "result_x", "row_count": 50,
             "inline_complete": False, "source_complete": False,
             "dataset_meta": {"has_next": True, "next_arguments": {"secret": "must-not-show"}}}
     view = json.loads(OperationExecutionFacade.format_result_for_context(ToolResult.ok({}), stored_result=data))
-    descriptor = view["_runtime_result"]
-    assert descriptor["delivery"] == "stored" and descriptor["has_more"]
-    assert "result.read" in descriptor["hint"] and "result.load" in descriptor["hint"]
+    assert view["status"] == "ready"
+    assert view["result_id"] == data["result_id"]
+    assert view["next_action"]["tool"] == "result.read"
+    assert view["next_action"]["arguments"]["revision"] == 1
     assert "must-not-show" not in json.dumps(view)
 
 
@@ -90,9 +91,11 @@ def test_reuse_keeps_dataset_identity_instead_of_treating_descriptor_as_source_j
     from app.runtime.memory.tool_ledger import ToolLedger
     result_id = str(uuid4())
     ledger = ToolLedger()
-    ledger.register_call(operation="source", call_id="first", arguments={}, iteration=1, agent_slug="a", phase_id=None)
+    ledger.register_call(operation="source", call_id="first", arguments={}, iteration=1, agent_slug="a", phase_id="execution")
+    ledger.set_call_target(call_id="first", target_identity="", execution_id="execution")
     ledger.register_result(call_id="first", success=True, data={"row_count": 50}, result_id=result_id)
-    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), extra={"runtime_tool_ledger": ledger})
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), extra={"runtime_tool_ledger": ledger,
+        "lifecycle_agent_execution_id": "execution"})
     result, _ = ToolCallReusePolicy().maybe_reuse(operation_slug="source", arguments={}, ctx=ctx)
     assert result.metadata["stored_result"]["result_id"] == result_id
     assert not result.metadata["stored_result"]["inline_complete"]
@@ -145,23 +148,17 @@ def test_netbox_rejects_nonadvancing_continuation_and_inconsistent_protocol():
     assert unknown.meta.complete is None and unknown.meta.has_next is None
 
 
-def test_model_descriptor_exposes_exact_columns_and_schema_continuation():
-    from app.services.result_sql_projection import sql_columns
+def test_model_result_omits_schema_details_from_ordinary_reply():
     rows = [{f"field_{index}": index for index in range(100)}]
     schema, *_ = _profile_rows(rows)
     saved = {"result_id": str(uuid4()), "sql_ref": "result_example", "row_count": 1,
              "observed_schema": schema, "schema_complete": True, "inline_complete": False,
              "source_complete": True, "dataset_meta": {"has_next": False, "complete": True}}
     rendered = OperationExecutionFacade.format_result_for_context(ToolResult.ok(rows), stored_result=saved)
-    descriptor = json.loads(rendered)["_runtime_result"]
-    assert len(rendered.encode()) <= 4000
-    assert descriptor["schema_total_columns"] == len(sql_columns(schema))
-    assert descriptor["schema_returned_columns"] == len(descriptor["sql_columns"])
-    assert descriptor["next_schema_offset"] == len(descriptor["sql_columns"])
-    assert not descriptor["schema_page_complete"]
-    assert descriptor["schema_complete"]  # Profiling completeness differs from delivery completeness.
-    for name, column in descriptor["sql_columns"].items():
-        assert column == sql_columns(schema)[name]
+    descriptor = json.loads(rendered)
+    assert descriptor["status"] == "ready"
+    assert set(descriptor) <= {"status", "result_id", "revision", "source_coverage", "records", "next_action"}
+    assert "sql_columns" not in rendered and "schema_page_complete" not in rendered
 
 
 def test_virtual_columns_stay_top_level_and_search_accepts_multiple_fields():
@@ -203,12 +200,10 @@ def test_small_inline_result_keeps_all_columns_before_sample():
     saved = {"result_id": str(uuid4()), "sql_ref": "result_mock", "call_id": "call",
              "row_count": 1, "inline_complete": True, "source_complete": True,
              "observed_schema": schema, "sample": sample, "dataset_meta": {"complete": True, "has_next": False}}
-    view = json.loads(OperationExecutionFacade.format_result_for_context(ToolResult.ok({"value": [row]}), stored_result=saved))
-    meta = view["_runtime_result"]
-    assert set(meta["sql_columns"]) == set(row)
-    assert meta["schema_page_complete"] and not meta["schema_entry_too_large"]
-    assert "sample" not in meta  # Inline records are already present; no duplicate competing with schema.
-    assert "result.read" in meta["hint"] and "->>" in meta["hint"]
+    view = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok({"value": [row], "meta": {"complete": True}}), stored_result=saved))
+    assert view["records"] == [row]
+    assert view["result_id"] == saved["result_id"]
 
 
 def test_sql_values_take_priority_over_repeated_metadata_in_context(monkeypatch):
@@ -228,9 +223,8 @@ def test_sql_values_take_priority_over_repeated_metadata_in_context(monkeypatch)
     rendered = OperationExecutionFacade.format_result_for_context(ToolResult.ok(payload), stored_result=saved)
     view = json.loads(rendered)
     assert len(rendered.encode()) <= 3600
-    assert view["rows"] == rows
-    assert view["_runtime_result"]["delivery"] == "inline"
-    assert view["_runtime_result"]["source_complete"] is False
+    assert view["records"] == rows
+    assert view["source_coverage"]["complete"] is False
 
 
 def test_oversized_values_remain_explicitly_stored_without_partial_data():
@@ -239,9 +233,36 @@ def test_oversized_values_remain_explicitly_stored_without_partial_data():
     rows = [{"body": "я" * 10000}]
     view = json.loads(OperationExecutionFacade.format_result_for_context(
         ToolResult.ok({"rows": rows, "query_result_stored": True}), stored_result=saved))
-    assert view["_runtime_result"]["delivery"] == "stored"
-    assert not view["_runtime_result"]["inline_complete"]
-    assert "rows" not in view
+    assert view["status"] == "ready"
+    assert view["next_action"]["tool"] == "result.describe"
+    assert "records" not in view
+
+
+def test_workspace_read_preserves_empty_records_and_revision():
+    rendered = OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok({"result_id": "r1", "revision": 4, "value": [], "loaded_items": 0,
+                       "source_complete": False, "next_offset": None}, workspace_view=True),
+        operation_slug="result.read",
+    )
+    view = json.loads(rendered)
+    assert view["records"] == []
+    assert view["revision"] == 4
+    assert view["source_coverage"] == {"complete": False, "stored_count": 0}
+
+
+@pytest.mark.parametrize("value", [None, False, 0, ""])
+def test_workspace_read_preserves_scalar_values(value):
+    rendered = OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok({"result_id": "r1", "revision": 4, "value": value,
+                       "loaded_items": 1, "source_complete": True,
+                       "next_offset": 1, "requested_fields": []}, workspace_view=True),
+        operation_slug="result.read",
+    )
+    view = json.loads(rendered)
+    assert view["records"] == value
+    assert view["next_action"]["arguments"] == {
+        "result_id": "r1", "revision": 4, "offset": 1, "limit": 10, "fields": []
+    }
 
 
 def test_search_adapter_extracts_rows_and_retains_partial_errors():

@@ -163,8 +163,7 @@ compatible and use the same SQL storage engine.
   An empty dataset has an empty schema; scalar records expose `value`.
   Schema delivery is paginated with `next_schema_offset`, `schema_total_columns`,
   `schema_matched_columns` and `schema_page_complete`. `query` accepts comma-separated
-  column-name search terms, without filtering records. The initial tool descriptor
-  uses this same column map. Keys retain spelling and case; SQL quoting is needed
+  column-name search terms, without filtering records. Keys retain spelling and case; SQL quoting is needed
   for punctuation or reserved words. Invalid PostgreSQL identifiers (empty, NUL,
   longer than 63 UTF-8 bytes) fail explicitly rather than being silently renamed.
 * `result.read(result_id, fields?, offset?, limit?, revision?)` reads a bounded
@@ -233,24 +232,27 @@ message remains available independently of diagnostic content.
 
 ## Model presentation
 
-Every stored result has a descriptor and `delivery=inline|stored`. Complete small
-payloads may accompany the descriptor. Large payloads expose bounded observed
-fields/SQL columns and valid JSON samples. Samples are examples, never coverage
-proofs. Oversized sample records are omitted rather than sliced into invalid JSON.
-Descriptions explain how to read, analyze, or fetch source pages next. Internal
-pagination arguments are not shown to the model. The column schema has priority
-over samples and SQL lineage in the context budget. Complete inline values take
-priority over optional descriptor metadata: if the combined reply exceeds the
-budget, runtime retries presentation with a compact identity/completeness
-descriptor. SQL replies then include complete rows without duplicating their
-schema, samples and lineage. If values still cannot fit, the model receives only
-a stored reference, never a clipped record. `tool_result.result_inline_complete`
-and its safe payload's `inline_complete` report this actual model presentation,
-rather than the store's preliminary eligibility. Storage `delivery=stored|direct`
-is a separate property from model `delivery=inline|stored`.
-Inline data is not duplicated as a sample. Catalog and tool descriptors both
-expose the same column contract,
-and nested fields can be inspected with result.read before using JSON operators.
+Model-facing dataset replies use a compact typed receipt: `status` (`ready` or
+`already_completed`), `result_id`, `revision`, and `source_coverage` (source
+completion, known source total and number of saved records). A reply contains
+complete `records` when they fit the allocated context budget, or a concrete
+`next_action` with the available workspace tool and arguments. Source completion
+refers to this selection, not completion of the agent's task. An empty records
+array is a real empty result. Unknown source coverage is not false.
+
+Ordinary receipts omit SQL schema pages, generic SQL examples, samples and
+redundant delivery/completeness flags. `result.describe` provides schema on demand.
+`result.read` reads saved records; it does not repeat the source operation. Its
+continuation must preserve the selected fields and dataset revision. Oversized
+records require a narrower projection; no partial record is presented as complete.
+The model presentation uses the actual allocated budget rather than the store's
+preliminary inline eligibility. Persistence limits remain independent.
+
+The complete journal/checkpoint transcript is retained. Model requests use a
+separate projection that preserves native assistant/tool call pairing and direct
+or otherwise unrecoverable evidence. Older recoverable dataset responses may be
+represented by compact receipts. The authorized, task-selected result inventory
+is refreshed before decisions, so new results and revisions are visible.
 
 Before executing a batch of tool calls, runtime estimates the input room for
 the next model request with `inspect_context`, including current history, the

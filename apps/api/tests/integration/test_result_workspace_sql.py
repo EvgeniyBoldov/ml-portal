@@ -78,10 +78,9 @@ async def test_oversized_nested_record_can_be_projected_and_delivered_to_model(w
     stored = output.pop("_stored_result")
     rendered = OperationExecutionFacade.format_result_for_context(ToolResult.ok(output), stored_result=stored)
     view = json.loads(rendered)
-    assert view["rows"] == [{"name": fields["name"], "description": fields["description"],
+    assert view["records"] == [{"name": fields["name"], "description": fields["description"],
                               "status": "Open", "type": "Task", "comments": None}]
-    assert view["_runtime_result"]["inline_complete"]
-    assert not view["_runtime_result"]["source_complete"]
+    assert view["source_coverage"]["complete"] is False
     assert len(rendered.encode()) <= get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3
 
 
@@ -446,8 +445,9 @@ async def test_mock_mcp_to_records_schema_model_message_and_sql(workspace_pg, so
     read = await workspace.read(**ref)
     assert read["value"] == rows
     view = json.loads(OperationExecutionFacade.format_result_for_context(ToolResult.ok(normalized), stored_result=saved))
-    assert set(view["_runtime_result"]["sql_columns"]) == expected
-    assert view["_runtime_result"]["schema_page_complete"]
+    assert view["records"] == rows
+    assert "next_action" not in view
+    assert view["result_id"] == saved["result_id"]
     query_args = dict(call_id="sql", task_id="task", agent_execution_id="agent", **scope)
     result = await ToolResultStore().execute_sql(sql=f'''SELECT name, status->>'value' AS status,
         device_type->'manufacturer'->>'name' AS vendor, tags->0->>'name' AS tag,

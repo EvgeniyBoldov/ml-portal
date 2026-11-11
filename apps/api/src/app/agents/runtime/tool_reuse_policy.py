@@ -16,30 +16,54 @@ class ToolCallReusePolicy:
         arguments: Dict[str, Any],
         ctx: ToolContext,
     ) -> Optional[Tuple[ToolResult, list[dict]]]:
-        if not bool(ctx.extra.get("runtime_tool_reuse_enabled", True)):
-            return None
         from app.runtime.memory.tool_ledger import canonical_operation_name
         canonical_operation = canonical_operation_name(operation_slug)
         if canonical_operation == "file.read" or canonical_operation.startswith("file.data."):
             # Access, source revisions and temporary-index readiness must be
             # revalidated even for identical calls within the same turn.
             return None
-        # A task that explicitly requires fresh retrieval must never satisfy
-        # that requirement from an earlier receipt, even within one turn.
-        if str(ctx.extra.get("task_freshness_policy") or "") == "require_retrieval":
-            return None
-
-        ledger = ctx.extra.get("runtime_tool_ledger")
+        ledger = ctx.extra.get("runtime_execution_tool_ledger") or ctx.extra.get("runtime_tool_ledger")
         if ledger is None or not hasattr(ledger, "find_successful_result"):
             return None
+
+        execution_id = str(
+            ctx.extra.get("runtime_agent_execution_id") or ctx.extra.get("lifecycle_agent_execution_id") or ""
+        ) or None
+        target_identity = ctx.extra.get("runtime_tool_target_identity")
+        if hasattr(ledger, "find_execution_guard"):
+            prior = ledger.find_execution_guard(
+                operation=operation_slug, arguments=arguments or {}, phase_id=execution_id,
+                execution_id=execution_id,
+                target_identity=target_identity,
+                exclude_call_id=str(ctx.extra.get("runtime_active_tool_call_id") or "") or None,
+            )
+            if prior is not None and prior.status != "succeeded":
+                return ToolResult.fail(
+                    "This identical tool call already has an unresolved execution in this agent run.",
+                    error_code="duplicate_execution_blocked", retryable=False,
+                    reused_from_call_id=prior.call_id,
+                ), []
 
         reused = ledger.find_successful_result(
             operation=operation_slug,
             arguments=arguments or {},
-            phase_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+            # Task continuations may share a turn ledger. Reuse belongs to one
+            # concrete agent execution, regardless of retrieval policy.
+            execution_id=execution_id,
+            target_identity=target_identity,
+            max_age_seconds=None,
         )
         if reused is None:
             return None
+
+        if not reused.result_data_available and not reused.stored_result_id:
+            return ToolResult.fail(
+                "This identical tool call already succeeded, but its result is no longer available. "
+                "If you have a saved result id, inspect it with result.read or result.sql.",
+                error_code="duplicate_result_unavailable",
+                retryable=False,
+                reused_from_call_id=reused.call_id,
+            ), []
 
         result = ToolResult.ok(
             reused.result_data,

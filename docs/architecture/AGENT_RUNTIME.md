@@ -909,3 +909,18 @@ Pydantic `extra_forbidden` into an access-denied claim.
 Migration 0198 updates only the exact known planner output policy that omitted
 `kind=interaction`. It preserves custom policies and backs up the old field in
 extras; downgrade does not overwrite a subsequent operator edit.
+
+### Duplicate operations within an agent execution
+
+The runtime prevents an identical successful external operation from executing
+again in the same agent execution. The identity includes the resolved source
+and normalized arguments. `require_retrieval` requires a real retrieval in this
+execution; it does not require repeated retrieval of the same selection. A repeated
+call refers to the original result and is not new evidence or a new dataset.
+
+Saved-data reads remain available. Stateful source continuation and file access
+retain their revision, cursor and permission revalidation requirements. Errors
+are distinct from successful receipts; unresolved execution must not be reported
+as success. Repeated duplicate batches without new evidence receive bounded
+repair opportunities before a controlled terminal limitation. The full native
+call/result pairs remain in the journal even when model context is compacted.

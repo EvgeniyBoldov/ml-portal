@@ -87,3 +87,55 @@ def test_tool_ledger_reuse_is_scoped_to_phase():
     assert ledger.find_successful_result(
         operation="collection.sql.execute", arguments={"query": "select 1"}, phase_id="task-b",
     ) is None
+
+
+def test_tool_ledger_reuse_matches_resolved_target_and_can_ignore_cache_ttl():
+    ledger = ToolLedger()
+    ledger.register_call(
+        operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
+        iteration=1, agent_slug="a", phase_id="execution-a", target_identity="provider-a/db-a",
+    )
+    ledger.register_result(call_id="c1", success=True, data={"rows": [1]})
+
+    assert ledger.find_successful_result(
+        operation="collection.sql.execute", arguments={"query": "select 1"},
+        phase_id="execution-a", target_identity="provider-b/db-a", max_age_seconds=None,
+    ) is None
+    found = ledger.find_successful_result(
+        operation="collection.sql.execute", arguments={"query": "select 1"},
+        phase_id="execution-a", target_identity="provider-a/db-a", max_age_seconds=None,
+    )
+    assert found is not None and found.call_id == "c1"
+
+
+def test_tool_ledger_exposes_unresolved_matching_attempt_to_execution_guard():
+    ledger = ToolLedger()
+    ledger.register_call(
+        operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
+        iteration=1, agent_slug="a", phase_id="execution-a", target_identity="provider-a/db-a",
+    )
+    assert ledger.find_execution_guard(
+        operation="collection.sql.execute", arguments={"query": "select 1"},
+        phase_id="execution-a", target_identity="provider-a/db-a",
+    ).call_id == "c1"
+
+
+def test_tool_ledger_preserves_duplicate_status_when_large_result_is_not_cached():
+    ledger = ToolLedger()
+    ledger.register_call(operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
+                         iteration=1, agent_slug="a", phase_id="task-a", target_identity="db")
+    ledger.set_call_target(call_id="c1", target_identity="db", execution_id="exec-a")
+    ledger.register_result(call_id="c1", success=True, data={"payload": "x" * 25_000})
+    prior = ledger.find_successful_result(operation="collection.sql.execute", arguments={"query": "select 1"},
+                                          execution_id="exec-a", target_identity="db", max_age_seconds=None)
+    assert prior is not None
+    assert prior.result_data is None
+    assert not prior.result_data_available
+
+
+def test_tool_ledger_marks_explicit_null_result_as_cached():
+    ledger = ToolLedger()
+    ledger.register_call(operation="collection.sql.execute", call_id="c1", arguments={},
+                         iteration=1, agent_slug="a", phase_id="task-a")
+    ledger.register_result(call_id="c1", success=True, data=None)
+    assert ledger.entries[0].result_data_available

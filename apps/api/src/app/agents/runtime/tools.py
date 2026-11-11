@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import ast
+import copy
 import json
 import os
 from typing import Any, Dict, List, Optional, Tuple
+
 
 try:
     import jsonschema as _jsonschema
@@ -28,6 +30,7 @@ from app.agents.runtime.confirmation import (
     get_confirmation_service,
 )
 from app.agents.runtime.prompt_contract import build_prompt_input_schema
+from app.agents.runtime.result_context import ModelResultView, ResultNextAction, ResultUnavailable, SourceCoverage
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
 from app.runtime.error_payloads import build_debug_payload, build_error_metadata
@@ -155,11 +158,53 @@ class OperationExecutionFacade:
                     retryable=True, user_message=message, operator_message=message,
                     source="tool")), []
 
-        reused = self._reuse_policy.maybe_reuse(
-            operation_slug=operation_call.tool_name,
-            arguments=operation_call.arguments,
-            ctx=ctx,
-        )
+        target = operation.target
+        target_identity = ":".join(str(value or "") for value in (
+            operation.operation_slug,
+            getattr(target, "provider_instance_id", None),
+            getattr(target, "data_instance_id", None),
+            getattr(target, "provider_url", None),
+            getattr(target, "mcp_tool_name", None),
+        ))
+        ledger = ctx.extra.get("runtime_execution_tool_ledger") or ctx.extra.get("runtime_tool_ledger")
+        execution_id = str(
+            ctx.extra.get("runtime_agent_execution_id") or ctx.extra.get("lifecycle_agent_execution_id") or ""
+        ) or None
+        if ledger is not None and hasattr(ledger, "set_call_target"):
+            if ctx.extra.get("runtime_execution_tool_ledger") is ledger and hasattr(ledger, "entries"):
+                has_call = any(entry.call_id == operation_call.id for entry in ledger.entries)
+                if not has_call and hasattr(ledger, "register_call"):
+                    ledger.register_call(
+                        operation=operation_call.tool_name,
+                        call_id=operation_call.id,
+                        arguments=operation_call.arguments or {},
+                        iteration=int(ctx.extra.get("runtime_iteration") or 0),
+                        agent_slug=str(ctx.extra.get("agent_slug") or "") or None,
+                        phase_id=None,
+                    )
+            ledger.set_call_target(call_id=operation_call.id, target_identity=target_identity,
+                                   arguments=operation_call.arguments,
+                                   execution_id=execution_id)
+
+        previous_identity = ctx.extra.get("runtime_tool_target_identity")
+        previous_active_id = ctx.extra.get("runtime_active_tool_call_id")
+        ctx.extra["runtime_tool_target_identity"] = target_identity
+        ctx.extra["runtime_active_tool_call_id"] = operation_call.id
+        try:
+            reused = self._reuse_policy.maybe_reuse(
+                operation_slug=operation_call.tool_name,
+                arguments=operation_call.arguments,
+                ctx=ctx,
+            )
+        finally:
+            if previous_identity is None:
+                ctx.extra.pop("runtime_tool_target_identity", None)
+            else:
+                ctx.extra["runtime_tool_target_identity"] = previous_identity
+            if previous_active_id is None:
+                ctx.extra.pop("runtime_active_tool_call_id", None)
+            else:
+                ctx.extra["runtime_active_tool_call_id"] = previous_active_id
         if reused is not None:
             result, sources = reused
             logger.info(
@@ -472,7 +517,29 @@ class OperationExecutionFacade:
         schema = build_prompt_input_schema(operation)
         if not schema or not isinstance(arguments, dict):
             return arguments
-        return OperationExecutionFacade._strip_optional_nulls(arguments, schema)
+        stripped = OperationExecutionFacade._strip_optional_nulls(arguments, schema)
+        return OperationExecutionFacade._apply_schema_defaults(stripped, schema)
+
+    @staticmethod
+    def _apply_schema_defaults(value: Any, schema: Dict[str, Any]) -> Any:
+        """Expand JSON Schema defaults so equivalent effective calls share a key."""
+        if not isinstance(schema, dict):
+            return value
+        if isinstance(value, dict):
+            normalized = dict(value)
+            properties = schema.get("properties")
+            if not isinstance(properties, dict):
+                return normalized
+            for name, property_schema in properties.items():
+                if name not in normalized and isinstance(property_schema, dict) and "default" in property_schema:
+                    normalized[name] = copy.deepcopy(property_schema["default"])
+                if name in normalized:
+                    normalized[name] = OperationExecutionFacade._apply_schema_defaults(
+                        normalized[name], property_schema if isinstance(property_schema, dict) else {})
+            return normalized
+        if isinstance(value, list) and isinstance(schema.get("items"), dict):
+            return [OperationExecutionFacade._apply_schema_defaults(item, schema["items"]) for item in value]
+        return value
 
     @staticmethod
     def _normalize_template_fill_args(
@@ -716,8 +783,17 @@ class OperationExecutionFacade:
         misleading prefix. Explicit direct results preserve their complete
         domain payload and bypass dataset presentation limits.
         """
-        import json as _json
         from app.services.tool_result_store import _json_dumps_exact
+
+        def _fits_result_budget(rendered: str) -> bool:
+            budget = context_budget_tokens
+            if budget is None:
+                from app.core.config import get_settings
+                budget = get_settings().TOOL_RESULTS_CONTEXT_TOKENS
+            from app.adapters.impl.llm_context import estimate_request_tokens
+            return estimate_request_tokens({"model": context_model, "messages": [
+                {"role": "tool", "content": rendered},
+            ]}) <= budget
 
         def fits_budget(rendered: str) -> bool:
             if context_budget_tokens is None:
@@ -729,21 +805,19 @@ class OperationExecutionFacade:
 
         def limited_result() -> str:
             if stored_result:
-                limitation = {
-                    "result_id": stored_result.get("result_id"),
-                    "delivery": "stored",
-                    "content_available": True,
-                    "hint": "Saved result is too large for this context page. Use result.read with fewer fields/items.",
-                }
+                limitation = ModelResultView(
+                    result_id=str(stored_result.get("result_id") or ""),
+                    revision=int(stored_result.get("revision") or 1),
+                    source_coverage=SourceCoverage(complete=stored_result.get("source_complete"),
+                        total=stored_result.get("source_total"), stored_count=stored_result.get("row_count", 0)),
+                    next_action=ResultNextAction(arguments={"result_id": str(stored_result.get("result_id") or ""),
+                        "revision": int(stored_result.get("revision") or 1), "offset": 0, "limit": 5},
+                        message="Read a smaller page with result.read."),
+                ).model_dump(exclude_none=True)
             else:
-                limitation = {
-                    "delivery": "direct",
-                    "content_available": False,
-                    "reason": "context_budget_exceeded",
-                    "hint": "Complete response exceeds remaining shared context. Retry with narrower filters or fewer fields/items.",
-                }
-            return _json_dumps_exact({"_runtime_result": limitation,
-                                      "evidence_call_id": evidence_call_id}, ensure_ascii=False)
+                limitation = ResultUnavailable(reason="context_budget_exceeded",
+                    message="The complete response exceeds the available context; retry with a narrower request.").model_dump()
+            return _json_dumps_exact(limitation, ensure_ascii=False)
 
         if result.success:
             if result.delivery == "direct":
@@ -756,6 +830,38 @@ class OperationExecutionFacade:
                 return rendered if fits_budget(rendered) else limited_result()
             if result.metadata.get("workspace_view") and not stored_result:
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
+                if operation_slug == "result.read":
+                    result_id = str(output.get("result_id") or "")
+                    revision = int(output.get("revision") or 1)
+                    values = output.get("value")
+                    preserve_records = "value" in output and not output.get("record_too_large")
+                    view = ModelResultView(
+                        result_id=result_id, revision=revision,
+                        source_coverage=SourceCoverage(complete=output.get("source_complete"),
+                                         total=output.get("source_total"), stored_count=output.get("loaded_items", 0)),
+                        records=values if not output.get("record_too_large") else None,
+                        next_action=(ResultNextAction(arguments={"result_id": result_id,
+                            "revision": revision, "offset": 0, "limit": 5},
+                            message="Inspect available fields, then read a smaller projection.") if output.get("record_too_large") else
+                            ResultNextAction(arguments={"result_id": result_id, "revision": revision,
+                            "offset": output.get("next_offset"), "limit": 10,
+                            **({"fields": output["requested_fields"]} if "requested_fields" in output else {})},
+                            message="Continue reading the saved dataset.") if output.get("next_offset") is not None else None),
+                    )
+                    if output.get("record_too_large"):
+                        view.next_action = ResultNextAction(tool="result.describe", arguments={"result_id": result_id},
+                            message="Inspect available fields, then read a smaller projection.")
+                    view_data = view.model_dump(exclude_none=True)
+                    if preserve_records:
+                        view_data["records"] = view.records
+                    rendered = _json_dumps_exact(view_data, ensure_ascii=False, default=str)
+                    if _fits_result_budget(rendered):
+                        return rendered
+                    view.records = None
+                    view.next_action = ResultNextAction(tool="result.describe", arguments={"result_id": result_id},
+                        message="Inspect available fields, then read a smaller projection.")
+                    rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                    return rendered if _fits_result_budget(rendered) else limited_result()
                 from app.core.config import get_settings
                 budget = max(256, (context_budget_tokens or get_settings().TOOL_RESULTS_CONTEXT_TOKENS) * 3)
                 def workspace_fits(value: Dict[str, Any]) -> bool:
@@ -790,107 +896,45 @@ class OperationExecutionFacade:
                 rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
                 return rendered if workspace_fits(output) else limited_result()
             if stored_result:
-                descriptor = {
-                    "_runtime_result": {
-                        key: stored_result.get(key) for key in (
-                            "result_id", "call_id", "payload_type", "payload_chars",
-                            "sql_ref", "row_count",
-                            "schema_complete", "sample_complete", "inline_complete",
-                            "source_total", "source_complete",
-                        ) if key in stored_result
-                    },
-                    "evidence_call_id": evidence_call_id,
-                }
-                if "query_sql" in stored_result and stored_result.get("query_sql"):
-                    descriptor["_runtime_result"]["query_sql"] = str(stored_result["query_sql"])
-                    descriptor["_runtime_result"]["query_sql_complete"] = True
-                if stored_result.get("source_result_ids"):
-                    source_ids = list(stored_result["source_result_ids"])
-                    descriptor["_runtime_result"]["source_result_ids"] = source_ids[:20]
-                    descriptor["_runtime_result"]["source_ids_truncated"] = len(source_ids) > 20
-                from app.core.config import get_settings
-                metadata_budget = max(256, (context_budget_tokens or get_settings().TOOL_RESULTS_CONTEXT_TOKENS) * 3)
-                runtime_meta = descriptor["_runtime_result"]
-                runtime_meta["delivery"] = "inline" if stored_result.get("inline_complete") else "stored"
-                runtime_meta["revision"] = stored_result.get("revision", 1)
-                from app.services.result_sql_projection import schema_page
-                meta = stored_result.get("dataset_meta") or {}
-                runtime_meta["has_more"] = meta.get("has_next")
-                if meta.get("errors"):
-                    runtime_meta["source_errors"] = [str(item)[:160] for item in meta["errors"][:3]]
-                if meta.get("searched_types"):
-                    runtime_meta["searched_types"] = [str(item)[:100] for item in meta["searched_types"][:20]]
-                runtime_meta["source_state"] = "exhausted" if meta.get("complete") is True else ("more_available" if meta.get("has_next") else "unknown")
-                runtime_meta["hint"] = (
-                    "Loaded records saved. sql_columns are source fields, without added storage columns. "
-                    "Use result.read(result_id, fields=[column]) to inspect nested JSON values. "
-                    "In SQL, a JSONB field is queried as column->>'key'; use observed keys, not guessed paths. "
-                    "result.describe returns more columns via next_schema_offset or query. "
-                    "result.load fetches additional source pages; source_complete describes coverage.")
-                if not stored_result.get("sql_available", True):
-                    runtime_meta["hint"] = "Full data saved. Use result.read for records and result.describe for fields. result.load fetches source pages. Request analysis through needs if computation is required."
-                runtime_meta["sql_example"] = f"SELECT * FROM {stored_result['sql_ref']} LIMIT 5" if stored_result.get("sql_ref") and stored_result.get("sql_available", True) else None
-                if len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
-                    runtime_meta.pop("query_sql", None)
-                    runtime_meta.pop("query_sql_complete", None)
-                if len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) > metadata_budget:
-                    runtime_meta.pop("sample", None)
-                if isinstance(stored_result.get("current_schema"), dict):
-                    runtime_meta.update(stored_result["current_schema"])
-                else:
-                    runtime_meta.update(schema_page(stored_result.get("observed_schema") or {}, limit=15,
-                        budget=max(32, metadata_budget - len(_json_dumps_exact(descriptor, ensure_ascii=False, default=str).encode()) - 400)))
-                if not stored_result.get("inline_complete") and stored_result.get("sample"):
-                    candidate = {**runtime_meta, "sample": stored_result["sample"]}
-                    if len(_json_dumps_exact(candidate, ensure_ascii=False, default=str).encode()) < metadata_budget:
-                        runtime_meta["sample"] = stored_result["sample"]
-                if stored_result.get("inline_complete"):
-                    raw_output = result.data
-                    if isinstance(raw_output, dict):
-                        raw_output = dict(raw_output)
-                        if isinstance(raw_output.get("meta"), dict):
-                            from app.services.result_workspace import _bounded_model_meta
-                            raw_output["meta"] = _bounded_model_meta(raw_output["meta"])
-                        raw_output["_runtime_result"] = descriptor["_runtime_result"]
-                        if evidence_call_id:
-                            raw_output["evidence_call_id"] = evidence_call_id
-                    else:
-                        raw_output = {"_runtime_result": descriptor["_runtime_result"], "data": raw_output,
-                                      "evidence_call_id": evidence_call_id}
-                else:
-                    raw_output = descriptor
-                rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
-                if not fits_budget(rendered):
-                    # SQL replies repeat lineage, schema and samples already in
-                    # the descriptor. Reserve space for complete values before
-                    # falling back to a pointer; otherwise even a tiny query
-                    # can keep producing unreadable datasets indefinitely.
-                    inline_payload = result.data
-                    if (isinstance(inline_payload, dict)
-                            and inline_payload.get("query_result_stored") is True
-                            and isinstance(inline_payload.get("rows"), list)
-                            and len(inline_payload["rows"]) == stored_result.get("row_count")):
-                        inline_payload = {"rows": inline_payload["rows"]}
-                    compact_meta = {key: runtime_meta[key] for key in (
-                        "result_id", "sql_ref", "revision", "row_count",
-                        "source_complete", "source_total", "has_more", "source_state",
-                        "source_errors", "searched_types",
-                    ) if key in runtime_meta}
-                    compact_meta.update(delivery="inline", inline_complete=True)
-                    compact_output = {"_runtime_result": compact_meta, "data": inline_payload}
-                    if isinstance(inline_payload, dict):
-                        compact_output = {**inline_payload, "_runtime_result": compact_meta}
-                    if evidence_call_id:
-                        compact_output["evidence_call_id"] = evidence_call_id
-                    compact_rendered = _json_dumps_exact(compact_output, ensure_ascii=False, default=str)
-                    if (stored_result.get("inline_complete")
-                            and fits_budget(compact_rendered)):
-                        return compact_rendered
-                    descriptor["_runtime_result"]["delivery"] = "stored"
-                    descriptor["_runtime_result"]["inline_complete"] = False
-                    descriptor["_runtime_result"]["hint"] = "Full data saved; use result.read or result.sql to access it. result.load fetches source pages."
-                    rendered = _json_dumps_exact(descriptor, ensure_ascii=False, default=str)
-                return rendered if fits_budget(rendered) else limited_result()
+                records = None
+                payload = result.data
+                if not result.metadata.get("reused") and isinstance(payload, dict):
+                    if payload.get("query_result_stored") is True and isinstance(payload.get("rows"), list):
+                        records = payload["rows"]
+                    elif isinstance(payload.get("value"), list) and isinstance(payload.get("meta"), dict):
+                        records = payload["value"]
+                    elif stored_result.get("row_count") == 1:
+                        records = [payload]
+                elif not result.metadata.get("reused") and isinstance(payload, list):
+                    records = payload
+                elif not result.metadata.get("reused") and stored_result.get("row_count") == 1:
+                    records = [payload]
+                if isinstance(records, list) and len(records) != stored_result.get("row_count"):
+                    records = None
+                view = ModelResultView(
+                    status="already_completed" if result.metadata.get("reused") else "ready",
+                    result_id=str(stored_result.get("result_id") or ""),
+                    revision=int(stored_result.get("revision") or 1),
+                    source_coverage=SourceCoverage(complete=stored_result.get("source_complete"),
+                        total=stored_result.get("source_total"), stored_count=stored_result.get("row_count", 0)),
+                    records=records if isinstance(records, list) else None,
+                    next_action=None if isinstance(records, list) else ResultNextAction(
+                        arguments={"result_id": str(stored_result.get("result_id") or ""),
+                                   "revision": int(stored_result.get("revision") or 1),
+                                   "offset": 0, "limit": 10},
+                        message="Read saved records with result.read.",
+                    ),
+                )
+                rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                if _fits_result_budget(rendered):
+                    return rendered
+                view.records = None
+                view.next_action = ResultNextAction(tool="result.describe", arguments={
+                    "result_id": view.result_id,
+                }, message="Inspect available fields, then read a smaller projection.")
+                rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                return rendered if _fits_result_budget(rendered) else limited_result()
+
             raw_output = result.data
             canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if isinstance(raw_output, dict):

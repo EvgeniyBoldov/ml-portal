@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-REUSE_MAX_AGE_SECONDS = 300  # results older than 5 min are not reused
+REUSE_MAX_AGE_SECONDS = 300  # retained for callers that request bounded reuse
 MAX_TOOL_PREVIEW_CHARS = 220
 MAX_RESULT_CACHE_CHARS = 24_000
 
@@ -58,6 +58,8 @@ class ToolLedgerEntry(BaseModel):
     iteration: int = 0
     agent_slug: Optional[str] = None
     phase_id: Optional[str] = None
+    target_identity: Optional[str] = None
+    execution_id: Optional[str] = None
 
     duplicate_of_call_id: Optional[str] = None
 
@@ -66,6 +68,7 @@ class ToolLedgerEntry(BaseModel):
     result_fingerprint: Optional[str] = None
     result_preview: Optional[str] = None
     result_data: Any = None
+    result_data_available: bool = False
     stored_result_id: Optional[str] = None
     result_inline_complete: Optional[bool] = None
     result_source_complete: Optional[bool] = None
@@ -76,7 +79,7 @@ class ToolLedgerEntry(BaseModel):
 
     @property
     def signature(self) -> str:
-        return f"{self.operation}:{self.args_fingerprint}"
+        return f"{self.operation}:{self.target_identity or ''}:{self.args_fingerprint}"
 
 
 class ToolLedger(BaseModel):
@@ -91,9 +94,10 @@ class ToolLedger(BaseModel):
         iteration: int,
         agent_slug: Optional[str],
         phase_id: Optional[str],
+        target_identity: Optional[str] = None,
     ) -> ToolLedgerEntry:
         args_fingerprint, args_preview = _fingerprint_and_preview(arguments)
-        signature = f"{operation}:{args_fingerprint}"
+        signature = f"{operation}:{target_identity or ''}:{args_fingerprint}"
         duplicate_of = self._find_completed_duplicate(signature)
 
         entry = ToolLedgerEntry(
@@ -105,6 +109,7 @@ class ToolLedger(BaseModel):
             iteration=iteration,
             agent_slug=agent_slug,
             phase_id=phase_id,
+            target_identity=target_identity,
             duplicate_of_call_id=duplicate_of,
         )
         self.entries.append(entry)
@@ -136,13 +141,27 @@ class ToolLedger(BaseModel):
         target.status = "succeeded" if success else "failed"
         target.result_fingerprint = result_fingerprint
         target.result_preview = result_preview
-        target.result_data = _cacheable_result_data(data) if success else None
+        cached_data = _cacheable_result_data(data) if success else None
+        target.result_data = cached_data
+        target.result_data_available = success and (cached_data is not None or data is None)
         target.stored_result_id = result_id
         target.result_inline_complete = result_inline_complete
         target.result_source_complete = result_source_complete
         target.result_delivery = result_delivery
         target.sources = [dict(source) for source in (sources or []) if isinstance(source, dict)]
         target.finished_at = datetime.now(timezone.utc)
+
+    def set_call_target(self, *, call_id: str, target_identity: str,
+                        arguments: Optional[Dict[str, Any]] = None,
+                        execution_id: Optional[str] = None) -> None:
+        """Attach resolved target and effective arguments before execution."""
+        target = next((entry for entry in reversed(self.entries) if entry.call_id == call_id), None)
+        if target is not None:
+            target.target_identity = target_identity
+            if execution_id is not None:
+                target.execution_id = execution_id
+            if arguments is not None:
+                target.args_fingerprint, target.args_preview = _fingerprint_and_preview(arguments)
 
     def compact_view(self, *, max_items: int = 8) -> List[Dict[str, Any]]:
         out: List[Dict[str, Any]] = []
@@ -167,23 +186,41 @@ class ToolLedger(BaseModel):
         operation: str,
         arguments: Dict[str, Any],
         phase_id: Optional[str] = None,
-        max_age_seconds: int = REUSE_MAX_AGE_SECONDS,
+        execution_id: Optional[str] = None,
+        target_identity: Optional[str] = None,
+        max_age_seconds: Optional[int] = REUSE_MAX_AGE_SECONDS,
     ) -> Optional[ToolLedgerEntry]:
         args_fingerprint, _ = _fingerprint_and_preview(arguments)
-        signature = f"{operation}:{args_fingerprint}"
+        signature = f"{operation}:{target_identity or ''}:{args_fingerprint}"
         now = datetime.now(timezone.utc)
         for entry in reversed(self.entries):
             if entry.signature != signature:
                 continue
             if phase_id is not None and entry.phase_id != phase_id:
                 continue
-            if entry.status != "succeeded" or (entry.result_data is None and not entry.stored_result_id):
+            if execution_id is not None and entry.execution_id != execution_id:
+                continue
+            if entry.status != "succeeded":
                 continue
             finished = entry.finished_at or entry.called_at
             age_seconds = (now - finished).total_seconds()
-            if age_seconds > max_age_seconds:
+            if max_age_seconds is not None and age_seconds > max_age_seconds:
                 continue
             return entry
+        return None
+
+    def find_execution_guard(self, *, operation: str, arguments: Dict[str, Any],
+                             phase_id: Optional[str], target_identity: Optional[str],
+                             execution_id: Optional[str] = None,
+                             exclude_call_id: Optional[str] = None) -> Optional[ToolLedgerEntry]:
+        """Return a matching prior attempt, including in-flight/failed attempts."""
+        args_fingerprint, _ = _fingerprint_and_preview(arguments)
+        signature = f"{operation}:{target_identity or ''}:{args_fingerprint}"
+        for entry in reversed(self.entries):
+            same_scope = (entry.execution_id == execution_id) if execution_id else (entry.phase_id == phase_id)
+            if (entry.call_id != exclude_call_id and entry.signature == signature and same_scope
+                    and entry.status in {"called", "succeeded"}):
+                return entry
         return None
 
     def _find_completed_duplicate(self, signature: str) -> Optional[str]:
@@ -210,7 +247,6 @@ def _stable_json(value: Any) -> str:
 
 
 def _cacheable_result_data(value: Any) -> Any:
-    text = _stable_json(value)
-    if len(text) > MAX_RESULT_CACHE_CHARS:
+    if len(_stable_json(value)) > MAX_RESULT_CACHE_CHARS:
         return None
     return value
