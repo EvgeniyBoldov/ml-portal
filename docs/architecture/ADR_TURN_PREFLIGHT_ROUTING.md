@@ -47,6 +47,21 @@ not establish current facts or completed actions. The complete brief is saved in
 the run context and restored for planner/agent continuations. Planner can explicitly
 request older history if the handoff is insufficient.
 
+The root request is passed losslessly to TurnPreflight. Runtime resolves the
+selected model's context window and reserves input for the compiled role prompt,
+Pydantic response schema and minimum output; the shared outbound allocator is
+the final fit check and reports a typed context-window error when the full
+request cannot fit. It must not route from a head/tail excerpt of the request.
+
+Grouped memory searches and explicit file/history reads are projected under one
+prompt budget for preflight and planner. Complete evidence remains in RunContext;
+projection adds a coverage state and omitted material identifiers. File/history
+reads can be repeated through their existing read tools and pagination arguments.
+`memory.search` has no stable passage-read operation, so an omitted passage is
+reported as incomplete and is not automatically searched again. Invalid selected
+evidence/message references are reported as unavailable; runtime does not infer
+whether prose semantically depends on an evidence item.
+
 ```text
 user message
   -> RootRoutePolicy recommendation (trace entity)

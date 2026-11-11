@@ -15,7 +15,7 @@ from app.models.runtime_plan import (RuntimePlan, RuntimePlanIteration, RuntimeP
     RuntimeTaskNeed, RuntimeNeedBinding, RuntimeTaskResolution, RuntimeTaskAttempt, RuntimePause)
 from app.runtime.memory.document_memory import accumulate_document_memory
 from app.runtime.orchestrator_contracts import (IterationProposal, PlannedTask, SchedulerActionKind,
-    TaskCompletionDeclaration, TaskExecutionReceipt, TaskResult, TaskResolution, TaskAttemptFailure)
+    NeedBinding, TaskCompletionDeclaration, TaskExecutionReceipt, TaskResult, TaskResolution, TaskAttemptFailure)
 from app.runtime.plan_store import SqlPlanStore
 
 
@@ -87,13 +87,41 @@ async def test_task_memory_survives_retry_and_explicit_needs_continuation(databa
         execution = TaskExecutionReceipt(declaration=TaskCompletionDeclaration(completion="needs", report="need input",
             needs=[{"ref": "data", "key": "data", "description": "fetch input"}]))
         await store.finish_attempt(plan_id, "original", execution=execution, result=TaskResult(outcome="needs_dependency",
-            description="need input", needs=execution.declaration.needs))
+            description="need input", needs=execution.declaration.needs,
+            structured_response={"prior": "recorded"}, outputs={"prior": "recorded"},
+            verified={"status": "observed", "fresh_retrieval": False, "receipts": [
+                {"success": True, "operation": "netbox_get_objects", "result_id": "saved-dataset",
+                 "source_complete": False},
+            ]}))
         await store.claim_checkpoint(plan_id, SchedulerActionKind.INVOKE_PLANNER)
         await store.apply_iteration(plan_id, IterationProposal(tasks=[
-            PlannedTask(task_id="helper", executor="research", intent="fetch", instructions="fetch"),
-            PlannedTask(task_id="continued", executor="research", continuation_of="original", intent="continue", instructions="continue")
-        ], terminal="planner", resolutions=[TaskResolution(task_id="original", action="continue_with_tasks",
+            PlannedTask(task_id="helper", executor="research", intent="fetch", instructions="fetch",
+                expected_outputs=[{"key": "data", "description": "Fetched data"}]),
+            PlannedTask(task_id="continued", executor="research", continuation_of="original", intent="continue",
+                instructions="Continue the remaining check", depends_on=["helper"],
+                freshness_policy="require_retrieval")
+        ], bindings=[NeedBinding(need_task_id="original", need_ref="data", producer_task_id="helper",
+                                output_key="data", consumer_task_id="continued", consumer_input_key="data")],
+            terminal="planner", resolutions=[TaskResolution(task_id="original", action="continue_with_tasks",
             replacement_task_ids=["helper", "continued"], reason="resolve need")]))
+        await store.claim_task(plan_id, "helper")
+        helper_declaration = TaskCompletionDeclaration(completion="fulfilled", structured_response={"data": {"id": 1}})
+        await store.finish_attempt(plan_id, "helper", execution=TaskExecutionReceipt(declaration=helper_declaration),
+            result=TaskResult(outcome="completed", completion="fulfilled", description="Fetched",
+                              structured_response={"data": {"id": 1}}, outputs={"data": {"id": 1}}))
+        await store.claim_task(plan_id, "continued")
+        continuation_request = await store.task_request(plan_id, "continued")
+        continuation = continuation_request["continuation_context"]
+        assert continuation["prior_structured_response"] == {"prior": "recorded"}
+        assert continuation["prior_outputs"] == {}
+        assert continuation["result_references"][0]["result_id"] == "saved-dataset"
+        assert continuation["unresolved_needs"] == []
+        assert continuation["fulfilled_need_bindings"][0]["consumer_input_key"] == "data"
+        assert continuation["freshness_policy"] == "require_retrieval"
+        assert continuation["fresh_retrieval_observed"] is False
+        assert continuation_request["inputs"]["data"] == {"id": 1}
+        assert continuation_request["interaction_history"] == []
+        assert continuation_request["resume_checkpoint"] == {}
     async with sessions() as session:
         snapshot = await SqlPlanStore(session).snapshot(plan_id)
         assert snapshot["tasks"]["continued"]["memory_context"] == memory

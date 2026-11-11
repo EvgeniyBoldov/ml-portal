@@ -243,8 +243,11 @@ array is a real empty result. Unknown source coverage is not false.
 Ordinary receipts omit SQL schema pages, generic SQL examples, samples and
 redundant delivery/completeness flags. `result.describe` provides schema on demand.
 `result.read` reads saved records; it does not repeat the source operation. Its
-continuation must preserve the selected fields and dataset revision. Oversized
-records require a narrower projection; no partial record is presented as complete.
+reply returns the effective `requested_fields` when a projection was selected;
+the formatter carries that projection together with `next_offset` and the
+dataset `revision` into the next `result.read` action. This keeps paging on
+the same saved view. Oversized records require a narrower projection; no partial
+record is presented as complete.
 The model presentation uses the actual allocated budget rather than the store's
 preliminary inline eligibility. Persistence limits remain independent.
 
@@ -253,6 +256,12 @@ separate projection that preserves native assistant/tool call pairing and direct
 or otherwise unrecoverable evidence. Older recoverable dataset responses may be
 represented by compact receipts. The authorized, task-selected result inventory
 is refreshed before decisions, so new results and revisions are visible.
+Each outbound agent decision uses one projected request snapshot: that same
+message list and tool/schema options are sent to the provider, recorded in
+`llm_request` and `llm_turn.request_snapshot`, and used for fallback
+input-token estimation.
+The full journal transcript remains available for resume and audit, but is not
+reported as the content sent to the model.
 
 Before executing a batch of tool calls, runtime estimates the input room for
 the next model request with `inspect_context`, including current history, the
@@ -260,13 +269,25 @@ assistant tool-call message, placeholder tool replies, tool schemas,
 `tool_choice` and `response_format`, while preserving the configured output
 reserve. It uses the selected model's registry context window when available;
 otherwise it falls back to the default context window. The remaining input
-budget is divided evenly among calls in that batch. This is conservative: an
-unused share is not redistributed. Result serialization is checked against
-that per-call budget with the selected model's token estimator. Direct results
-are delivered whole when they fit; if they do not, the model receives an
-explicit `context_budget_exceeded` limitation and guidance to retry with a
-narrower request. Runtime does not silently clip direct JSON or move an
-oversized direct result into Result Store.
+budget is allocated across the batch after all operation results have
+completed. Runtime measures a minimum receipt and full formatted candidate for
+each redacted direct or stored result, reserves every minimum receipt first,
+then upgrades candidates in deterministic order by incremental token cost.
+This makes full results independent of tool-call order whenever their combined
+size fits. It re-formats existing result objects only: tools are not re-executed
+and results are not persisted again. Native tool replies keep their original
+call IDs. Bounded workspace readers receive the whole batch candidate allowance
+at execution time so an early large read does not discard rows before the
+presentation pass can reuse space left by a small sibling. The final assembled request, including history, tool schemas and
+response format, is checked again with `inspect_context`; if an upgrade does not
+fit, runtime falls back to minimum receipts, and if even those do not fit it
+returns the typed context-window error. The final `llm_request` snapshot is
+authoritative for the exact presentation the model received; the linked
+`tool_result_batch_projected` status reports final per-call inline coverage,
+while `tool_result` remains the execution result/event. Direct results are
+delivered whole when they fit; if they do not, the model receives an explicit
+`context_budget_exceeded` limitation. Runtime does not silently clip direct JSON
+or move an oversized direct result into Result Store.
 
 The same budget is passed to `result.describe`, `result.read`, and
 `result.analyze` projections. These readers return bounded pages and preserve

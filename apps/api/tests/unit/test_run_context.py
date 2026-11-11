@@ -20,6 +20,17 @@ def test_evidence_selection_preserves_provenance_and_scope_without_mutating_orig
     assert RunContext.model_validate_json(context.model_dump_json()).constraints == context.constraints
 
 
+def test_projection_diagnoses_unavailable_refs_and_exposes_small_catalog():
+    context = RunContext()
+    source_id = context.add_evidence("file.data.read", {"representation_id": "rep"}, {"text": "source"})
+    context.task_brief = {"evidence_refs": [source_id, "missing"], "message_refs": ["missing-message"]}
+    projection = context.projection()
+    assert projection["evidence_coverage"] == "invalid_refs"
+    assert projection["unavailable_material_refs"] == ["missing", "missing-message"]
+    assert projection["evidence_catalog"] == [{"id": source_id, "tool": "file.data.read", "status": "available"}]
+    assert projection["evidence"][0]["id"] == source_id
+
+
 def test_sandbox_visibility_uses_frozen_inputs_and_branch_observations():
     context = RunContext(available_artifact_ids=["observed"], generated_artifacts=[{"artifact_id": "generated"}])
     state = SimpleNamespace(attachment_contexts=[SimpleNamespace(ref=SimpleNamespace(artifact_id="input"))], run_context=context)

@@ -1,8 +1,121 @@
 """Bounded model projection of the full runtime transcript."""
 from __future__ import annotations
 
+import json
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
+from collections.abc import Callable
+
+
+@dataclass(frozen=True)
+class BatchContextBudget:
+    model: str | None
+    context_window_tokens: int
+    result_tokens: int
+
+
+@dataclass(frozen=True)
+class BatchResultAllocation:
+    """Final model-visible result strings and their exact request-fit status."""
+
+    texts: list[str]
+    used_tokens: int
+    remaining_tokens: int
+    fits_request: bool
+    full_candidate_selected: list[bool]
+    omitted_call_ids: list[str]
+
+
+def reallocate_result_batch(
+    items: list[dict[str, Any]], *, total_budget_tokens: int, model: str | None,
+    format_item: Callable[[dict[str, Any], int], str],
+    request_for_texts: Callable[[list[str]], dict[str, Any]], context_window_tokens: int,
+) -> BatchResultAllocation:
+    """Allocate result space batch-wide, then validate the exact outbound body.
+
+    Every operation's minimum receipt is measured before upgrades. Full outputs
+    that fit as a set are delivered independent of call order; otherwise smaller
+    upgrades are selected deterministically. If exact full-request estimation
+    rejects an upgrade, all results retreat to minimum receipts together.
+    """
+    from app.adapters.impl.llm_context import estimate_request_tokens, inspect_context
+
+    def token_count(text: str) -> int:
+        return estimate_request_tokens({"model": model, "messages": [{"role": "tool", "content": text}]})
+
+    minimum_texts = [str(item.get("minimum_receipt")) if item.get("minimum_receipt") is not None
+                     else format_item(item, 0) for item in items]
+    minimum_tokens = [token_count(text) for text in minimum_texts]
+    full_texts = [format_item(item, total_budget_tokens) for item in items]
+    full_tokens = [token_count(text) for text in full_texts]
+    minimum_total = sum(minimum_tokens)
+    if minimum_total > total_budget_tokens:
+        return BatchResultAllocation(minimum_texts, minimum_total,
+            total_budget_tokens - minimum_total, False, [False] * len(items),
+            [str(item.get("call_id") or "") for item in items])
+
+    chosen = list(minimum_texts)
+    chosen_tokens = list(minimum_tokens)
+    remaining = total_budget_tokens - minimum_total
+    upgrades = sorted(range(len(items)), key=lambda index: (full_tokens[index] - minimum_tokens[index], index))
+    for index in upgrades:
+        cost = full_tokens[index] - minimum_tokens[index]
+        if cost <= remaining:
+            chosen[index] = full_texts[index]
+            chosen_tokens[index] = full_tokens[index]
+            remaining -= cost
+    # Spend leftover space on bounded intermediate views where a full result
+    # did not fit; order by incremental full cost and stable call identity.
+    partial_candidates = [index for index, content in enumerate(chosen)
+                          if content == minimum_texts[index] and full_texts[index] != minimum_texts[index]]
+    partial_candidates.sort(key=lambda index: (full_tokens[index] - minimum_tokens[index],
+                                                str(items[index].get("call_id") or "")))
+    for position, index in enumerate(partial_candidates):
+        if remaining <= 0:
+            break
+        share = remaining // max(1, len(partial_candidates) - position)
+        candidate = format_item(items[index], minimum_tokens[index] + share)
+        candidate_tokens = token_count(candidate)
+        if minimum_tokens[index] < candidate_tokens <= minimum_tokens[index] + share:
+            chosen[index] = candidate
+            chosen_tokens[index] = candidate_tokens
+            remaining -= candidate_tokens - minimum_tokens[index]
+    used = sum(chosen_tokens)
+
+    def request_fits(texts: list[str]) -> bool:
+        try:
+            request = request_for_texts(texts)
+            allocation = inspect_context(request, context_window_tokens)
+            return allocation.max_output_tokens >= allocation.minimum_output_tokens
+        except Exception:
+            return False
+
+    fits = request_fits(chosen)
+    if not fits:
+        chosen = minimum_texts
+        chosen_tokens = minimum_tokens
+        used = minimum_total
+        remaining = total_budget_tokens - used
+        fits = request_fits(chosen)
+    selected_full = [chosen[index] == full_texts[index] for index in range(len(items))]
+    omitted = [str(items[index].get("call_id") or "") for index, complete in enumerate(selected_full) if not complete]
+    return BatchResultAllocation(chosen, used, remaining, fits, selected_full, omitted)
+
+
+def outbound_request_snapshot(
+    *, model: str | None, messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None, tool_choice: str | None = None,
+    response_format: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Canonical request body used by provider, trace and token estimator."""
+    snapshot: dict[str, Any] = {"model": model, "messages": deepcopy(messages)}
+    if tools is not None:
+        snapshot["tools"] = deepcopy(tools)
+        snapshot["tool_choice"] = tool_choice or "auto"
+    if response_format is not None:
+        snapshot["response_format"] = deepcopy(response_format)
+    return snapshot
 
 
 def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -100,6 +213,30 @@ def runtime_result_metadata(content: str) -> dict[str, Any]:
             "source_complete": coverage.get("complete") if isinstance(coverage, dict) else None,
         }
     return {}
+
+
+def model_result_inline_complete(content: str, *, stored_result: dict[str, Any] | None,
+                                result_success: bool, direct_truncated: bool = False) -> bool:
+    """Read the final model-visible completeness from formatted result content."""
+    metadata = runtime_result_metadata(content)
+    if "inline_complete" in metadata:
+        return bool(metadata["inline_complete"])
+    try:
+        presented = json.loads(content)
+    except (TypeError, ValueError):
+        presented = None
+    if stored_result:
+        return bool(isinstance(presented, dict) and "records" in presented
+                    and not presented.get("record_too_large"))
+    return bool(result_success and isinstance(presented, dict)
+                and presented.get("status") != "unavailable" and not direct_truncated)
+
+
+def update_result_inline_coverage(ledger: Any, *, call_id: str, inline_complete: bool) -> None:
+    """Synchronize final presentation metadata without adding a tool result."""
+    update = getattr(ledger, "update_result_presentation", None)
+    if callable(update):
+        update(call_id=call_id, inline_complete=inline_complete)
 
 
 def observe_no_progress_batch(

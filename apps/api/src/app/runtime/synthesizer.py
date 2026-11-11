@@ -106,9 +106,40 @@ class Synthesizer:
         synthesis_run_id = str(uuid4())
         synthesis_status = "completed"
 
-        from app.runtime.datastore_context import build_datastore, load_result_catalog, result_references
+        from app.runtime.datastore_context import build_datastore, load_result_catalog
         reports = synthesis_context.get("completed_task_reports") or []
         catalog, catalog_status = await load_result_catalog(ctx=ctx, run_id=str(run_id))
+        selected_refs = self._selected_result_references(reports, synthesis_context.get("run_context") or {})
+        catalog_by_id = {str(item.get("result_id")): item for item in catalog if item.get("result_id")}
+        available_refs = [item for item in selected_refs if item["result_id"] in catalog_by_id]
+        unavailable_refs = [item for item in selected_refs if item["result_id"] not in catalog_by_id]
+        prepared_pages, read_limitations = await self._prepare_result_evidence(
+            references=available_refs, catalog_by_id=catalog_by_id, ctx=ctx, run_id=str(run_id),
+        )
+        synthesis_context = {
+            **synthesis_context,
+            "evidence_preparation": {
+                "catalog_status": catalog_status,
+                "selected_result_refs": selected_refs,
+                "available_result_refs": [item["result_id"] for item in available_refs],
+                "unavailable_result_refs": unavailable_refs,
+                "result_pages": prepared_pages,
+                "coverage": ("unavailable" if unavailable_refs and not available_refs else
+                             "partial" if unavailable_refs or read_limitations else
+                             "available" if selected_refs else "no_selected_result_refs"),
+                "limitations": read_limitations,
+            },
+        }
+        synthesis_limitations = list(synthesis_context.get("limitations") or [])
+        if unavailable_refs:
+            synthesis_limitations.append({
+                "code": "selected_result_unavailable",
+                "message": "A selected result reference is absent from the current authorized run catalog.",
+                "result_refs": unavailable_refs,
+            })
+        if read_limitations:
+            synthesis_limitations.extend(read_limitations)
+        synthesis_context["limitations"] = synthesis_limitations
         files = [
             *[item.model_dump(mode="json") for item in runtime_state.attachment_contexts
               if item.ref.artifact_id not in runtime_state.deleted_artifact_ids],
@@ -118,8 +149,10 @@ class Synthesizer:
             files=[item for item in files if str((item.get("ref") or item).get("artifact_id") or "")
                    not in runtime_state.deleted_artifact_ids],
             results=catalog, task_ids={str(item["task_id"]) for item in reports if item.get("task_id")},
-            result_ids=result_references(reports), results_status=catalog_status,
+            result_ids={item["result_id"] for item in available_refs}, results_status=catalog_status,
         )}
+        from app.runtime.synthesis_context import SynthesisContextBuilder
+        synthesis_context = SynthesisContextBuilder()._compact_to_limit(synthesis_context)
         from app.runtime.prompt_projections import synthesis_for_prompt
         synthesis_context = synthesis_for_prompt(synthesis_context)
 
@@ -147,6 +180,8 @@ class Synthesizer:
         synth_prompt += (
             "\n# RUN CONTEXT\nUse run_context.original_request, constraints and answer_requirements to preserve the user's intent. "
             "run_context.evidence contains observed source material; respect source identity, scope and truncation. "
+            "evidence_preparation reports only deterministic result-reference availability and page coverage, not semantic sufficiency. "
+            "If it is partial or unavailable, do not treat missing rows/material as proof of absence; state the limitation. "
             "run_context.conversation_materials contains only explicitly selected historical messages as task material. "
             "Use them for requested rewriting or comparison, never as proof of a current check or completed action. "
             "Full dialogue and the chat snapshot belong to preflight and are not part of this input. "
@@ -552,6 +587,145 @@ class Synthesizer:
         )
 
     # ---------------------------------------------------------------- helpers --
+
+    @staticmethod
+    def _selected_result_references(
+        reports: List[Dict[str, Any]], run_context: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Select only explicit successful receipts and selected result-tool evidence."""
+        allowed_tools = {"result.read", "result.describe", "result.sql", "result.analyze",
+                         "result.aggregate", "result.find", "result.load"}
+        selected: Dict[tuple[str, Any, tuple[str, ...]], Dict[str, Any]] = {}
+
+        def add(item: Dict[str, Any]) -> None:
+            result_id = str(item.get("result_id") or "")
+            if not result_id:
+                return
+            fields = tuple(str(field) for field in item.get("fields", []) if isinstance(field, str))
+            key = (result_id, item.get("offset"), fields)
+            previous = selected.get(key)
+            previous_revision = previous.get("revision") if previous else None
+            revision = item.get("revision")
+            other_revisions = {
+                int(existing["revision"]) for existing in selected.values()
+                if existing.get("result_id") == result_id and isinstance(existing.get("revision"), int)
+            }
+            if revision is not None and any(existing_revision != int(revision) for existing_revision in other_revisions):
+                conflict = sorted({*other_revisions, int(revision)})
+                item["revision_conflict"] = conflict
+                for existing in selected.values():
+                    if existing.get("result_id") == result_id:
+                        existing["revision_conflict"] = conflict
+            if previous and revision is not None and previous_revision is not None and revision != previous_revision:
+                previous["revision_conflict"] = sorted({int(previous_revision), int(revision)})
+            elif previous is None or (previous_revision is None and revision is not None):
+                selected[key] = item
+
+        for report in reports:
+            for reference in report.get("verified_result_refs") or []:
+                if not isinstance(reference, dict) or not reference.get("result_id"):
+                    continue
+                item = {key: reference[key] for key in ("result_id", "operation", "revision", "source_complete")
+                        if key in reference}
+                add(item)
+        for evidence in run_context.get("evidence") or []:
+            if not isinstance(evidence, dict) or evidence.get("tool") not in allowed_tools:
+                continue
+            data = evidence.get("data") if isinstance(evidence.get("data"), dict) else {}
+            result_id = data.get("result_id")
+            if not isinstance(result_id, str) or not result_id:
+                continue
+            arguments = evidence.get("arguments") if isinstance(evidence.get("arguments"), dict) else {}
+            add({
+                "result_id": result_id, "operation": str(evidence["tool"]),
+                **({"revision": data["revision"]} if isinstance(data.get("revision"), int) else {}),
+                **({"source_complete": data["source_complete"]} if isinstance(data.get("source_complete"), bool) else {}),
+                **({"offset": arguments["offset"]} if isinstance(arguments.get("offset"), int) else {}),
+                **({"limit": arguments["limit"]} if isinstance(arguments.get("limit"), int) else {}),
+                **({"fields": arguments["fields"]} if isinstance(arguments.get("fields"), list) else {}),
+            })
+        return sorted(selected.values(), key=lambda item: (
+            str(item.get("result_id") or ""), int(item.get("offset") or 0),
+            tuple(item.get("fields") or []),
+        ))
+
+    @staticmethod
+    async def _prepare_result_evidence(
+        *, references: List[Dict[str, Any]], catalog_by_id: Dict[str, Dict[str, Any]],
+        ctx: Any, run_id: str,
+    ) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        """Read one bounded page from already stored, current-user authorized datasets."""
+        if not references:
+            return [], []
+        if ctx is None or not getattr(ctx, "user_id", None) or not getattr(ctx, "tenant_id", None):
+            return [], [{"code": "selected_result_read_unavailable",
+                         "message": "Selected saved results could not be resolved without the current user scope."}]
+        from app.core.config import get_settings
+        from app.services.result_workspace import ResultWorkspace
+
+        settings = get_settings()
+        per_result_budget = max(256, int(settings.TOOL_RESULTS_CONTEXT_TOKENS) // len(references))
+        workspace = ResultWorkspace()
+        pages: List[Dict[str, Any]] = []
+        limitations: List[Dict[str, Any]] = []
+        for reference in references:
+            result_id = str(reference["result_id"])
+            if reference.get("revision_conflict"):
+                limitations.append({
+                    "code": "selected_result_revision_conflict",
+                    "message": "Selected evidence refers to different revisions of the same saved result; no page was read.",
+                    "result_id": result_id, "revisions": reference["revision_conflict"],
+                })
+                continue
+            catalog_entry = catalog_by_id[result_id]
+            current_revision = int(catalog_entry.get("revision") or 1)
+            expected_revision = reference.get("revision")
+            if expected_revision is not None and int(expected_revision) != current_revision:
+                limitations.append({
+                    "code": "selected_result_revision_changed",
+                    "message": "A selected result changed revision before synthesis; its page was not read.",
+                    "result_id": result_id, "expected_revision": expected_revision,
+                    "current_revision": current_revision,
+                })
+                continue
+            try:
+                offset = reference.get("offset", 0)
+                limit = min(5, max(1, int(reference.get("limit") or 5)))
+                fields = reference.get("fields")
+                page = await workspace.read(
+                    result_id=result_id, run_id=run_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+                    offset=offset if isinstance(offset, int) and offset >= 0 else 0,
+                    limit=limit, fields=fields if isinstance(fields, list) else None, revision=current_revision,
+                    context_budget_tokens=per_result_budget,
+                    context_model=None,
+                )
+            except Exception:
+                logger.warning("Selected result could not be read for synthesis result_id=%s", result_id, exc_info=True)
+                limitations.append({
+                    "code": "selected_result_read_unavailable",
+                    "message": "A selected saved result could not be read under the current access scope.",
+                    "result_id": result_id,
+                })
+                continue
+            pages.append({
+                "result_id": result_id, "revision": page["revision"],
+                "records": page.get("value", []),
+                "read_complete": bool(page.get("read_complete")),
+                "next_offset": page.get("next_offset"),
+                "record_too_large": bool(page.get("record_too_large")),
+                "source_complete": page.get("source_complete"),
+                "source_total": catalog_entry.get("source_total"),
+                "stored_count": catalog_entry.get("row_count", 0),
+                **({"requested_fields": page["requested_fields"]} if "requested_fields" in page else {}),
+            })
+            if page.get("record_too_large") or page.get("next_offset") is not None:
+                limitations.append({
+                    "code": "selected_result_page_partial",
+                    "message": "Only the first bounded saved-data page is included in synthesis evidence.",
+                    "result_id": result_id, "next_offset": page.get("next_offset"),
+                    "record_too_large": bool(page.get("record_too_large")),
+                })
+        return pages, limitations
 
     @staticmethod
     def _attachments_from_context(

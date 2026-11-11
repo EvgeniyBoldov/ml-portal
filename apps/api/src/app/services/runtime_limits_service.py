@@ -52,6 +52,7 @@ class ResolvedActorLimits:
 class ModelCallLimits:
     request_timeout_s: int = 30
     max_retries: int = 2
+    context_window_tokens: int = 16_384
 
 
 class RuntimeLimitsService:
@@ -68,6 +69,7 @@ class RuntimeLimitsService:
         return ModelCallLimits(
             request_timeout_s=int(row.request_timeout_s or 30),
             max_retries=int(row.max_retries if row.max_retries is not None else 2),
+            context_window_tokens=int(row.context_window_tokens or 16_384),
         )
 
     async def resolve_runtime(self, override: Optional[dict] = None) -> RuntimeLimits:

@@ -76,11 +76,85 @@ def test_synthesis_compaction_keeps_all_task_statuses_and_bounds_final_context()
 
     assert len(json.dumps(context, ensure_ascii=False)) <= max_chars
     assert {report["task_id"] for report in context["completed_task_reports"]} == set(task_ids)
-    assert {item["task_id"] for item in context["limitations"] if "task_id" in item} == set(task_ids)
-    assert {item["message"] for item in context["limitations"] if "message" in item} >= (
-        {"Task did not complete"}
-        | {f"Runtime limitation {index}" for index in range(45)}
+    represented_task_ids = {
+        item.get("task_id") for item in context["limitations"] if item.get("task_id")
+    } | {
+        item.get("reference") for item in context["withheld_materials"]
+        if item.get("kind") == "limitation" and item.get("reference")
+    }
+    assert represented_task_ids == set(task_ids)
+    assert any(item.get("kind") == "limitation" and item.get("message_sha256")
+               for item in context["withheld_materials"])
+    assert context["evidence_coverage"] == "partial"
+    omitted_tasks = {item.get("task_id") for item in context["withheld_materials"]
+                     if item.get("kind") == "task_result_field" and item.get("fields")}
+    assert omitted_tasks
+    for report in context["completed_task_reports"]:
+        if report["task_id"] in omitted_tasks:
+            assert "structured_response" not in report and "outputs" not in report
+    assert not any("_truncated" in json.dumps(item) for item in context["completed_task_reports"])
+
+
+def test_synthesis_limit_keeps_original_request_constraints_and_answer_requirements():
+    context = SynthesisContextBuilder(max_chars=3_000).build(
+        plan={
+            "goal": "Summarize project",
+            "scope_context": {"keys": ["project"]},
+            "iterations": [{"id": "final", "sequence": 1, "terminal": "synthesis",
+                "synthesis_brief": {"user_question": "Summary", "purpose": "Answer",
+                    "answer_requirements": "Include constraints and exact limits"}}],
+            "tasks": {"large": {"iteration_id": "final", "planned_order": 0,
+                "status": "completed", "intent": "Read selected result",
+                "expected_outputs": [{"key": "items", "required": True}],
+                "result": {"description": "done", "structured_response": {"items": "x" * 20_000},
+                    "outputs": {"items": "x" * 20_000}, "verified": {"status": "observed",
+                        "receipts": [{"success": True, "operation": "collection.search",
+                                      "result_id": "result-1", "source_complete": False}]}}}},
+        }, iteration_id="final",
+        run_context={"original_request": "Summarize current project",
+                     "constraints": ["only approved repositories", "exclude archived projects"],
+                     "answer_requirements": "Keep project attribution exact",
+                     "evidence": [{"id": "evidence-1", "tool": "memory.search", "data": {"text": "y" * 20_000}}],
+                     "selected_material_refs": ["evidence-1"], "available_material_refs": ["evidence-1"],
+                     "evidence_coverage": "selected", "evidence_catalog": [{"id": "evidence-1", "tool": "memory.search"}]},
     )
+    assert context["run_context"]["original_request"] == "Summarize current project"
+    assert context["run_context"]["constraints"] == ["only approved repositories", "exclude archived projects"]
+    assert context["synthesis_brief"]["answer_requirements"] == "Include constraints and exact limits"
+    assert context["completed_task_reports"][0]["verified_result_refs"][0]["result_id"] == "result-1"
+    assert context["withheld_materials"] and context["limitations"][-1]["code"] == "synthesis_context_budget_exceeded"
+    assert "structured_response" not in context["completed_task_reports"][0]
+    assert context["run_context"]["evidence_catalog"] == [{"id": "evidence-1", "tool": "memory.search"}]
+
+
+def test_missing_selected_material_refs_are_explicit_without_claiming_sufficiency():
+    context = SynthesisContextBuilder().build(
+        plan={"goal": "Answer", "iterations": [{"id": "final", "synthesis_brief": {"purpose": "Answer"}}]},
+        iteration_id="final",
+        run_context={"original_request": "Answer", "evidence": [], "evidence_catalog": [],
+                     "selected_material_refs": ["missing-message"], "available_material_refs": [],
+                     "unavailable_material_refs": ["missing-message"], "evidence_coverage": "invalid_refs"},
+    )
+    limitation = next(item for item in context["limitations"] if item.get("code") == "selected_material_incomplete")
+    assert limitation["unavailable_material_refs"] == ["missing-message"]
+    assert context["run_context"]["evidence_coverage"] == "invalid_refs"
+
+
+def test_synthesis_result_selection_uses_only_explicit_verified_receipts_and_selected_result_tools():
+    from app.runtime.synthesizer import Synthesizer
+
+    refs = Synthesizer._selected_result_references(
+        [{"verified_result_refs": [{"result_id": "verified-1", "operation": "result.read"}],
+          "outputs": {"arbitrary": {"result_id": "unverified-2"}}}],
+        {"evidence": [
+            {"id": "selected", "tool": "result.describe", "data": {"result_id": "selected-3", "revision": 2}},
+            {"id": "non-result", "tool": "memory.search", "data": {"result_id": "ignored-4"}},
+        ]},
+    )
+    assert refs == [
+        {"result_id": "selected-3", "operation": "result.describe", "revision": 2},
+        {"result_id": "verified-1", "operation": "result.read"},
+    ]
 
 
 def test_synthesis_uses_accepted_partial_output_and_keeps_unresolved_limitation() -> None:

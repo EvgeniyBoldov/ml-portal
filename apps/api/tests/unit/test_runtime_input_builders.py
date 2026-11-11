@@ -96,3 +96,78 @@ def test_memory_group_projection_preserves_empty_and_failed_groups_without_mergi
     assert projection["groups"][1]["items"] == []
     assert not projection["groups"][2]["success"]
     assert "items" not in projection
+
+
+def test_grouped_memory_projection_is_bounded_and_reports_omitted_passages_without_mutating_evidence():
+    from app.runtime.evidence_projection import bounded_grouped_memory
+    from app.runtime.input_builders import compact_memory_search_result
+    groups = [{"scope_slug": "a", "success": True, "items": [
+        {"text": f"passage-{index}-" + ("x" * 8_000)} for index in range(4)
+    ]}, {"scope_slug": "b", "success": False, "items": []}]
+    source = {"groups": groups, "partial": True}
+    projected = bounded_grouped_memory(source, token_budget=3_000)
+    assert projected["evidence_coverage"] == "partial"
+    assert projected["omitted_passage_ids"]
+    assert projected["groups"][0]["items"]
+    assert source["groups"] == groups
+    tiny = bounded_grouped_memory(source, token_budget=1)
+    assert tiny["evidence_coverage"] == "unavailable"
+    assert source["groups"] == groups
+
+
+def test_shared_projection_bounds_multiple_searches_and_large_read_receipt_together():
+    from app.runtime.evidence_projection import bound_prompt_memory
+    payload = {
+        "memory_tool_results": [
+            {"tool": "memory.search", "arguments": {"query": "first"}, "result": {"groups": [
+                {"scope_slug": "company", "success": True, "items": [{"text": "A" * 2_000}]},
+                {"scope_slug": "project", "success": False, "items": []},
+            ]}},
+            {"tool": "memory.search", "arguments": {"query": "second"}, "result": {"groups": [
+                {"scope_slug": "company", "success": True, "items": [{"text": "B" * 2_000}]},
+            ]}},
+            {"tool": "file.data.read", "arguments": {"representation_id": "rep", "offset": 0},
+             "result": {"success": True, "representation_id": "rep", "content": "C" * 20_000,
+                        "next_offset": 50, "has_more": True}},
+        ],
+        "run_context": {"evidence": [{"id": "file-evidence", "tool": "file.data.read",
+            "arguments": {"representation_id": "rep", "offset": 50}, "data": {"text": "D" * 20_000}}],
+            "conversation_materials": [], "evidence_catalog": [{"id": "file-evidence", "tool": "file.data.read"}]},
+        "execution_ledger": {"tasks": []},
+    }
+    bounded = bound_prompt_memory(payload, token_budget=1_000, model="gpt-4o-mini")
+    records = bounded["memory_tool_results"]
+    assert records[2]["arguments"] == {"representation_id": "rep", "offset": 0}
+    assert "content" not in records[2]["result"]
+    assert records[2]["result"]["next_offset"] == 50
+    assert bounded["evidence_coverage"] in {"partial", "unavailable"}
+    if "omitted_material_refs" in bounded["run_context"]:
+        assert bounded["run_context"]["omitted_material_recovery"][0]["arguments"] == {
+            "representation_id": "rep", "offset": 50}
+    assert payload["memory_tool_results"][2]["result"]["content"] == "C" * 20_000
+
+
+async def test_payload_allowance_uses_model_window_prompt_and_response_schema(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from app.runtime.evidence_projection import prompt_payload_budget
+    from app.services.runtime_limits_service import RuntimeLimitsService
+    monkeypatch.setattr(RuntimeLimitsService, "resolve_model", AsyncMock(
+        return_value=SimpleNamespace(context_window_tokens=10_000)))
+    session = AsyncSession()
+
+    class SmallSchema:
+        @staticmethod
+        def model_json_schema():
+            return {"type": "object"}
+
+    class LargeSchema:
+        @staticmethod
+        def model_json_schema():
+            return {"description": "schema detail " * 400, "type": "object"}
+
+    small = await prompt_payload_budget(session=session, model="chat-model", system_prompt="role rules", schema=SmallSchema)
+    large = await prompt_payload_budget(session=session, model="chat-model", system_prompt="role rules", schema=LargeSchema)
+    assert small is not None and 0 < small < 10_000
+    assert large < small

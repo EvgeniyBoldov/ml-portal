@@ -132,8 +132,14 @@ async def test_planned_synthesis_bounds_context_after_selected_run_materials_are
 
     context = synthesizer.received_context
     assert len(json.dumps(context, ensure_ascii=False, default=str)) <= 4_000
-    assert context["run_context"]["evidence"][0]["id"] == source_id
-    assert context["limitations"][0]["message"].startswith("runtime limitation")
+    assert context["run_context"]["original_request"] == "goal"
+    assert context["run_context"]["selected_material_refs"] == [source_id]
+    assert context["run_context"]["evidence"] == []
+    assert context["evidence_coverage"] == "partial"
+    assert any(item["kind"] == "evidence" and item["ref"] == source_id
+               for item in context["withheld_materials"])
+    assert any(item.get("code") == "synthesis_context_budget_exceeded"
+               for item in context["limitations"])
     assert events[-1]["status"] == "completed"
 
 

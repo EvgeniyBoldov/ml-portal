@@ -6,23 +6,22 @@ from copy import deepcopy
 from app.runtime.memory.effective_scope import project_memory_context
 from app.runtime.datastore_context import build_datastore, task_files
 from app.runtime.prompt_projections import synthesis_for_prompt
+from app.runtime.evidence_projection import bounded_grouped_memory
 
 
-MAX_AGENT_DESCRIPTION_CHARS = 280
-MAX_PLANNER_MEMORY_PASSAGE_CHARS = 3_000
-
-
-def compact_memory_search_result(result: Any) -> dict[str, Any]:
+def compact_memory_search_result(result: Any, *, token_budget: int | None = None, model: str = "") -> dict[str, Any]:
     """Project a search receipt to passages and source labels once."""
     if not isinstance(result, dict):
         return {}
     if isinstance(result.get("groups"), list):
-        return {**deepcopy(result), "group_count": len(result["groups"]),
+        bounded = (bounded_grouped_memory(result, token_budget=token_budget, model=model)
+                   if token_budget is not None else deepcopy(result))
+        return {**bounded, "group_count": len(result["groups"]),
                 "success": result.get("success", True),
                 "partial": result.get("partial", any(not group.get("success", True) for group in result["groups"]))}
     items = result.get("items") if isinstance(result.get("items"), list) else []
     compact_items = []
-    for item in items[:12]:
+    for item in items:
         if not isinstance(item, dict):
             continue
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
@@ -42,7 +41,7 @@ def compact_memory_search_result(result: Any) -> dict[str, Any]:
         compact_items.append({
             "kind": item.get("kind"),
             "subject": item.get("subject") or metadata.get("document_title") or metadata.get("filename"),
-            "text": str(item.get("text") or "")[:MAX_PLANNER_MEMORY_PASSAGE_CHARS],
+            "text": str(item.get("text") or ""),
             "source_id": metadata.get("source_id"),
             "source_references": compact_refs,
         })
@@ -52,12 +51,15 @@ def compact_memory_search_result(result: Any) -> dict[str, Any]:
         for key in ("type", "rag_required", "tool_required", "clarification_required", "source_references")
         if isinstance(memory_context, dict) and key in memory_context
     }
+    bounded = (bounded_grouped_memory({"groups": [{"scope_slug": "items", "items": compact_items}]},
+                                      token_budget=token_budget, model=model)
+               if token_budget is not None else {"groups": [{"items": compact_items}]})
     return {
-        "success": result.get("success", True),
-        "backend": result.get("backend"),
+        "success": result.get("success", True), "backend": result.get("backend"),
         "count": result.get("count", len(compact_items)),
-        "items": compact_items,
+        "items": bounded.get("groups", [{}])[0].get("items", []),
         "memory_context": compact_context,
+        **{key: bounded[key] for key in ("omitted_passage_ids", "omitted_passage_count", "evidence_coverage", "limitation") if key in bounded},
     }
 
 
@@ -111,7 +113,7 @@ class PlannerInputBuilder:
                 continue
             agents.append({
                 "slug": item.get("slug"),
-                "description": self._trim_text(item.get("description", ""), MAX_AGENT_DESCRIPTION_CHARS),
+                "description": str(item.get("description") or ""),
                 "tags": list(item.get("tags") or []),
                 "provides_keys": list(item.get("provides_keys") or []),
                 "task_contracts": [
@@ -148,13 +150,6 @@ class PlannerInputBuilder:
             "available_agents": agents,
         }
         return payload
-
-    @staticmethod
-    def _trim_text(value: Any, limit: int) -> str:
-        text = str(value or "").strip()
-        if len(text) <= limit:
-            return text
-        return text[:limit]
 
 class SynthesizerInputBuilder:
     """Render the already validated final-plan synthesis context."""

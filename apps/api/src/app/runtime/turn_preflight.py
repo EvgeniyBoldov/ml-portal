@@ -6,6 +6,7 @@ from typing import Any, Awaitable, Callable, Literal, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
@@ -22,6 +23,7 @@ from app.runtime.input_builders import compact_memory_tool_records
 from app.runtime.datastore_context import build_datastore, file_metadata
 from app.runtime.contracts import AttachmentContext
 from app.runtime.run_context import ResolvedReference
+from app.runtime.evidence_projection import prompt_payload_budget, bound_prompt_memory
 
 
 class TaskBrief(BaseModel):
@@ -131,13 +133,6 @@ def _canonical_scope_selection(decision: TurnPreflightDecision) -> ScopeSelectio
 class TurnPreflight:
     """One structured root decision; all memory access remains runtime-owned."""
 
-    # Routing needs the current intent, not an unbounded pasted document or
-    # transcript. Preserve both ends: requests often put the actual action
-    # after a large quoted payload. The original request remains untouched in
-    # PipelineRequest and is handed to planner/synthesizer after routing.
-    _MAX_ROUTING_REQUEST_CHARS = 6_000
-    _ROUTING_HEAD_CHARS = 4_500
-
     def __init__(self, *, session: Any, llm_client: LLMClientProtocol) -> None:
         self._session = session
         self._llm = StructuredLLMCall(session=session, llm_client=llm_client)
@@ -177,6 +172,13 @@ class TurnPreflight:
             ))
         tools = RoleMemoryTools(session=self._session, ctx=ctx)
         descriptors = await tools.descriptors()
+        role_config = None
+        if isinstance(self._session, AsyncSession):
+            role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.TURN_PREFLIGHT)
+        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(SystemLLMRoleType.TURN_PREFLIGHT.value)
+        system_prompt = (self._llm._compile_role_prompt(role_config,
+            role_override if isinstance(role_override, dict) else None, schema=TurnPreflightDecision)
+            if role_config is not None else "")
         resumed = interaction_from_context((continuation or {}).get("paused_context"))
         checkpoint_results = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
         # File contents are an access-controlled read result. A paused
@@ -196,16 +198,9 @@ class TurnPreflight:
         prompt_project, prompt_chat = preflight_context(dict(project_context or {}), dict(chat_context or {}),
                                                        dialogue=dialogue, user_request=user_request)
         for _ in range(RoleMemoryTools.MAX_CALLS + 1):
-            result = await self._llm.invoke(
-                role=SystemLLMRoleType.TURN_PREFLIGHT,
-                payload={
-                    "user_request": self._routing_request(user_request),
+            payload = {
+                    "user_request": user_request,
                     "mechanical_lookup": mechanical_lookup,
-                    # Confirmed user/tenant facts plus small runtime facts (such
-                    # as the current date) are deliberately passed as a raw
-                    # projection. Unlike document memory, these are operational
-                    # context and must be available while resolving pronouns and
-                    # tool scope.
                     "facts_context": list(facts_context or []),
                     "project_context": prompt_project,
                     "chat_context": prompt_chat,
@@ -220,7 +215,18 @@ class TurnPreflight:
                                         for descriptor in descriptors],
                     "memory_tool_results": compact_memory_tool_records(tool_results),
                     "memory_tool_calls_remaining": RoleMemoryTools.MAX_CALLS - len(tool_results),
-                },
+                }
+            model_name = str((role_override.get("model") if isinstance(role_override, dict) else None)
+                             or (role_config or {}).get("model") or "unknown")
+            token_budget = (await prompt_payload_budget(session=self._session,
+                model=model_name, system_prompt=system_prompt,
+                schema=TurnPreflightDecision) if role_config is not None else None)
+            if token_budget is not None:
+                payload = bound_prompt_memory(payload, token_budget=token_budget,
+                                               model=model_name)
+            result = await self._llm.invoke(
+                role=SystemLLMRoleType.TURN_PREFLIGHT,
+                payload=payload,
                 schema=TurnPreflightDecision,
                 chat_id=chat_id,
                 tenant_id=tenant_id,
@@ -416,16 +422,8 @@ class TurnPreflight:
 
     @classmethod
     def _routing_request(cls, user_request: str) -> str:
-        text = str(user_request or "")
-        if len(text) <= cls._MAX_ROUTING_REQUEST_CHARS:
-            return text
-        tail_size = cls._MAX_ROUTING_REQUEST_CHARS - cls._ROUTING_HEAD_CHARS
-        return (
-            f"{text[:cls._ROUTING_HEAD_CHARS]}\n\n"
-            "[Середина пользовательского сообщения опущена только для маршрутизации; "
-            "при продолжении исходный текст доступен следующей роли.]\n\n"
-            f"{text[-tail_size:]}"
-        )
+        """Compatibility helper; routing text is lossless and bounded downstream."""
+        return str(user_request or "")
 
     @staticmethod
     def _is_explicit_fact_memory_write(user_request: str) -> bool:

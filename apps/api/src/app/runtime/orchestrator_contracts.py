@@ -173,18 +173,47 @@ class DiscoveredNeed(BaseModel):
     @field_validator("json_schema", mode="before")
     @classmethod
     def validate_json_schema(cls, value: Any) -> Dict[str, Any]:
-        """Reject a malformed need before it becomes persisted plan state.
-
-        A need is supplied by the agent but is later used as the contract for
-        a cross-task binding.  Deferring schema validation until that binding
-        is planned makes an invalid agent declaration look like a successful
-        ``needs_dependency`` task and fails only in a later iteration.
-        """
+        """Reject malformed need schemas before they become persisted state."""
         if not isinstance(value, dict) and not is_absent(value):
             raise ValueError("need schema must be a JSON Schema object")
         return _normalize_nullable_schema(value) if isinstance(value, dict) else {}
 
 
+class ContinuationResultReference(BaseModel):
+    """A previously observed, successful dataset that may be reauthorized/read."""
+    result_id: str = Field(..., min_length=1)
+    operation: str = Field(..., min_length=1)
+    revision: Optional[int] = Field(default=None, ge=1)
+    source_complete: Optional[bool] = None
+    model_config = {"extra": "forbid"}
+
+
+class FulfilledNeedBinding(BaseModel):
+    need_ref: str = Field(..., min_length=1)
+    need_key: str = Field(..., min_length=1)
+    consumer_input_key: str = Field(..., min_length=1)
+    producer_task_id: str = Field(..., min_length=1)
+    output_key: str = Field(..., min_length=1)
+    model_config = {"extra": "forbid"}
+
+
+class ContinuationContext(BaseModel):
+    """Typed task state for a planner-created continuation, not a chat resume."""
+    prior_task_id: str = Field(..., min_length=1)
+    prior_goal: str = Field(..., min_length=1)
+    remaining_goal: str = Field(..., min_length=1)
+    prior_structured_response: Any = None
+    prior_outputs: Dict[str, Any] = Field(default_factory=dict)
+    verification_status: str = ""
+    prior_diagnostics: List[Dict[str, Any]] = Field(default_factory=list)
+    unresolved_needs: List[DiscoveredNeed] = Field(default_factory=list)
+    fulfilled_need_bindings: List[FulfilledNeedBinding] = Field(default_factory=list)
+    result_references: List[ContinuationResultReference] = Field(default_factory=list)
+    constraints: List[str] = Field(default_factory=list)
+    prior_scope_context: Dict[str, Any] = Field(default_factory=dict)
+    freshness_policy: FreshnessPolicy = FreshnessPolicy.ALLOW_MEMORY
+    fresh_retrieval_observed: bool = False
+    model_config = {"extra": "forbid"}
 
 class TaskOutputSpec(BaseModel):
     key: str = Field(..., min_length=1)
@@ -272,7 +301,7 @@ class AgentTaskContract(BaseModel):
 class PlannedTask(BaseModel):
     """An immutable agent task. Planner and synthesis are not graph nodes."""
     task_id: str = Field(..., min_length=1)
-    continuation_of: Optional[str] = Field(default=None, description="Prior incomplete task continued by this task, with the same executor. Restores only that task's document memory.")
+    continuation_of: Optional[str] = Field(default=None, description="Prior incomplete task continued by the same executor. Runtime supplies its typed prior-result continuation context and document memory; interaction resume is separate.")
     executor: str = Field(..., min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)
@@ -459,6 +488,7 @@ class SchedulerDecision(BaseModel):
 class TaskRequest(BaseModel):
     task_id: str = Field(..., min_length=1)
     continuation_of: Optional[str] = None
+    continuation_context: Optional[ContinuationContext] = None
     executor: str = Field(..., min_length=1)
     intent: str = Field(..., min_length=1)
     instructions: str = Field(..., min_length=1)

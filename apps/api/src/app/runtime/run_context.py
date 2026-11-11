@@ -6,6 +6,7 @@ import json
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.runtime.evidence_projection import evidence_catalog
 
 
 class ResolvedReference(BaseModel):
@@ -87,8 +88,12 @@ class RunContext(BaseModel):
             "uncertainties": self.task_brief.get("uncertainties") or [],
             "evidence": source_evidence,
             "conversation_materials": list(conversation.values()),
+            "evidence_catalog": evidence_catalog(self.evidence),
         }
         missing = sorted((selected_evidence - known_evidence) | (selected_messages - known_messages.keys()))
+        value["selected_material_refs"] = sorted(selected_evidence | selected_messages)
+        value["evidence_coverage"] = "invalid_refs" if missing else ("selected" if selected_evidence or selected_messages else "none_selected")
+        value["available_material_refs"] = sorted(known_evidence | known_messages.keys())
         if missing:
             value["unavailable_material_refs"] = missing
         if scope_keys is not None:

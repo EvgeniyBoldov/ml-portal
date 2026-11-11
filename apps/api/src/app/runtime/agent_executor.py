@@ -1129,6 +1129,17 @@ class AgentExecutor:
             parts.append("[Execution context — application fact]\n" + json.dumps(execution, ensure_ascii=False))
         if task.contract.input_schema:
             parts.append("[Input schema — advisory; actual input takes precedence]\n" + json.dumps(task.contract.input_schema, ensure_ascii=False, default=str))
+        if task.continuation_context is not None:
+            parts.append(
+                "[Structured task continuation — not an interaction resume or transcript]\n"
+                + json.dumps(task.continuation_context.model_dump(mode="json", exclude_none=True),
+                             ensure_ascii=False, default=str)
+                + "\nTreat prior_structured_response and prior_outputs as recorded prior task data, "
+                  "not new runtime verification. verification_status and result_references show what runtime observed. "
+                  "Fulfilled need values are in Task inputs; fulfilled_need_bindings explain their source. "
+                  "Reauthorize every result reference through the current tools and preserve freshness_policy. "
+                  "A prior observation does not satisfy a fresh retrieval requirement."
+            )
         if task.inputs:
             parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str))
         if parts:

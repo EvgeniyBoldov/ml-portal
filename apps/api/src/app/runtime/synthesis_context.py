@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import hashlib
+from copy import deepcopy
 from typing import Any, Dict
 
 from app.runtime.orchestrator_contracts import ResolutionAction, TaskStatus
@@ -78,12 +80,21 @@ class SynthesisContextBuilder:
             excluded = latest_resolutions.get(task_id, {}).get("action") == ResolutionAction.EXCLUDE_FROM_SCOPE.value
             if result and not excluded:
                 verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
+                references = self._verified_result_references(verified)
+                expected_outputs = [
+                    {"key": item.get("key"), "required": bool(item.get("required", True)),
+                     "fulfillment": item.get("fulfillment")}
+                    for item in task.get("expected_outputs", []) if isinstance(item, dict)
+                ]
                 reports.append(task_result_for_prompt({"task_id": task_id, "intent": self._redact(task.get("intent")),
                                 "status": status, "completion": result.get("completion"),
                                 "description": self._redact(result.get("description")),
                                 "answer": self._redact(result.get("answer", result.get("description"))),
                                 "structured_response": self._redact(result.get("structured_response", outputs)),
                                 "outputs": self._redact(outputs), "needs": self._redact(result.get("needs", [])),
+                                "output_states": self._redact(result.get("output_states", {})),
+                                "expected_outputs": expected_outputs,
+                                "verified_result_refs": references,
                                 "diagnostics": self._redact(result.get("diagnostics", []))}))
                 artifacts.extend(self._artifact_projection(result.get("attachments") or verified.get("artifacts")))
                 sources.extend(self._source_projection(result.get("sources") or verified.get("sources")))
@@ -112,73 +123,157 @@ class SynthesisContextBuilder:
             list((plan.get("scope_context") or {}).get("keys") or []), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
         )
         if run_context is not None:
-            context["run_context"] = run_context
+            context["run_context"] = self._redact(run_context)
+            unavailable = list(run_context.get("unavailable_material_refs") or [])
+            omitted = list(run_context.get("omitted_material_refs") or [])
+            if unavailable or omitted or run_context.get("evidence_coverage") in {"invalid_refs", "unavailable", "partial"}:
+                context["limitations"].append({
+                    "code": "selected_material_incomplete",
+                    "message": "Some selected run material is unavailable or omitted from this synthesis input.",
+                    "unavailable_material_refs": unavailable,
+                    "omitted_material_refs": omitted,
+                    "evidence_coverage": run_context.get("evidence_coverage"),
+                })
         context["limitations"].extend(runtime_limitations or [])
-        # A memory-only answer receives the original passages. The model's
-        # normal context-window check handles overflow without losing evidence.
-        return context if memory_context else self._compact_to_limit(context)
+        return self._compact_to_limit(context)
 
     def _compact_to_limit(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Never lose a completed plan merely because evidence is verbose."""
+        """Build an exact-value partial projection and enumerate withheld fields."""
         if len(json.dumps(context, ensure_ascii=False, default=str)) <= self._max_chars:
             return context
+        limitation = {"code": "synthesis_context_budget_exceeded",
+                      "message": "Some exact synthesis material was withheld because it exceeded the configured context budget."}
+        bounded: Dict[str, Any] = {
+            key: deepcopy(context[key]) for key in (
+                "user_question", "synthesis_brief", "plan_outline", "resolution_decisions",
+                "scope_context", "execution_context", "execution_summary",
+                "artifacts", "sources", "datastore", "evidence_preparation", "direct_answer_draft",
+            ) if key in context
+        }
+        bounded["limitations"] = []
+        bounded["completed_task_reports"] = []
+        bounded["memory_context"] = []
+        bounded["withheld_materials"] = []
+        run_context_for_reserve = context.get("run_context") if isinstance(context.get("run_context"), dict) else {}
+        expected_manifest_items = (
+            len(context.get("completed_task_reports") or [])
+            + len(run_context_for_reserve.get("evidence") or [])
+            + len(run_context_for_reserve.get("conversation_materials") or [])
+            + len(context.get("memory_context") or [])
+        )
+        reserve = len(json.dumps(limitation, ensure_ascii=False, default=str)) + 512 * max(1, expected_manifest_items)
+        content_limit = max(1, self._max_chars - reserve)
+        run_context = context.get("run_context")
+        bounded_run: Dict[str, Any] | None = None
+        if isinstance(run_context, dict):
+            bounded_run = {key: deepcopy(run_context[key]) for key in (
+                "original_request", "constraints", "answer_requirements", "resolved_references",
+                "uncertainties", "evidence_catalog", "selected_material_refs", "available_material_refs",
+                "unavailable_material_refs", "omitted_material_refs", "omitted_material_recovery",
+                "evidence_coverage",
+            ) if key in run_context}
+            bounded_run["evidence"] = []
+            bounded_run["conversation_materials"] = []
+            bounded["run_context"] = bounded_run
 
-        def compact(value: Any, depth: int = 0, key: str | None = None) -> Any:
-            if isinstance(value, str):
-                return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
-            if isinstance(value, list):
-                preserve_all = key in {
-                    "completed_task_reports", "limitations", "resolution_decisions",
-                    "plan_outline", "evidence", "conversation_materials", "unavailable_material_refs",
-                }
-                selected = value if preserve_all else value[:40]
-                result = [compact(item, depth + 1) for item in selected]
-                if not preserve_all and len(value) > 40:
-                    result.append({"_truncated_items": len(value) - 40})
-                return result
-            if isinstance(value, dict):
-                if depth > 8:
-                    return {"_truncated": "nested value omitted"}
-                return {str(child_key): compact(item, depth + 1, str(child_key))
-                        for child_key, item in list(value.items())[:80]}
-            return value
+        def fits() -> bool:
+            return len(json.dumps(bounded, ensure_ascii=False, default=str)) <= content_limit
 
-        bounded = compact(context)
-        # Delivery metadata is runtime-owned and must survive context compaction.
-        bounded["artifacts"] = context["artifacts"]
-        bounded["sources"] = context["sources"]
-        while bounded.get("memory_context") and len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
-            memories = bounded["memory_context"]
-            # Preserve turn recall first; trim the oldest planner reads before
-            # sacrificing verified task outputs to accumulated search history.
-            index = 1 if len(memories) > 1 and memories[0].get("type") == "memory_recall" else 0
-            memories.pop(index)
-            bounded["memory_context_truncated"] = True
-        for report in bounded.get("completed_task_reports", []):
-            if len(json.dumps(bounded, ensure_ascii=False, default=str)) <= self._max_chars:
-                break
-            if isinstance(report, dict) and (report.get("outputs") or report.get("structured_response")):
-                report.pop("outputs", None)
-                report["structured_response"] = {"_truncated": "full value retained in task journal"}
-        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
-            bounded["completed_task_reports"] = [
-                {key: report.get(key) for key in ("task_id", "intent", "status", "completion", "answer")}
-                for report in bounded.get("completed_task_reports", []) if isinstance(report, dict)
-            ]
-        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
-            for report in bounded.get("completed_task_reports", []):
-                if not isinstance(report, dict):
+        def mark_withheld(item: Dict[str, Any]) -> None:
+            if item.get("kind") == "task_result_field":
+                previous = next((entry for entry in bounded["withheld_materials"]
+                                 if entry.get("kind") == item["kind"]
+                                 and entry.get("task_id") == item.get("task_id")), None)
+                if previous is not None:
+                    fields = previous.setdefault("fields", [])
+                    if item.get("field") not in fields:
+                        fields.append(item["field"])
+                    return
+                field = item.pop("field")
+                item = {**item, "fields": [field]}
+            bounded["withheld_materials"].append(item)
+
+        report_fields = ("intent", "answer", "structured_response", "outputs", "needs", "diagnostics")
+        for report in context.get("completed_task_reports", []):
+            if not isinstance(report, dict):
+                continue
+            stub = {key: deepcopy(report[key]) for key in (
+                "task_id", "status", "completion", "expected_outputs", "output_states", "verified_result_refs",
+            ) if key in report}
+            bounded["completed_task_reports"].append(stub)
+            for key in report_fields:
+                if key not in report:
                     continue
-                for key in ("intent", "answer"):
-                    if isinstance(report.get(key), str) and len(report[key]) > 256:
-                        report[key] = report[key][:256] + "…[truncated]"
-            for limitation in bounded.get("limitations", []):
-                if isinstance(limitation, dict) and isinstance(limitation.get("message"), str):
-                    if len(limitation["message"]) > 512:
-                        limitation["message"] = limitation["message"][:512] + "…[truncated]"
-        if len(json.dumps(bounded, ensure_ascii=False, default=str)) > self._max_chars:
-            raise SynthesisContextError("synthesis context exceeds configured size after compaction")
+                stub[key] = deepcopy(report[key])
+                if not fits():
+                    stub.pop(key)
+                    mark_withheld({
+                        "kind": "task_result_field", "task_id": report.get("task_id"),
+                        "field": key, "result_refs": deepcopy(report.get("verified_result_refs") or []),
+                    })
+
+        for item in context.get("limitations", []):
+            bounded["limitations"].append(deepcopy(item))
+            if not fits():
+                bounded["limitations"].pop()
+                serialized = json.dumps(item, ensure_ascii=False, default=str, sort_keys=True)
+                mark_withheld({
+                    "kind": "limitation", "reference": item.get("task_id") or item.get("code"),
+                    "message_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
+                    "message_chars": len(str(item.get("message") or "")),
+                })
+
+        if isinstance(run_context, dict) and bounded_run is not None:
+            for field, id_field in (("evidence", "id"), ("conversation_materials", "message_id")):
+                for item in run_context.get(field, []):
+                    if not isinstance(item, dict):
+                        continue
+                    bounded_run[field].append(deepcopy(item))
+                    if not fits():
+                        bounded_run[field].pop()
+                        mark_withheld({"kind": field, "ref": item.get(id_field),
+                                       "tool": item.get("tool")})
+
+        for item in context.get("memory_context", []):
+            bounded["memory_context"].append(deepcopy(item))
+            if not fits():
+                bounded["memory_context"].pop()
+                mark_withheld({
+                    "kind": "memory_context",
+                    "scope": item.get("scope_slug") if isinstance(item, dict) else None,
+                    "source_references": deepcopy(item.get("source_references") or [])
+                    if isinstance(item, dict) else [],
+                })
+
+        for key in ("artifacts", "sources"):
+            # These delivery/provenance fields are mandatory; if their exact
+            # values do not fit, fail closed instead of dropping them.
+            if key in context and bounded.get(key) != context[key]:
+                raise SynthesisContextError(f"synthesis {key} exceed configured size")
+        if bounded["withheld_materials"]:
+            bounded["evidence_coverage"] = "partial"
+            bounded["limitations"].append(limitation)
+        final_size = len(json.dumps(bounded, ensure_ascii=False, default=str))
+        if final_size > self._max_chars:
+            raise SynthesisContextError(
+                f"synthesis context cannot fit its explicit limitation manifest ({final_size}>{self._max_chars})")
         return bounded
+
+    @staticmethod
+    def _verified_result_references(verified: Dict[str, Any]) -> list[Dict[str, Any]]:
+        """Return only result IDs paired with successful runtime-owned receipts."""
+        references = []
+        for receipt in verified.get("receipts") or []:
+            if not isinstance(receipt, dict) or receipt.get("success") is not True or not receipt.get("result_id"):
+                continue
+            analysis = receipt.get("analysis") if isinstance(receipt.get("analysis"), dict) else {}
+            references.append({
+                "result_id": str(receipt["result_id"]),
+                "operation": str(receipt.get("operation") or "unknown"),
+                **({"revision": analysis["revision"]} if isinstance(analysis.get("revision"), int) else {}),
+                **({"source_complete": receipt["source_complete"]} if isinstance(receipt.get("source_complete"), bool) else {}),
+            })
+        return references
 
     def _redact(self, value: Any) -> Any:
         return self._redactor.redact(value)

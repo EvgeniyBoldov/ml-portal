@@ -163,6 +163,10 @@ class ResultWorkspace:
         return {"result_id": scope["result_id"], "revision": state["revision"], "value": values,
                 "returned_count": len(values), "loaded_items": state["row_count"],
                 "source_complete": state["source_complete"], "read_complete": not unread,
+                # Keep the applied projection in the receipt so a model can
+                # continue paging with the same field set. `fields=None`
+                # means the caller requested the complete row shape.
+                **({"requested_fields": list(fields)} if fields is not None else {}),
                 "next_offset": next_offset if unread and values else None,
                 "record_too_large": bool(records) and not values,
                 "hint": "Select fewer fields or use result.sql for oversized records." if records and not values else None}

@@ -7,8 +7,8 @@ import pytest
 from app.runtime.orchestrator import GraphOrchestrator, OrchestratorEvent
 from app.runtime.entity_ids import runtime_attempt_id, runtime_task_id
 from app.runtime.orchestrator_contracts import (
-    EvidenceSelection, TaskCompletionDeclaration, IterationProposal, NeedBinding, PlannedTask,
-    TaskRequest, TaskResolution, TerminalKind,
+    ContinuationContext, EvidenceSelection, FreshnessPolicy, TaskCompletionDeclaration,
+    IterationProposal, NeedBinding, PlannedTask, TaskRequest, TaskResolution, TerminalKind,
 )
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
@@ -207,6 +207,54 @@ def test_binding_injects_the_schema_validated_value_not_its_storage_wrapper() ->
     }]
 
     assert store.task_request(plan["id"], "consumer")["inputs"]["resolved"] == {"id": 7}
+
+
+def test_needs_continuation_has_typed_state_separate_from_interaction_resume() -> None:
+    from app.runtime.plan_store import _continuation_context
+
+    plan = {
+        "tasks": {
+            "prior": {
+                "task_id": "prior", "intent": "Find current device state",
+                "instructions": "Find device state", "scope_context": {"keys": ["inventory"]},
+                "inputs": {"constraints": ["only production"]},
+                "result": {
+                    "outcome": "needs_dependency", "description": "Need inventory key",
+                    "completion": "needs", "structured_response": {"device": "R1"},
+                    "outputs": {"device": "R1"},
+                    "needs": [{"ref": "inventory", "key": "inventory", "description": "Get inventory"}],
+                    "verified": {"status": "observed", "fresh_retrieval": False, "receipts": [
+                        {"success": True, "operation": "netbox_get_device", "result_id": "dataset-1",
+                         "source_complete": False},
+                    ]},
+                },
+            },
+            "continued": {
+                "task_id": "continued", "continuation_of": "prior", "intent": "Continue check",
+                "instructions": "Check remaining ports", "freshness_policy": "require_retrieval",
+            },
+        },
+        "needs": [{"task_id": "prior", "ref": "inventory", "key": "inventory"}],
+        "bindings": [{"need_task_id": "prior", "need_ref": "inventory",
+                       "producer_task_id": "helper", "output_key": "inventory_data",
+                       "consumer_task_id": "continued", "consumer_input_key": "inventory_data"}],
+    }
+    context = ContinuationContext.model_validate(_continuation_context(
+        plan["tasks"]["continued"], plan, {"inventory_data": {"id": 7}}))
+    assert context.prior_structured_response == {"device": "R1"}
+    assert context.prior_outputs == {}  # same value is not repeated in a second field
+    assert context.result_references[0].result_id == "dataset-1"
+    assert context.fulfilled_need_bindings[0].consumer_input_key == "inventory_data"
+    assert context.unresolved_needs == []
+    assert context.constraints == ["only production"]
+    assert context.freshness_policy == FreshnessPolicy.REQUIRE_RETRIEVAL
+    assert context.fresh_retrieval_observed is False
+
+    request = _task().model_copy(update={"continuation_context": context})
+    message = AgentExecutor._build_sub_messages([], request, "goal")[-1]["content"]
+    assert "Structured task continuation — not an interaction resume or transcript" in message
+    assert "interaction_history" not in message and "resume_checkpoint" not in message
+    assert "A prior observation does not satisfy a fresh retrieval requirement." in message
 
 
 def test_artifact_outputs_have_one_runtime_owned_owner() -> None:

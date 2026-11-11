@@ -22,7 +22,9 @@ def task_result_for_prompt(result: dict[str, Any]) -> dict[str, Any]:
 def selected_materials(context: dict[str, Any]) -> dict[str, Any]:
     """Planner's task metadata lives in task_brief; this carries only sources."""
     return {key: deepcopy(context[key]) for key in (
-        "original_request", "evidence", "conversation_materials", "unavailable_material_refs",
+        "original_request", "evidence", "conversation_materials", "evidence_catalog", "selected_material_refs",
+        "available_material_refs", "unavailable_material_refs", "omitted_material_refs",
+        "omitted_material_recovery", "evidence_coverage",
     ) if key in context}
 
 

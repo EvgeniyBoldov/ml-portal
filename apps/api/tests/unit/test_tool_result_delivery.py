@@ -52,6 +52,36 @@ async def test_direct_result_bypasses_store_and_reaches_model_and_trace(monkeypa
     assert tool_event.data['data'] == payload
 
 
+@pytest.mark.asyncio
+async def test_batch_context_collector_keeps_only_redacted_completed_result_without_reexecution(monkeypatch):
+    payload = {'status': 'ok', 'access_token': 'secret-value'}
+    result = ToolResult.ok(payload, delivery='direct')
+    store = Mock(save=AsyncMock(side_effect=AssertionError('Direct responses must not be stored')))
+    monkeypatch.setattr(agent_module, 'ToolResultStore', lambda: store)
+    runtime = AgentToolRuntime(Mock())
+    execute = AsyncMock(return_value=(result, []))
+    runtime.tools.execute = execute
+    runtime.tools._find_operation = Mock(return_value=(SimpleNamespace(result_delivery='direct',
+        discovered_tool_id=None, observed_data_schema=None), None))
+    collector = []
+    session = SimpleNamespace(run_id=uuid4(), record_event=AsyncMock(), finish=AsyncMock())
+    events = [event async for event in runtime._execute_single_operation_call(
+        operation_call=ToolCall(id='batch-call', tool_name='direct.read', arguments={}),
+        agent_slug='reader', agent_execution_id='execution', llm_call_id='llm',
+        ctx=ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={'runtime_root_run_id': str(uuid4())}),
+        available_operations=[], policy=PolicyLimits(), run_session=session,
+        all_operation_outputs=[], all_sources=[], loop_state=AgentLoopState(),
+        operation_results_for_context=[], operation_calls_total_ref=[0],
+        remaining_wall_time_ms=60000, result_context_budget_tokens=1000,
+        result_context_model='gpt-4o-mini', batch_result_contexts=collector,
+    )]
+    execute.assert_awaited_once()
+    store.save.assert_not_awaited()
+    assert collector[0]['result'].data['access_token'] == '***'
+    assert collector[0]['minimum_receipt']
+    assert events
+
+
 def test_direct_context_is_complete_json_even_above_workspace_and_preview_limits():
     payload = {'items': [{'text': 'я' * 8000}], 'count': 1}
     rendered = OperationExecutionFacade.format_result_for_context(

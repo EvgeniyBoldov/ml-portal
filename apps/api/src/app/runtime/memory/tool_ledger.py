@@ -151,6 +151,12 @@ class ToolLedger(BaseModel):
         target.sources = [dict(source) for source in (sources or []) if isinstance(source, dict)]
         target.finished_at = datetime.now(timezone.utc)
 
+    def update_result_presentation(self, *, call_id: str, inline_complete: Optional[bool]) -> None:
+        """Update only the final model-delivery completeness for an existing result."""
+        target = next((entry for entry in reversed(self.entries) if entry.call_id == call_id), None)
+        if target is not None:
+            target.result_inline_complete = inline_complete
+
     def set_call_target(self, *, call_id: str, target_identity: str,
                         arguments: Optional[Dict[str, Any]] = None,
                         execution_id: Optional[str] = None) -> None:

@@ -242,7 +242,7 @@ async def test_preflight_receives_confirmed_facts_as_raw_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_preflight_bounds_only_its_routing_copy_of_a_large_user_request() -> None:
+async def test_preflight_preserves_full_large_user_request_for_safe_context_allocation() -> None:
     preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
         value=TurnPreflightDecision.model_validate({
@@ -255,10 +255,7 @@ async def test_preflight_bounds_only_its_routing_copy_of_a_large_user_request() 
     await preflight.decide(user_request=user_request, mechanical_lookup={})
 
     routing_copy = preflight._llm.invoke.await_args.kwargs["payload"]["user_request"]
-    assert len(routing_copy) < len(user_request)
-    assert len(routing_copy) <= TurnPreflight._MAX_ROUTING_REQUEST_CHARS + 200
-    assert routing_copy.startswith("начало ")
-    assert routing_copy.endswith("сохрани изменения в конце")
+    assert routing_copy == user_request
 
 
 @pytest.mark.asyncio

@@ -92,6 +92,17 @@ def test_explicit_history_read_replaces_truncated_recent_copy():
     assert not result["truncated"]
 
 
+def test_selected_materials_keeps_valid_history_text_for_planner_handoff():
+    from app.runtime.prompt_projections import selected_materials
+    context = RunContext(recent_dialogue=[])
+    history = context.add_evidence("chat.history.read", {"before_message_id": None}, {"messages": [
+        {"message_id": "history-1", "role": "assistant", "content": "KEEP_HISTORY_TEXT", "truncated": False}
+    ]})
+    projection = selected_materials(context.projection(message_refs=["history-1"], evidence_refs=[history]))
+    assert projection["conversation_materials"][0]["content"] == "KEEP_HISTORY_TEXT"
+    assert projection["evidence_coverage"] == "selected"
+
+
 def test_unknown_material_reference_does_not_become_a_successful_empty_read():
     projection = RunContext().projection(message_refs=["missing-message"], evidence_refs=["missing-source"])
     assert projection["unavailable_material_refs"] == ["missing-message", "missing-source"]

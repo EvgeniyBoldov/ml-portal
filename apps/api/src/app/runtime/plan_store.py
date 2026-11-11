@@ -15,6 +15,7 @@ from app.models.runtime_plan import (
     RuntimeTaskResolution,
 )
 from app.runtime.orchestrator_contracts import (
+    ContinuationContext, ContinuationResultReference, FulfilledNeedBinding,
     TaskExecutionReceipt, AttemptStatus, IterationProposal, IterationStatus,
     PlanStatus, PlannedTask, ResolutionAction, SchedulerActionKind, SchedulerDecision,
     TERMINAL_TASK_STATUSES, TaskAttemptFailure, TaskOutcome, TaskResult, TaskStatus,
@@ -61,6 +62,69 @@ def _continuation_memory(task: PlannedTask, snapshot: dict[str, Any]) -> list[di
     prior = snapshot["tasks"][task.continuation_of]
     return [project_memory_context(entry, task.scope_context.get("keys", []))
             for entry in document_memory(prior.get("memory_context") or [])]
+
+
+def _continuation_context(task: dict[str, Any], snapshot: dict[str, Any], inputs: dict[str, Any]) -> dict[str, Any] | None:
+    prior_task_id = task.get("continuation_of")
+    if not prior_task_id:
+        return None
+    prior = snapshot.get("tasks", {}).get(prior_task_id)
+    if not isinstance(prior, dict) or not isinstance(prior.get("result"), dict):
+        raise PlanValidationError("continuation requires a persisted prior task result")
+    try:
+        result = TaskResult.model_validate(prior["result"])
+    except Exception as exc:
+        raise PlanValidationError("continuation prior result is invalid") from exc
+    verified = result.verified if isinstance(result.verified, dict) else {}
+    references = []
+    for receipt in verified.get("receipts") or []:
+        if not isinstance(receipt, dict) or receipt.get("success") is not True or not receipt.get("result_id"):
+            continue
+        analysis = receipt.get("analysis") if isinstance(receipt.get("analysis"), dict) else {}
+        references.append(ContinuationResultReference(
+            result_id=str(receipt["result_id"]), operation=str(receipt.get("operation") or "observed"),
+            revision=analysis.get("revision") if isinstance(analysis.get("revision"), int) else None,
+            source_complete=receipt.get("source_complete") if isinstance(receipt.get("source_complete"), bool) else None,
+        ))
+    bindings = []
+    need_by_ref = {str(item.get("ref")): item for item in snapshot.get("needs", [])
+                   if isinstance(item, dict) and item.get("task_id") == prior_task_id}
+    for item in snapshot.get("bindings", []):
+        if (not isinstance(item, dict) or item.get("need_task_id") != prior_task_id
+                or item.get("consumer_task_id") != task["task_id"]):
+            continue
+        need = need_by_ref.get(str(item.get("need_ref"))) or {}
+        if item.get("consumer_input_key") not in inputs:
+            continue
+        bindings.append(FulfilledNeedBinding(
+            need_ref=str(item["need_ref"]), need_key=str(need.get("key") or item["need_ref"]),
+            consumer_input_key=str(item["consumer_input_key"]),
+            producer_task_id=str(item["producer_task_id"]), output_key=str(item["output_key"]),
+        ))
+    fulfilled_refs = {binding.need_ref for binding in bindings}
+    prior_outputs = result.outputs if result.outputs != result.structured_response else {}
+    prior_constraints = (prior.get("inputs") or {}).get("constraints", [])
+    if isinstance(prior_constraints, str):
+        prior_constraints = [prior_constraints]
+    if not isinstance(prior_constraints, list):
+        prior_constraints = []
+    context = ContinuationContext(
+        prior_task_id=str(prior_task_id),
+        prior_goal=str(prior.get("intent") or prior.get("instructions") or "Continue prior task"),
+        remaining_goal=str(task.get("instructions") or task.get("intent") or "Continue the task"),
+        prior_structured_response=result.structured_response,
+        prior_outputs=prior_outputs,
+        verification_status=str(verified.get("status") or "unverified"),
+        prior_diagnostics=result.diagnostics,
+        unresolved_needs=[need for need in result.needs if need.ref not in fulfilled_refs],
+        fulfilled_need_bindings=bindings,
+        result_references=references,
+        constraints=[value for value in prior_constraints if isinstance(value, str)],
+        prior_scope_context=deepcopy(prior.get("scope_context") or {}),
+        freshness_policy=task.get("freshness_policy") or "allow_memory",
+        fresh_retrieval_observed=bool(verified.get("fresh_retrieval")),
+    )
+    return context.model_dump(mode="json", exclude_none=True)
 
 
 def _safe_failure_limitation(code: str) -> Dict[str, Any]:
@@ -468,7 +532,7 @@ class InMemoryPlanStore:
         dependencies = {dep: plan["tasks"][dep]["result"] for dep in task["depends_on"]}
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"],
                 "inputs": inputs, "dependency_outputs": dependencies,
-                "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), **_task_interactions(plan, task_id)}
+                "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, plan, inputs), **_task_interactions(plan, task_id)}
 
     def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction) -> None:
         plan = self.get(plan_id)
@@ -853,7 +917,7 @@ class SqlPlanStore:
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
-        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), **_task_interactions(snapshot, task_id)}
+        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, snapshot, inputs), **_task_interactions(snapshot, task_id)}
 
     async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction) -> None:
         plan = await self._plan(plan_id, lock=True)

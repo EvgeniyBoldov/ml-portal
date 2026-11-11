@@ -357,6 +357,15 @@ columns; no database migration is required. Legacy report/value-slot declaration
 and journals are adapted on reading. Oversized agent inputs/dependency results
 are saved in the runtime tool-result store and replaced in LLM context with
 `result_id` and `sql_ref` for `result.analyze`, instead of cutting JSON strings.
+For one multi-tool response, the runtime first reserves the complete pending
+request, tool-call/result slots, schemas and output reserve. After all operations
+finish, it measures minimum receipts and full redacted/stored presentations as a
+batch, reallocates unused space independent of tool order, and verifies the
+assembled request with the shared context estimator. This presentation pass
+only formats already completed results; it does not call tools or persist them
+again. Native result messages keep their original call IDs. If even the minimum
+receipts exceed the final request allowance, the run fails with the typed
+context-window error; tool-result storage remains intact.
 Backend code appends the universal protocol after agent/sandbox prompt assembly;
 planner data requirements cannot alter this envelope. All editable role sections
 (identity, mission, rules, safety, output requirements, examples) come from the
@@ -371,6 +380,12 @@ Local Pydantic validation remains authoritative in both modes. This applies to
 all shared structured role calls, including preflight, planner, context compaction
 and file synthesis. It never replaces the
 operator's planner rules. Planner start snapshots use this same assembled prompt.
+The role input projection shares the deployed model's context allowance across
+the full planner payload, including its agent catalog, execution ledger, memory
+and selected read observations. Memory/read evidence may be omitted only as a
+complete item with an explicit coverage status; oversized fixed context fails at
+the outbound allocator rather than being silently clipped. Full source evidence
+is retained in RunContext for downstream selection.
 TurnPreflight alone automatically receives recent dialogue and the chat snapshot.
 It compiles a self-contained task brief with resolved references, constraints,
 uncertainties and explicit source/message references. Planner receives that brief,
@@ -385,6 +400,17 @@ control after tasks complete. Empty terminal synthesis remains valid for a requi
 clarification or an established limitation. In planned synthesis, empty reports do
 not establish missing integration, permissions or empty inventory; final answers
 must not promise automatic continuation.
+Before either direct or planned synthesis calls the LLM, the runtime resolves
+selected result references only from successful runtime receipts or explicitly
+selected `result.*` evidence. It matches them to the current run/user/tenant
+Result Store catalog, then reads one bounded saved-data page with the current
+revision and access checks; it makes no source API calls. The synthesizer reports
+missing, stale, oversized and remaining-page conditions as explicit evidence
+limitations. This coverage describes reference and page availability, not
+semantic sufficiency. Synthesis context budgeting preserves required outputs,
+sources and requirements; exact values that do not fit are withheld with an
+omission manifest and limitation instead of being clipped or silently removed.
+Orchestration still owns any further task lifecycle.
 The provider receives the `PlannerStep` envelope, not a standalone
 `IterationProposal` schema. Payload selection and terminal constraints are
 projected with Pydantic JSON Schema hooks so that nested `$defs` retain them:
@@ -409,8 +435,17 @@ The planner accumulates its own original passages across iterations; each task
 keeps its own document-memory context across attempts. Neither preflight searches
 nor another task's searches are automatically inherited. Exact duplicates are
 removed in code within each scope, without LLM composition or passage truncation.
-An explicit `continuation_of` restores the incomplete task's memory to its
-same-executor continuation under `continue_with_tasks`; helper tasks start empty.
+An explicit `continuation_of` restores the incomplete task's document memory to
+its same-executor continuation under `continue_with_tasks`; helper tasks start
+empty. The continuation also receives a typed `continuation_context` containing
+the prior structured response and outputs, runtime verification status and
+available result references, unresolved needs, fulfilled need bindings,
+remaining task goal, prior scope constraints and current freshness policy.
+It does not receive the prior chat transcript or interaction checkpoint.
+Interaction resume continues to use its separate interaction history and
+checkpoint contract. Result references identify saved datasets but grant no
+access; workspace reads independently recheck run, user, tenant, expiry and
+revision. An earlier observation does not satisfy a fresh retrieval requirement.
 Empty results differ from tool errors, and neither erases earlier findings.
 Sandbox overlays remain scoped to the
 immutable run snapshot.

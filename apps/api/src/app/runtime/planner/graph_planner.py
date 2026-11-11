@@ -16,6 +16,7 @@ from app.runtime.memory.document_memory import accumulate_document_memory, docum
 from app.runtime.interaction import InteractionRequester, RuntimeInteraction, InteractionRequired, require_interaction_allowed
 
 from app.runtime.planner.response_contract import PlannerStep
+from app.runtime.evidence_projection import prompt_payload_budget, bound_prompt_memory
 
 
 class GraphPlanner:
@@ -76,7 +77,7 @@ class GraphPlanner:
         tool_items = [{"kind": "tool", "key": str(item.get("name") or item.get("tool") or ""),
             "label": str(item.get("label") or item.get("name") or item.get("tool") or "Инструмент"),
             "status": "available",
-            **({"description": str(item["description"]).strip()[:600]} if item.get("description") else {}),
+            **({"description": str(item["description"]).strip()} if item.get("description") else {}),
             "source_label": "Система",
             **({"risk_level": item["risk_level"]} if item.get("risk_level") else {})}
             for item in descriptors if item.get("name") or item.get("tool")]
@@ -100,6 +101,10 @@ class GraphPlanner:
             "Runtime saves this planner checkpoint and returns the typed answer to this planner. "
             "Use interaction_answers as additional context for the original goal; do not repeat answered questions."
         )
+        model_name = str((role_override.get("model") if isinstance(role_override, dict) else None)
+                         or role_config.get("model") or "unknown")
+        prompt_memory_budget = await prompt_payload_budget(session=self._session, model=model_name,
+            system_prompt=system_prompt, schema=PlannerStep)
         # Checkpointed file reads are an authorization snapshot that may have
         # become stale while the user was answering. Keep only shared memory
         # search receipts; file and chat reads must be resolved again.
@@ -119,6 +124,9 @@ class GraphPlanner:
             payload["memory_tool_results"] = list(tool_results)
             payload["memory_tool_calls_remaining"] = RoleMemoryTools.MAX_CALLS - len(tool_results)
             payload["interaction_answers"] = [{"question": row["interaction"]["question"], "response": row["response"]} for row in answers]
+            if prompt_memory_budget is not None:
+                payload = bound_prompt_memory(payload, token_budget=prompt_memory_budget,
+                                              model=model_name)
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.PLANNER,
                 payload=payload,

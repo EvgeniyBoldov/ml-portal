@@ -189,6 +189,143 @@ async def test_pages_share_identity_read_sql_and_access(workspace_pg):
 
 
 @pytest.mark.asyncio
+async def test_read_projection_survives_formatter_and_next_page(workspace_pg):
+    """A projected page receipt must be sufficient to read the next page."""
+    from app.agents.context import ToolResult
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    workspace, scope, _ = workspace_pg
+    saved, _ = await save(workspace, scope, items=[
+        {"id": 1, "name": "first", "large": "x" * 5000},
+        {"id": 2, "name": "second", "large": "y" * 5000},
+        {"id": 3, "name": "third", "large": "z" * 5000},
+    ], total=3, next_page=False)
+    first = await workspace.read(result_id=saved["result_id"], fields=["id", "name"], limit=1, **scope)
+    first_view = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(first, workspace_view=True), operation_slug="result.read"))
+    next_args = first_view["next_action"]["arguments"]
+    assert next_args == {"result_id": saved["result_id"], "revision": 1, "offset": 1,
+                         "limit": 10, "fields": ["id", "name"]}
+
+    second = await workspace.read(**next_args, **scope)
+    assert second["value"] == [{"id": 2, "name": "second"}, {"id": 3, "name": "third"}]
+    assert second["requested_fields"] == ["id", "name"]
+    assert "large" not in json.dumps(second["value"])
+
+
+@pytest.mark.asyncio
+async def test_batch_total_reader_candidate_preserves_large_first_rows_for_final_projection(workspace_pg):
+    from app.agents.context import ToolCall, ToolResult
+    from app.agents.protocol import build_tool_result_messages
+    from app.agents.runtime.model_context import reallocate_result_batch
+    from app.adapters.impl.llm_context import estimate_request_tokens
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    workspace, scope, _ = workspace_pg
+    large, _ = await save(workspace, scope, call="batch-large", items=[
+        {"id": index, "text": f"large row {index} " + "x" * 2_000} for index in range(8)
+    ], total=8, next_page=False)
+    small, _ = await save(workspace, scope, call="batch-small", items=[{"id": 1, "text": "tiny"}],
+                          total=1, next_page=False)
+    batch_budget = 4_000
+    old_equal_share = await workspace.read(result_id=large["result_id"], fields=["id", "text"],
+        limit=20, context_budget_tokens=batch_budget // 2, context_model="gpt-4o-mini", **scope)
+    candidate_large = await workspace.read(result_id=large["result_id"], fields=["id", "text"],
+        limit=20, context_budget_tokens=batch_budget, context_model="gpt-4o-mini", **scope)
+    candidate_small = await workspace.read(result_id=small["result_id"], fields=["id", "text"],
+        limit=20, context_budget_tokens=batch_budget, context_model="gpt-4o-mini", **scope)
+    assert len(old_equal_share["value"]) < 8
+    assert len(candidate_large["value"]) == 8
+    assert len(candidate_small["value"]) == 1
+
+    calls = [ToolCall(id="large-call", tool_name="result.read", arguments={}),
+             ToolCall(id="small-call", tool_name="result.read", arguments={})]
+    entries = [
+        {"call": calls[0], "call_id": calls[0].id, "result": ToolResult.ok(candidate_large, workspace_view=True),
+         "stored_result": None, "evidence_call_id": calls[0].id},
+        {"call": calls[1], "call_id": calls[1].id, "result": ToolResult.ok(candidate_small, workspace_view=True),
+         "stored_result": None, "evidence_call_id": calls[1].id},
+    ]
+
+    def format_item(item, budget):
+        return OperationExecutionFacade.format_result_for_context(item["result"],
+            operation_slug="result.read", context_budget_tokens=budget, context_model="gpt-4o-mini")
+
+    full = [format_item(item, batch_budget) for item in entries]
+    used = sum(estimate_request_tokens({"model": "gpt-4o-mini", "messages": [
+        {"role": "tool", "content": text}]}) for text in full)
+    raw_calls = [{"id": item["call"].id, "function": {"name": "result.read"}} for item in entries]
+
+    def request(texts):
+        return {"model": "gpt-4o-mini", "messages": [
+            {"role": "assistant", "tool_calls": raw_calls},
+            *build_tool_result_messages([(item["call"], text) for item, text in zip(entries, texts)], raw_calls)]}
+
+    assert used <= batch_budget
+    allocation = reallocate_result_batch(entries, total_budget_tokens=batch_budget,
+        model="gpt-4o-mini", format_item=format_item, request_for_texts=request, context_window_tokens=8192)
+    assert allocation.fits_request
+    projected = [json.loads(value) for value in allocation.texts]
+    assert len(projected[0]["records"]) == 8
+    assert projected[0]["records"][-1]["id"] == 7
+    assert [item["tool_call_id"] for item in request(allocation.texts)["messages"][1:]] == [
+        "large-call", "small-call"]
+
+
+@pytest.mark.asyncio
+async def test_synthesis_prepares_only_authorized_selected_saved_results(workspace_pg):
+    from types import SimpleNamespace
+    from app.runtime.synthesizer import Synthesizer
+
+    workspace, scope, _ = workspace_pg
+    saved, _ = await save(workspace, scope, items=[
+        {"id": index, "name": f"row-{index}"} for index in range(7)
+    ], total=7, next_page=False)
+    catalog = await ToolResultStore().list_for_run(**scope)
+    entry = next(item for item in catalog if item["result_id"] == saved["result_id"])
+    ctx = SimpleNamespace(user_id=scope["user_id"], tenant_id=scope["tenant_id"])
+
+    pages, limitations = await Synthesizer._prepare_result_evidence(
+        references=[{"result_id": saved["result_id"], "operation": "netbox_get_objects", "revision": 1}],
+        catalog_by_id={saved["result_id"]: entry}, ctx=ctx, run_id=scope["run_id"],
+    )
+    assert [item["code"] for item in limitations] == ["selected_result_page_partial"]
+    assert len(pages) == 1
+    assert pages[0]["result_id"] == saved["result_id"] and pages[0]["revision"] == 1
+    assert pages[0]["records"] == [{"id": index, "name": f"row-{index}"} for index in range(5)]
+    assert pages[0]["read_complete"] is False and pages[0]["next_offset"] == 5
+    assert pages[0]["source_complete"] == entry["source_complete"]
+    assert pages[0]["source_total"] == entry["source_total"]
+
+    stale_pages, stale_limitations = await Synthesizer._prepare_result_evidence(
+        references=[{"result_id": saved["result_id"], "operation": "netbox_get_objects", "revision": 2}],
+        catalog_by_id={saved["result_id"]: entry}, ctx=ctx, run_id=scope["run_id"],
+    )
+    assert stale_pages == []
+    assert stale_limitations[0]["code"] == "selected_result_revision_changed"
+
+    denied, denied_limitations = await Synthesizer._prepare_result_evidence(
+        references=[{"result_id": saved["result_id"], "operation": "netbox_get_objects"}],
+        catalog_by_id={saved["result_id"]: entry},
+        ctx=SimpleNamespace(user_id=uuid4(), tenant_id=uuid4()), run_id=scope["run_id"],
+    )
+    assert denied == []
+    assert denied_limitations[0]["code"] == "selected_result_read_unavailable"
+
+    oversized, _ = await workspace.save_source(payload={"count": 1, "results": [{"text": "x" * 20_000}], "next": None},
+        source_tool="external.large", arguments={}, operation="external.large", call_id="oversized",
+        task_id="task", agent_execution_id="agent", **scope)
+    oversized_catalog = await ToolResultStore().list_for_run(**scope)
+    oversized_entry = next(item for item in oversized_catalog if item["result_id"] == oversized["result_id"])
+    oversized_pages, oversized_limitations = await Synthesizer._prepare_result_evidence(
+        references=[{"result_id": oversized["result_id"], "operation": "external.large"}],
+        catalog_by_id={oversized["result_id"]: oversized_entry}, ctx=ctx, run_id=scope["run_id"],
+    )
+    assert oversized_pages[0]["record_too_large"] is True and oversized_pages[0]["records"] == []
+    assert any(item["code"] == "selected_result_page_partial" for item in oversized_limitations)
+
+
+@pytest.mark.asyncio
 async def test_inventory_prompt_sql_counts_devices_instead_of_unique_models(workspace_pg):
     from app.services.inventory_sql_prompt import DEVICE_MODEL_COUNTS_SQL
 
