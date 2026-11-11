@@ -58,8 +58,9 @@ Example detailed result:
 
 ### `model.predict`
 
-Runs one model selected by its stable identifier. `inputs` must conform to the
-schema returned by `model.info`; the facade selects the deployed version.
+Runs one model selected by its stable identifier. Before each prediction the
+shim fetches that model's detailed card, validates `inputs` against its current
+`input_schema`, then calls the facade; the facade selects the deployed version.
 
 The MCP call arguments use `model_id` and `inputs`:
 
@@ -68,6 +69,12 @@ The MCP call arguments use `model_id` and `inputs`:
 ```
 
 The shim maps them to the facade request body `{"model": ..., "input": ...}`.
+Pass `inputs` as the JSON value described by the model schema. If the supplied
+value is a string, the shim first validates it as a string. Only when it does
+not match the schema does the shim try to parse it as JSON and validate the
+parsed value. This supports clients that encode an object as JSON text without
+changing models whose schema accepts strings. Values must be finite JSON
+values; NaN, infinity, and non-JSON Python values are rejected.
 
 The facade response has this minimum shape:
 
@@ -101,13 +108,24 @@ codes are authoritative for validation, authorization, availability, and
 model-level errors.
 
 Model identifiers must match the inference service contract:
-`[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`. The `input` value is arbitrary JSON and
-must conform to the selected model's `input_schema`; the MCP adapter preserves
-objects, arrays, strings, numbers, booleans, and null without coercion.
+`[A-Za-z0-9][A-Za-z0-9_.-]{0,254}`. The facade request's `input` field accepts
+any JSON value. The inference service validates it against the deployed model's
+`input_schema` and returns `SCHEMA_VALIDATION_ERROR` (HTTP 400) when it does not
+conform. The MCP shim performs the same validation before prediction, using
+the detailed model card fetched for that call. JSON Schema references are
+resolved without network access; schemas that need unavailable external
+references cannot be used for local validation.
 
-For schema validation failures, the facade error fields (`message`, `type`,
-`param`, and `code`) are authoritative. The shim returns a generic MCP error
-without leaking credentials, request payloads, or provider internals.
+Input validation failures return JSON-RPC error code `-32602` and a versioned
+`MCPFailure` envelope in `error.data`, with category `input`, a corrective
+message, the failing parameter when available, request ID, and processing
+stage. Upstream HTTP failures also carry the HTTP status and a normalized
+category. For recognized inference-service error codes, the shim uses static
+messages and retains safe code/parameter details; it never forwards upstream
+error bodies or messages, which can contain input values or internal details.
+Unrecognized upstream errors retain a generic message and status. The runtime
+normalizes this envelope into its standard tool failure result so the agent
+can use input errors to correct a call.
 
 ## Instance and credentials
 
@@ -155,8 +173,10 @@ arguments.
 For each MCP tool call, the adapter logs the Portal correlation ID, tool,
 processing stage, duration, exception class, and upstream HTTP status when
 available. It does not log tool arguments, credentials, response bodies, or
-exception text. The MCP response remains generic; use `x-portal-request-id` to
-correlate it with the adapter container log and runtime trace.
+raw validation payloads; error details are bounded operational summaries.
+Error envelopes include the correlation ID and stage; use
+`x-portal-request-id` to correlate them with the adapter container log and
+runtime trace.
 
 User credentials are added through the personal account and are bound to the
 selected active remote source; the MCP adapter receives them only through the

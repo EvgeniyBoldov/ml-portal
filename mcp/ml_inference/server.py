@@ -10,7 +10,13 @@ from typing import Any
 from urllib.parse import quote, urlparse, urlunparse
 
 import httpx
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import FastAPI, Header, Request, Response
+from jsonschema import SchemaError
+from jsonschema.validators import validator_for
+from referencing import Registry
+from referencing.exceptions import Unresolvable
+
+from portal_mcp_contract import MCPFailure, MCPFailureCategory, MCPFailureKind, public_user_message, safe_diagnostic
 
 from helpers.adapter_auth import AuthProfile, resolve_request_credential, upstream_auth_headers
 from helpers.observability import (
@@ -41,8 +47,113 @@ def _jsonrpc_ok(rpc_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
 
-def _jsonrpc_err(rpc_id: Any, code: int, message: str) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
+def _jsonrpc_err(
+    rpc_id: Any, code: int, message: str, data: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": rpc_id, "error": error}
+
+
+class PredictionInputError(ValueError):
+    def __init__(self, message: str, *, param: str = "inputs", validator: str = "json") -> None:
+        super().__init__(message)
+        self.details = {"param": param, "validator": validator}
+
+
+# Only expose known service codes with static messages. Provider messages may
+# contain the input value (jsonschema), stack traces or credential material.
+_FACADE_ERRORS = {
+    "SCHEMA_VALIDATION_ERROR": "Model input does not match input_schema. Inspect model.info and correct inputs.",
+    "MODEL_NOT_FOUND": "The requested model has no active deployment. Inspect model.info.",
+    "INVALID_API_KEY": "The inference service rejected authentication credentials.",
+    "INSUFFICIENT_PERMISSIONS": "The inference account lacks permission for this operation.",
+    "SERVICE_OVERLOADED": "Inference prediction capacity is exhausted. Try again later.",
+    "MODEL_PREDICTION_TIMEOUT": "Model prediction timed out.",
+    "MODEL_PREDICTION_FAILED": "Model prediction failed in the inference service.",
+    "MODEL_SIGNATURE_INVALID": "The deployed model schema is invalid.",
+    "MODEL_OUTPUT_VALIDATION_FAILED": "Model output does not match its schema.",
+    "RUNTIME_UNAVAILABLE": "The model runtime is unavailable.",
+}
+
+
+def _normalize_prediction_inputs(inputs: Any, schema: dict[str, Any]) -> Any:
+    validator_class = validator_for(schema)
+    validator_class.check_schema(schema)
+    # Never fetch schema references over the network from provider metadata.
+    validator = validator_class(schema, registry=Registry())
+    try:
+        json.dumps(inputs, allow_nan=False)
+    except (ValueError, TypeError) as exc:
+        raise PredictionInputError("inputs must contain finite JSON values.") from exc
+    errors = list(validator.iter_errors(inputs))
+    if not errors:
+        return inputs
+    if isinstance(inputs, str):
+        try:
+            decoded = json.loads(inputs)
+            json.dumps(decoded, allow_nan=False)
+        except (ValueError, TypeError) as exc:
+            raise PredictionInputError(
+                "inputs does not match input_schema and is not valid encoded JSON. "
+                "Pass the JSON value required by model.info."
+            ) from exc
+        errors = list(validator.iter_errors(decoded))
+        if not errors:
+            return decoded
+    error = errors[0]
+    param = "inputs" + "".join(f".{part}" for part in error.absolute_path)
+    rule = str(error.validator)
+    hint = ""
+    if rule == "type":
+        hint = f" Expected type: {error.validator_value}."
+    elif rule == "required":
+        missing = [key for key in error.validator_value if key not in error.instance]
+        hint = f" Missing required fields: {', '.join(missing)}."
+    raise PredictionInputError(
+        str(safe_diagnostic(f"{param}: input_schema validation failed ({rule}).{hint} Correct inputs using model.info."))[:2000],
+        param=str(safe_diagnostic(param))[:300], validator=rule,
+    )
+
+
+def _failure_response(rpc_id: Any, exc: Exception, *, request_id: str, stage: str) -> dict[str, Any]:
+    status = getattr(exc, "status_code", None)
+    category = {
+        400: MCPFailureCategory.INPUT, 422: MCPFailureCategory.INPUT,
+        401: MCPFailureCategory.AUTH, 403: MCPFailureCategory.ACCESS,
+        429: MCPFailureCategory.RATE_LIMIT,
+    }.get(status, MCPFailureCategory.AVAILABILITY if status and status >= 500 else MCPFailureCategory.UNKNOWN)
+    code: str = f"http_{status}" if status else type(exc).__name__
+    message = "ML inference MCP request failed."
+    details = None
+    if isinstance(exc, PredictionInputError):
+        category, code, message, details = MCPFailureCategory.INPUT, "SCHEMA_VALIDATION_ERROR", str(exc), exc.details
+    elif isinstance(exc, UpstreamHTTPError):
+        code = getattr(exc, "service_code", None) or code
+        message = _FACADE_ERRORS.get(code, f"Inference service returned HTTP {status}.")
+        details = getattr(exc, "details", None)
+    elif isinstance(exc, httpx.TimeoutException):
+        category, message = MCPFailureCategory.AVAILABILITY, "Inference service request timed out."
+    elif isinstance(exc, httpx.HTTPError):
+        category, message = MCPFailureCategory.AVAILABILITY, "Could not reach the inference service."
+    elif isinstance(exc, (SchemaError, Unresolvable)) or stage in {"model_schema", "response_validation", "facade_request"}:
+        message = "Inference service returned an invalid model contract or response."
+    kind = MCPFailureKind.TOOL
+    if status:
+        kind = MCPFailureKind.HTTP
+    elif isinstance(exc, httpx.HTTPError):
+        kind = MCPFailureKind.TRANSPORT
+    elif isinstance(exc, (SchemaError, Unresolvable)) or stage in {"model_schema", "response_validation", "facade_request"}:
+        kind = MCPFailureKind.PROTOCOL
+    rpc_code = -32602 if isinstance(exc, PredictionInputError) else -32000
+    failure = MCPFailure(
+        kind=kind,
+        category=category, code=code, message=message, details=details,
+        request_id=request_id, stage=stage, http_status=status, rpc_code=rpc_code,
+        user_message=public_user_message(category),
+    ).bounded_dump()
+    return _jsonrpc_err(rpc_id, rpc_code, message, failure)
 
 
 def _normalize_base_url(value: str) -> str:
@@ -117,7 +228,7 @@ def _path_for_model(model_id: str) -> str:
     # Its path parameter cannot represent slashes, and deployment names are
     # restricted to this identifier alphabet.
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}", normalized):
-        raise ValueError("model_id must be a valid deployed model identifier")
+        raise PredictionInputError("model_id must be a valid deployed model identifier", param="model_id")
     return f"{MODELS_PATH.rstrip('/')}/{quote(normalized, safe='._-')}"
 
 
@@ -224,7 +335,21 @@ async def _facade_request(
         int((time.monotonic() - started) * 1000),
     )
     if response.status_code >= 400:
-        raise UpstreamHTTPError(response.status_code)
+        error = UpstreamHTTPError(response.status_code)
+        # Read only the bounded error contract; never forward arbitrary bodies.
+        if len(response.content) <= MAX_RESPONSE_BYTES:
+            try:
+                envelope = response.json()
+                source = envelope.get("error") if isinstance(envelope, dict) else None
+                if isinstance(source, dict) and source.get("code") in _FACADE_ERRORS:
+                    error.service_code = source["code"]
+                    error.details = {"source_code": source["code"]}
+                    param = source.get("param")
+                    if isinstance(param, str) and re.fullmatch(r"input(?:\.[A-Za-z_][A-Za-z0-9_]*|\.[0-9]+)*", param) and len(param) <= 200:
+                        error.details["param"] = "inputs" + param[5:]
+            except (ValueError, TypeError):
+                pass
+        raise error
     try:
         return _assert_bounded(response.json())
     except json.JSONDecodeError as exc:
@@ -315,7 +440,7 @@ TOOLS = [
                 },
                 # ML-Inference-Service accepts input: Any. Keep the tool
                 # contract open and let the model's input_schema define shape.
-                "inputs": {"description": "JSON input conforming to input_schema returned by model.info."},
+                "inputs": {"description": "Pass the JSON value required by model.info input_schema (for objects, pass an object, not JSON text). Encoded JSON strings are decoded only when the original string fails that schema."},
             },
             "required": ["model_id", "inputs"],
         },
@@ -355,6 +480,7 @@ async def mcp_root(
     tool_name = ""
     stage = "request_parse"
     rpc_id: Any = None
+    context: dict[str, Any] = {}
     try:
         payload = await request.json()
         rpc_id, method, params = payload.get("id"), payload.get("method"), payload.get("params") or {}
@@ -442,12 +568,20 @@ async def mcp_root(
             data = _validate_info_response(raw_data, model_id=normalized_model_id)
         elif tool_name == "model.predict":
             model_id = str(arguments.get("model_id") or "").strip()
+            stage = "input_validation"
             if "inputs" not in arguments:
-                raise ValueError("inputs is required")
+                raise PredictionInputError("inputs is required")
             if not model_id:
-                raise ValueError("model_id is required")
+                raise PredictionInputError("model_id is required", param="model_id")
             _path_for_model(model_id)
-            inputs = arguments["inputs"]
+            stage = "model_schema"
+            card = _validate_info_response(await _facade_request(
+                base_url=base_url, auth_headers=auth_headers, method="GET", path=_path_for_model(model_id),
+                request_id=request_id, tool_name=tool_name, route_name="model.predict.schema",
+            ), model_id=model_id)
+            stage = "input_validation"
+            inputs = _normalize_prediction_inputs(arguments["inputs"], card["input_schema"])
+            stage = "facade_request"
             body: dict[str, Any] = {"model": model_id, "input": inputs}
             raw_data = await _facade_request(
                 base_url=base_url, auth_headers=auth_headers, method="POST", path=PREDICT_PATH, body=body,
@@ -501,15 +635,15 @@ async def mcp_root(
             duration_ms=int((time.monotonic() - started) * 1000),
             error_type=type(exc).__name__,
             http_status=status_code,
-            rpc_code=-32000,
+            rpc_code=-32602 if isinstance(exc, PredictionInputError) else -32000,
             target=safe_target(base_url) if "base_url" in locals() else "",
             data_instance_id=str(context.get("data_instance_id") or ""),
             provider_instance_id=str(context.get("provider_instance_id") or ""),
             credential_id=resolved.credential_id if "resolved" in locals() else "",
             auth_type=resolved.auth_type if "resolved" in locals() else "",
-            error_detail=safe_error_detail(exc),
+            error_detail=type(exc).__name__ if isinstance(exc, SchemaError) else safe_error_detail(exc),
         )
-        return _jsonrpc_err(rpc_id, -32000, "ML inference MCP request failed")
+        return _failure_response(rpc_id, exc, request_id=request_id, stage=stage)
     except Exception as exc:
         log_mcp_event(
             logger,
@@ -527,6 +661,6 @@ async def mcp_root(
             provider_instance_id=str(context.get("provider_instance_id") or ""),
             credential_id=resolved.credential_id if "resolved" in locals() else "",
             auth_type=resolved.auth_type if "resolved" in locals() else "",
-            error_detail=safe_error_detail(exc),
+            error_detail=type(exc).__name__ if isinstance(exc, SchemaError) else safe_error_detail(exc),
         )
-        raise HTTPException(status_code=500, detail="ML inference MCP internal error") from exc
+        return _failure_response(rpc_id, exc, request_id=request_id, stage=stage)

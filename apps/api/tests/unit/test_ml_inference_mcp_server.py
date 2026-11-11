@@ -3,6 +3,10 @@ from __future__ import annotations
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 import sys
+import json
+from types import SimpleNamespace
+
+import httpx
 
 import pytest
 from fastapi.testclient import TestClient
@@ -121,10 +125,12 @@ def test_facade_contract_rejects_legacy_prediction_shape():
 def test_prediction_forwards_json_input_without_changing_its_shape(monkeypatch):
     captured = {}
 
-    async def fake_access(_arguments):
-        return "http://inference", {}
+    async def fake_access(_arguments, **_kwargs):
+        return "http://inference", {}, SimpleNamespace(credential_id="test", auth_type="token")
 
     async def fake_request(**kwargs):
+        if kwargs["method"] == "GET":
+            return _model_card({"type": "object"})
         captured.update(kwargs)
         return {
             "id": "resp_abc123",
@@ -166,8 +172,8 @@ def test_prediction_forwards_json_input_without_changing_its_shape(monkeypatch):
 def test_model_catalog_request_does_not_send_unsupported_pagination(monkeypatch):
     captured = {}
 
-    async def fake_access(_arguments):
-        return "http://inference", {}
+    async def fake_access(_arguments, **_kwargs):
+        return "http://inference", {}, SimpleNamespace(credential_id="test", auth_type="token")
 
     async def fake_request(**kwargs):
         captured.update(kwargs)
@@ -203,3 +209,164 @@ def test_model_catalog_request_does_not_send_unsupported_pagination(monkeypatch)
     model = result["data"][0]
     assert model["input_schema"]["required"] == ["income"]
     assert model["output_schema"]["properties"]["risk"]["type"] == "number"
+
+
+def _model_card(schema):
+    return {
+        "id": "NIMS", "object": "model", "input_schema": schema,
+        "output_schema": {}, "deployment": {"version": "1", "status": "active"},
+    }
+
+
+@pytest.fixture
+def prediction_call(monkeypatch):
+    def call(inputs, schema, *, status=200, error=None):
+        requests = []
+
+        async def access(_arguments, **_kwargs):
+            return "http://inference", {"Authorization": "Bearer secret-value"}, SimpleNamespace(
+                credential_id="test", auth_type="token",
+            )
+
+        def handle(request):
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(200, json=_model_card(schema))
+            if status >= 400:
+                return httpx.Response(status, json=error)
+            return httpx.Response(200, json={
+                "id": "resp_test", "object": "response", "status": "completed", "output": [],
+            })
+
+        original_client = httpx.AsyncClient
+        monkeypatch.setattr(ml_server, "_resolve_runtime_access", access)
+        monkeypatch.setattr(ml_server.httpx, "AsyncClient", lambda **kwargs: original_client(
+            **kwargs, transport=httpx.MockTransport(handle),
+        ))
+        with TestClient(ml_server.app) as client:
+            initialized = client.post("/", json={"id": 1, "method": "initialize"})
+            response = client.post("/", headers={
+                "mcp-session-id": initialized.headers["mcp-session-id"],
+                "x-portal-request-id": "regression-nims",
+            }, json={"id": 2, "method": "tools/call", "params": {
+                "name": "model.predict", "arguments": {"model_id": "NIMS", "inputs": inputs},
+            }})
+        return response.json(), requests
+    return call
+
+
+NIMS_SCHEMA = {
+    "type": "object", "properties": {"header": {"type": "string"}, "description": {"type": "string"}},
+    "required": ["header", "description"],
+}
+
+
+def test_nims_json_string_is_decoded_and_validated_before_predict(prediction_call):
+    inputs = {"header": "МИРК", "description": "Отчеты"}
+    result, requests = prediction_call(json.dumps(inputs), NIMS_SCHEMA)
+    assert "result" in result
+    assert [request.method for request in requests] == ["GET", "POST"]
+    assert json.loads(requests[-1].content) == {"model": "NIMS", "input": inputs}
+
+
+@pytest.mark.parametrize("inputs,schema", [
+    ('{"header":"literal string"}', {"type": "string"}),
+    ("123", {"type": ["string", "number"]}),
+    ([1, 2], {"type": "array", "items": {"type": "integer"}}),
+    (False, {"type": "boolean"}),
+    (None, {"type": "null"}),
+])
+def test_valid_json_values_keep_their_type(prediction_call, inputs, schema):
+    result, requests = prediction_call(inputs, schema)
+    assert "result" in result
+    assert json.loads(requests[-1].content)["input"] == inputs
+
+
+@pytest.mark.parametrize("inputs", [
+    '{"header":', {"header": "МИРК"}, {"header": 5, "description": "Отчеты"},
+    '{"header":5,"description":"Отчеты"}', float("inf"),
+])
+def test_invalid_inputs_are_actionable_and_never_sent_to_prediction(prediction_call, inputs):
+    # HTTP JSON cannot carry infinity; test finite-value validation separately below.
+    if isinstance(inputs, float):
+        with pytest.raises(ValueError):
+            ml_server._normalize_prediction_inputs(inputs, NIMS_SCHEMA)
+        return
+    result, requests = prediction_call(inputs, NIMS_SCHEMA)
+    failure = result["error"]["data"]
+    assert failure["category"] == "input"
+    assert failure["code"] == "SCHEMA_VALIDATION_ERROR"
+    assert failure["request_id"] == "regression-nims"
+    assert failure["stage"] == "input_validation"
+    assert "inputs" in failure["message"]
+    assert [request.method for request in requests] == ["GET"]
+
+
+@pytest.mark.parametrize("status,category,code", [
+    (400, "input", "SCHEMA_VALIDATION_ERROR"), (401, "auth", "INVALID_API_KEY"),
+    (403, "access", "INSUFFICIENT_PERMISSIONS"), (429, "rate_limit", "http_429"),
+    (503, "availability", "SERVICE_OVERLOADED"), (504, "availability", "MODEL_PREDICTION_TIMEOUT"),
+])
+def test_upstream_errors_reach_agent_with_safe_diagnostics(prediction_call, status, category, code):
+    result, _ = prediction_call({"header": "МИРК", "description": "Отчеты"}, NIMS_SCHEMA,
+        status=status, error={"error": {
+            "code": code, "type": "invalid_request_error", "param": "input.header",
+            "message": "secret-value http://private/internal traceback raw payload",
+        }})
+    failure = result["error"]["data"]
+    assert failure["category"] == category
+    assert failure["code"] == code
+    assert failure["http_status"] == status
+    assert failure["request_id"] == "regression-nims"
+    assert "secret-value" not in json.dumps(result)
+    assert "private/internal" not in json.dumps(result)
+
+
+def test_failure_envelope_is_consumable_by_runtime(prediction_call):
+    from app.agents.operation_executor import DirectOperationExecutor
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    response, _ = prediction_call({"header": 7, "description": "text"}, NIMS_SCHEMA)
+    payload = DirectOperationExecutor._mcp_tool_result_or_raise(response)
+    result = DirectOperationExecutor._tool_result_from_payload(payload)
+    assert result.success is False
+
+    observation = json.loads(OperationExecutionFacade.format_result_for_context(result))
+    assert observation["failure"]["category"] == "input"
+    assert observation["failure"]["details"]["param"] == "inputs.header"
+    assert "Expected type: string" in observation["failure"]["message"]
+
+
+@pytest.mark.parametrize("schema", [
+    {"type": "invalid-schema-type"}, {"$ref": "http://private.example/schema"},
+])
+def test_broken_model_schema_returns_structured_failure_without_predict(prediction_call, schema):
+    result, requests = prediction_call({"header": "text"}, schema)
+    failure = result["error"]["data"]
+    assert failure["category"] == "unknown"
+    assert failure["kind"] == "protocol"
+    assert failure["request_id"] == "regression-nims"
+    assert [request.method for request in requests] == ["GET"]
+    assert "private.example" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("inputs,schema,expected", [
+    ("[1,2]", {"type": "array"}, [1, 2]),
+    ("null", {"type": "null"}, None),
+    ("42", {"type": "integer"}, 42),
+    ('{"v":1}', {"$defs": {"payload": {"type": "object"}}, "$ref": "#/$defs/payload"}, {"v": 1}),
+])
+def test_encoded_json_values_are_validated_after_decoding(prediction_call, inputs, schema, expected):
+    result, requests = prediction_call(inputs, schema)
+    assert "result" in result
+    assert json.loads(requests[-1].content)["input"] == expected
+
+
+def test_inference_timeout_has_actionable_failure():
+    result = ml_server._failure_response(1, httpx.ReadTimeout("secret upstream details"),
+        request_id="timeout-test", stage="facade_request")
+    failure = result["error"]["data"]
+    assert failure["category"] == "availability"
+    assert failure["kind"] == "transport"
+    assert "timed out" in failure["message"]
+    assert "secret upstream" not in json.dumps(result)
