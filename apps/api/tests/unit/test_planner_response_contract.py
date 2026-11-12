@@ -153,3 +153,24 @@ async def test_production_empty_planner_response_can_be_corrected_to_a_schedulab
     plan = store.create(goal=payload["goal"], root_run_id="run", tenant_id="tenant")
     store.apply_iteration(plan["id"], compiled)
     assert store.next_decision(plan["id"]).kind.value == "execute_task"
+
+
+def test_failed_task_requires_explicit_resolution_on_retry():
+    proposal = IterationProposal.model_validate({
+        "terminal": "planner", "tasks": [{**TASK, "task_id": "retry"}],
+    })
+    with pytest.raises(PlanValidationError, match="must resolve prior incomplete tasks"):
+        GraphOrchestrator._compile(
+            proposal, [{"slug": TASK["executor"], "supports_dynamic_contracts": True}],
+            {"tasks": [{**TASK, "status": "failed", "result": {}}], "needs": []},
+        )
+
+
+def test_planner_provider_schema_rejects_invented_freshness_policy():
+    response = {"kind": "proposal", "proposal": {
+        "terminal": "planner", "tasks": [{**TASK, "freshness_policy": "no_retrieval"}],
+    }}
+    schema = StructuredLLMCall._compact_response_schema(PlannerStep.model_json_schema())
+    assert not Draft202012Validator(schema).is_valid(response)
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate(response)

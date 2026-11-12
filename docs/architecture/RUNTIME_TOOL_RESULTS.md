@@ -377,6 +377,10 @@ of treating the descriptor as another source payload.
 
 For stored datasets, traces/SSE previews and model messages are separate projections. Traces contain
 metadata, revisions and references. The complete payload remains in the store.
+Stored model replies must not reattach raw MCP content blocks after descriptor
+formatting, including tool-call reuse. MCP text may repeat the dataset inside
+a different JSON envelope. Only bounded warning summaries and omission counters
+accompany the descriptor; records remain accessible through the result workspace.
 The trace inspector displays a complete tool reply when it can match it by call
 ID and owner in a later recorded LLM request. Otherwise it previews data in the
 tool-result event. In sandbox, a stored descriptor can be opened through the

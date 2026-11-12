@@ -275,11 +275,24 @@ def _tool_result_observation(result: Any, operation_name: Optional[str] = None) 
         return None
 
 
-def _attach_mcp_content(result_text: str, content: Any) -> str:
+def _attach_mcp_content(result_text: str, content: Any, *, stored: bool = False) -> str:
     """Keep nonduplicate MCP content blocks in the model-visible envelope."""
     if not isinstance(content, (list, dict)) or not content:
         return result_text
     safe_content = RuntimeRedactor().redact(content)
+    if stored:
+        # MCP text may wrap a stored dataset differently from structuredContent.
+        # Do not reintroduce source bodies after bounded descriptor formatting.
+        from app.agents.runtime.model_context import _bounded_distinct_summary
+
+        envelope = dict(safe_content) if isinstance(safe_content, dict) else {
+            "items": safe_content, "original_count": len(safe_content),
+        }
+        items = envelope.get("items", [])
+        envelope["items"] = []
+        envelope["omitted_count"] = envelope.get("omitted_count", 0) + len(items)
+        envelope["truncated"] = True
+        safe_content = _bounded_distinct_summary(envelope)
     try:
         value = json.loads(result_text)
     except (TypeError, ValueError):
@@ -1660,7 +1673,8 @@ class AgentToolRuntime(BaseRuntime):
                             if (isinstance(direct_view, dict) and direct_view.get("status") == "unavailable"
                                     and direct_view.get("reason") == "context_budget_exceeded"):
                                 return str(item.get("minimum_receipt") or formatted)
-                        return _attach_mcp_content(formatted, item["result"].metadata.get("mcp_content"))
+                        return _attach_mcp_content(formatted, item["result"].metadata.get("mcp_content"),
+                                                   stored=bool(item.get("stored_result")))
 
                     raw_tool_calls = (((raw_response_dict or {}).get("choices") or [{}])[0]
                                       .get("message", {}).get("tool_calls") or [])
@@ -2246,7 +2260,8 @@ class AgentToolRuntime(BaseRuntime):
             context_budget_tokens=result_context_budget_tokens,
             context_model=result_context_model,
         )
-        result_text = _attach_mcp_content(result_text, result.metadata.get("mcp_content"))
+        result_text = _attach_mcp_content(result_text, result.metadata.get("mcp_content"),
+                                          stored=isinstance(stored_result, dict))
         event_result_id = (
             stored_result.get("result_id") if isinstance(stored_result, dict)
             else result.data.get("source_result_id") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)

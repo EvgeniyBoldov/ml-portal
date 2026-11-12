@@ -526,3 +526,19 @@ def test_outbound_snapshot_is_exact_estimation_and_provider_request_shape():
         "tool_choice": "required"})
     messages[1]["content"] = "changed"
     assert snapshot["messages"][1]["content"] == "ask"
+
+
+def test_stored_mcp_body_cannot_bypass_descriptor_budget():
+    from app.agents.runtime.agent import _attach_mcp_content
+
+    body = json.dumps({"count": 40, "results": [{"name": "x" * 87610}]})
+    content = {"items": [{"type": "text", "text": body}], "original_count": 1,
+               "omitted_count": 0, "warning_summaries": ["Partial source"]}
+    rendered = _attach_mcp_content('{"result_id": "saved"}', content, stored=True)
+    value = json.loads(rendered)
+    assert value["result_id"] == "saved"
+    assert value["mcp_content"]["items"] == []
+    assert value["mcp_content"]["omitted_count"] == 1
+    assert value["mcp_content"]["warning_summaries"] == ["Partial source"]
+    assert len(rendered) < 2000
+    assert content["items"][0]["text"] == body
