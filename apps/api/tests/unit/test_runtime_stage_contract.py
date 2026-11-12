@@ -6,9 +6,10 @@ import pytest
 
 from app.runtime.orchestrator_contracts import (
     IterationProposal, ResolutionAction, SchedulerActionKind, SynthesisBrief,
-    TaskAttemptFailure, TaskResolution, TaskStatus, TerminalKind, PlannedTask,
+    TaskAttemptFailure, TaskCompletionDeclaration, TaskExecutionReceipt, TaskResolution, TaskResult, TaskStatus,
+    TerminalKind, PlannedTask,
 )
-from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError
+from app.runtime.plan_store import InMemoryPlanStore, PlanValidationError, StaleTaskClaimError
 from app.runtime.orchestrator import GraphOrchestrator
 
 
@@ -40,7 +41,7 @@ def test_failed_synthesis_iteration_deterministically_returns_to_planner() -> No
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     store.apply_iteration(plan["id"], IterationProposal(tasks=[_task("work")], terminal=TerminalKind.SYNTHESIS, synthesis_brief=_brief()))
     task = store.claim_task(plan["id"], "work")
-    store.finish_failure(plan["id"], task["task_id"], failure=TaskAttemptFailure(code="denied", message="Denied"), max_attempts=1)
+    store.finish_failure(plan["id"], task["task_id"], failure=TaskAttemptFailure(code="denied", message="Denied"), max_attempts=1, expected_attempt_number=task["attempts"])
     decision = store.next_decision(plan["id"])
     assert decision.kind is SchedulerActionKind.INVOKE_PLANNER
     assert decision.reason == "task_failure"
@@ -85,7 +86,7 @@ def test_independent_work_finishes_before_planner_checkpoint() -> None:
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     store.apply_iteration(plan["id"], IterationProposal(tasks=[_task("failed"), _task("independent"), _task("dependent", depends_on=["failed"])], terminal=TerminalKind.SYNTHESIS, synthesis_brief=_brief()))
     first = store.claim_task(plan["id"], "failed")
-    store.finish_failure(plan["id"], first["task_id"], failure=TaskAttemptFailure(code="denied", message="Denied"), max_attempts=1)
+    store.finish_failure(plan["id"], first["task_id"], failure=TaskAttemptFailure(code="denied", message="Denied"), max_attempts=1, expected_attempt_number=first["attempts"])
     assert store.next_decision(plan["id"]).task_id == "independent"
     assert store.get(plan["id"])["tasks"]["dependent"]["status"] == TaskStatus.BLOCKED.value
 
@@ -101,8 +102,8 @@ def test_rejected_confirmation_is_a_task_failure_for_planner() -> None:
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
     store.apply_iteration(plan["id"], IterationProposal(tasks=[_task("write")], terminal=TerminalKind.PLANNER))
-    store.claim_task(plan["id"], "write")
-    store.pause_confirmation(plan["id"], "write", {"operation_fingerprint": "op-1"})
+    task = store.claim_task(plan["id"], "write")
+    store.pause_confirmation(plan["id"], "write", {"operation_fingerprint": "op-1"}, expected_attempt_number=task["attempts"])
     store.reject_confirmation(plan["id"], "write", "op-1")
     assert store.next_decision(plan["id"]).kind is SchedulerActionKind.INVOKE_PLANNER
 
@@ -124,3 +125,38 @@ def test_stale_task_claim_becomes_terminal_failure_without_replay() -> None:
     assert plan["tasks"]["work"]["result"]["reason_code"] == "claim_lease_expired"
     assert plan["attempts"]["work"][-1]["status"] == "failed"
     assert plan["attempts"]["work"][-1]["error"]["code"] == "claim_lease_expired"
+
+
+def test_superseded_attempt_cannot_mutate_the_reclaimed_task() -> None:
+    from uuid import uuid4
+
+    store = InMemoryPlanStore()
+    plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
+    store.apply_iteration(plan["id"], IterationProposal(tasks=[_task("work")], terminal=TerminalKind.PLANNER))
+    store.claim_task(plan["id"], "work")
+    plan["attempts"]["work"][-1]["started_at"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=10)
+    ).isoformat()
+    store.recover_stale_claims(plan["id"], stale_before=datetime.now(timezone.utc) - timedelta(minutes=5))
+    plan["tasks"]["work"]["status"] = TaskStatus.WAITING_RETRY.value
+    plan["tasks"]["work"]["next_retry_at"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    second = store.claim_task(plan["id"], "work")
+    assert second["attempts"] == 2
+
+    stale_actions = [
+        lambda: store.heartbeat_task(plan["id"], "work", expected_attempt_number=1),
+        lambda: store.link_attempt_execution(plan["id"], "work", uuid4(), expected_attempt_number=1),
+        lambda: store.task_request(plan["id"], "work", expected_attempt_number=1),
+        lambda: store.update_task_memory(plan["id"], "work", [], expected_attempt_number=1),
+        lambda: store.finish_attempt(plan["id"], "work", expected_attempt_number=1,
+            execution=TaskExecutionReceipt(declaration=TaskCompletionDeclaration(completion="fulfilled")),
+            result=TaskResult(outcome="completed", description="late")),
+        lambda: store.finish_failure(plan["id"], "work", TaskAttemptFailure(code="late", message="late"),
+            max_attempts=1, expected_attempt_number=1),
+    ]
+    for action in stale_actions:
+        with pytest.raises(StaleTaskClaimError):
+            action()
+    assert plan["tasks"]["work"]["attempts"] == 2
+    assert plan["tasks"]["work"]["status"] == "running"
+    assert plan["attempts"]["work"][-1]["status"] == "running"

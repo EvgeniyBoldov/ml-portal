@@ -256,6 +256,28 @@ class ToolLedger(BaseModel):
             return entry
         return None
 
+    def find_successful_execution_receipt(
+        self,
+        *,
+        operation: str,
+        arguments: Dict[str, Any],
+        execution_id: str,
+        target_identity: Optional[str],
+        exclude_call_id: Optional[str] = None,
+    ) -> Optional[ToolLedgerEntry]:
+        """Recover a completed call within the same logical task execution.
+
+        Unlike the read cache, this is an execution receipt used only to resume
+        an already admitted call after an interaction checkpoint.
+        """
+        args_fingerprint, _ = _fingerprint_and_preview(arguments)
+        signature = f"{operation}:{target_identity or ''}:{args_fingerprint}"
+        for entry in reversed(self.entries):
+            if (entry.signature == signature and entry.execution_id == execution_id
+                    and entry.call_id != exclude_call_id and entry.status == "succeeded"):
+                return entry
+        return None
+
     def find_execution_guard(self, *, operation: str, arguments: Dict[str, Any],
                              phase_id: Optional[str], target_identity: Optional[str],
                              execution_id: Optional[str] = None,

@@ -168,9 +168,9 @@ def test_rejected_operation_returns_to_planner_without_rerunning_agent():
     store = Store()
     plan_id = store.plan["id"]
     store.inner.apply_iteration(plan_id, proposal([PlannedTask(task_id="work", executor="research", intent="write", instructions="write")]))
-    store.inner.claim_task(plan_id, "work")
+    claim = store.inner.claim_task(plan_id, "work")
     interaction = question(plan_id=plan_id, response_type="boolean", operation={"operation_fingerprint": "exact-write"})
-    store.inner.pause_interaction(plan_id, interaction)
+    store.inner.pause_interaction(plan_id, interaction, expected_attempt_number=claim["attempts"])
     store.inner.resume_interaction(plan_id, interaction.id, False)
     snapshot = store.inner.snapshot(plan_id)
     assert snapshot["tasks"]["work"]["status"] == "cancelled"
@@ -246,9 +246,12 @@ async def test_real_pipeline_resumes_saved_requester_without_calling_preflight(m
     plan_id = store.plan["id"]
     if stage == "agent":
         store.inner.apply_iteration(plan_id, proposal([PlannedTask(task_id="work", executor="research", intent="work", instructions="work")]))
-        store.inner.claim_task(plan_id, "work")
+        claim = store.inner.claim_task(plan_id, "work")
+    else:
+        claim = None
     interaction = question(stage=stage, plan_id=plan_id)
-    store.inner.pause_interaction(plan_id, interaction)
+    store.inner.pause_interaction(plan_id, interaction,
+        expected_attempt_number=claim["attempts"] if claim is not None else None)
     class Planner:
         async def plan(self, *, interaction_answers, **kwargs):
             assert interaction_answers[-1]["response"] == "Альфа"

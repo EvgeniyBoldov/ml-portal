@@ -35,13 +35,24 @@ own retry policy is exhausted; it is not presented to the planner as a fake
 task result or a mutable rewrite of the terminal iteration.
 
 Tool execution memory is scoped by root run and logical task, across task
-attempts and pause/resume. It retains verified receipts and successful write
-guards; an unknown outcome after dispatching a write fails closed, while safe
-reads may be retried. Native and text call IDs share duplicate validation.
+attempts and pause/resume. It retains verified receipts and dispatch guards;
+an unknown outcome after dispatching a write fails closed, while safe reads may
+be retried. Native and text call IDs share duplicate validation.
 Checkpoint restoration preserves a pending native batch and rejects malformed
 write-guard state before dispatch. File-derived raw operation bodies are scrubbed
 from checkpoints and require fresh authorization. See [Agent Runtime](../../../../../docs/architecture/AGENT_RUNTIME.md)
 and [Runtime Interactions](../../../../../docs/architecture/RUNTIME_INTERACTIONS.md).
+The durable `operation_guard` stores only a versioned argument fingerprint and
+outcome on the task attempt. Its trusted dispatch callback runs immediately
+before the provider operation; completed matching operations are not dispatched
+again. Only operations explicitly classified `side_effects=false` and
+`risk_level=safe` bypass this guard.
+
+Execution-claim-bound store operations require the worker's expected attempt
+number and revalidate the active plan plus exact running task/attempt. SQL reads
+lock and refresh those rows; missing or stale claims fail closed. The
+orchestrator treats a superseded claim as a benign retry handoff, without
+failing the task owned by the newer worker.
 
 ## Ports and Adapters
 

@@ -124,8 +124,8 @@ async def test_plan_task_scope_and_memory_survive_new_session(pg):
     async with AsyncSession(pg, expire_on_commit=False) as session:
         store = SqlPlanStore(session)
         snapshot = await store.snapshot(plan_id)
-        await store.claim_task(plan_id, "t")
-        task = await store.task_request(plan_id, "t")
+        claim = await store.claim_task(plan_id, "t")
+        task = await store.task_request(plan_id, "t", expected_attempt_number=claim.attempts)
         assert task["scope_context"]["keys"] == ["project.b", "team.ops"]
         assert task["scope_context"]["ceiling_keys"] == ["project.b", "team.ops"]
         assert snapshot["memory_context"][:2] == core

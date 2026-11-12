@@ -34,6 +34,8 @@ def _operation() -> ResolvedOperation:
         provider_instance_id=target.provider_instance_id,
         provider_instance_slug=target.provider_instance_slug,
         source="mcp",
+        side_effects=False,
+        risk_level="safe",
         target=target,
     )
 

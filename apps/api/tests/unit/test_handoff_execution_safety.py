@@ -64,16 +64,22 @@ def test_unknown_execution_guard_survives_ledger_serialization_and_blocks_retry(
 def test_successful_write_invalidates_prior_read_reuse_but_preserves_write_receipt() -> None:
     ledger = ToolLedger()
     ledger.register_call(operation="inventory.get", call_id="read", arguments={"id": "x"},
-                         iteration=1, agent_slug="agent", phase_id="task")
+                         iteration=1, agent_slug="agent", phase_id="task",
+                         operation_side_effects=False, risk_level="safe")
+    ledger.set_call_target(call_id="read", target_identity=None, execution_id="root:task")
     ledger.register_result(call_id="read", success=True, data={"quantity": 1}, result_delivery="direct")
     ledger.register_call(operation="inventory.update", call_id="write", arguments={"id": "x", "q": 2},
-                         iteration=1, agent_slug="agent", phase_id="task")
+                         iteration=1, agent_slug="agent", phase_id="task",
+                         operation_side_effects=True, risk_level="high")
+    ledger.set_call_target(call_id="write", target_identity=None, execution_id="root:task")
     ledger.register_result(call_id="write", success=True, data={"quantity": 2}, result_delivery="direct")
 
     assert ledger.find_successful_result(operation="inventory.get", arguments={"id": "x"},
         execution_id=None, target_identity=None, max_age_seconds=None) is None
     assert ledger.find_successful_result(operation="inventory.update", arguments={"id": "x", "q": 2},
-        execution_id=None, target_identity=None, max_age_seconds=None) is not None
+        execution_id=None, target_identity=None, max_age_seconds=None) is None
+    assert ledger.find_successful_execution_receipt(operation="inventory.update", arguments={"id": "x", "q": 2},
+        execution_id="root:task", target_identity=None) is not None
 
 
 @pytest.mark.asyncio
@@ -118,6 +124,32 @@ async def test_facade_unknown_write_timeout_blocks_repeat_but_read_timeout_can_r
     second_read, _ = await facade.execute(ToolCall(id="read-2", tool_name="remote.get", arguments={}), read_context, [read])
     assert second_read.success is True
     assert read_provider.execute.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_persisted_task_fails_closed_without_guard_factory_before_provider_dispatch() -> None:
+    from app.agents.context import RuntimeDependencies, ToolCall, ToolContext
+    from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    provider = SimpleNamespace(execute=AsyncMock())
+    operation = ResolvedOperation(operation_slug="remote.create", operation="remote.create", name="Create",
+        source="mcp", scope="system", data_instance_id="system", data_instance_slug="system",
+        side_effects=True, idempotent=False, risk_level="write",
+        target=ProviderExecutionTarget(operation_slug="remote.create", provider_type="mcp",
+            handler_slug="remote.create", data_instance_id="system", data_instance_slug="system"))
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), extra={
+        "runtime_execution_guard_required": True,
+    })
+    ctx.set_runtime_deps(RuntimeDependencies(operation_executor=provider))
+
+    result, _ = await OperationExecutionFacade().execute(
+        ToolCall(id="call-1", tool_name="remote.create", arguments={"name": "new"}), ctx, [operation],
+    )
+
+    assert result.success is False
+    assert result.metadata["error_code"] == "execution_guard_unavailable"
+    provider.execute.assert_not_awaited()
 
 
 def test_text_projection_compacts_old_recoverable_result_and_keeps_direct_evidence() -> None:

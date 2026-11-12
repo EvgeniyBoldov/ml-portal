@@ -170,6 +170,8 @@ def test_duplicate_direct_result_keeps_delivery_mode():
     state.record_tool_call(tool='memory.search', call_id='first', arguments={'query': 'backup'},
                            agent_slug='secretary', phase_id='task')
     state.tool_ledger.set_call_target(call_id='first', target_identity='', execution_id='task')
+    state.tool_ledger.entries[-1].operation_side_effects = False
+    state.tool_ledger.entries[-1].risk_level = 'safe'
     state.record_tool_result(call_id='first', success=True, data={'items': [{'text': 'Backup'}]},
                              result_delivery='direct')
     result, _ = ToolCallReusePolicy().maybe_reuse(operation_slug='memory.search', arguments={'query': 'backup'},

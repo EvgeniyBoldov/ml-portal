@@ -117,6 +117,10 @@ class MCPFailureError(ValueError):
 
 
 class DirectOperationExecutor:
+    # OperationExecutionFacade requires this trusted handshake before allowing
+    # durable non-cacheable calls from a persisted task.
+    supports_runtime_execution_guard = True
+
     def __init__(self, *, tool_registry: Optional["ToolRegistry"] = None) -> None:
         self._tool_registry = tool_registry or ToolRegistry.get_instance()
         self._clients: Dict[str, httpx.AsyncClient] = {}
@@ -189,8 +193,12 @@ class DirectOperationExecutor:
             if not handler:
                 return ToolResult.fail(f"Local handler '{call.name}' not found")
             try:
+                await self._notify_runtime_dispatch(ctx)
                 return await handler.execute(ctx, call.arguments)
             except Exception as exc:
+                from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
+                if isinstance(exc, RuntimeExecutionGuardError):
+                    raise
                 return ToolResult.fail(str(exc))
 
         if target.provider_type == "mcp":
@@ -251,6 +259,12 @@ class DirectOperationExecutor:
 
         return ToolResult.fail(f"Unsupported provider type '{target.provider_type}'")
 
+    @staticmethod
+    async def _notify_runtime_dispatch(ctx: ToolContext) -> None:
+        callback = ctx.extra.get("runtime_operation_dispatch_guard")
+        if callback is not None:
+            await callback()
+
     async def _execute_unified_call(self, call: _UnifiedToolCall, ctx: ToolContext) -> ToolResult:
         """
         Unified execution path:
@@ -284,6 +298,9 @@ class DirectOperationExecutor:
         try:
             payload = await self._invoke_unified_tool_call(call, ctx)
         except Exception as exc:
+            from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
+            if isinstance(exc, RuntimeExecutionGuardError):
+                raise
             cause_type, cause_errno, cause_reason = _safe_transport_cause(exc)
             cause_reason = str(safe_diagnostic(cause_reason, secrets=_mcp_call_secrets(call.arguments)))
             logger.warning(
@@ -436,7 +453,11 @@ class DirectOperationExecutor:
             credential_access.get("auth_type") or instance_context.get("auth_type") or "-",
             credential_access.get("owner_type") or "-",
         )
+        await self._notify_runtime_dispatch(ctx)
         response, attempts = await self._post_with_retry(
+            # This is the first point after target resolution, credential
+            # merging and MCP initialization where the business operation is
+            # about to be sent to the provider.
             client=client,
             provider_url=provider_url,
             headers=headers,

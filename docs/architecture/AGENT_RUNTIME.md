@@ -905,13 +905,42 @@ checkpoint transcript are distinct from the exact outbound model request, whose
 snapshot records what was actually delivered.
 
 Execution receipts and write guards are scoped to the root run and logical task,
-so resumed attempts retain successful writes and observed results. A dispatched
-write with unknown outcome fails closed; safe reads may retry. Successful writes
-remain duplicate guards through read-after-write cache invalidation. Native and
-text tool-call IDs share one uniqueness check. A paused execution preserves its
-receipts and pending native batch; file-derived request bodies are scrubbed from
-the checkpoint and require fresh authorization before dispatch. A malformed
-guard checkpoint is rejected before another operation is sent.
+so resumed attempts retain dispatched operation outcomes and observed results.
+A dispatched write with unknown outcome fails closed; safe reads may retry.
+Completed writes remain duplicate guards through read-after-write cache
+invalidation. Native and text tool-call IDs share one uniqueness check. A paused
+execution preserves its receipts and pending native batch; file-derived request
+bodies are scrubbed from the checkpoint and require fresh authorization before
+dispatch. A malformed guard checkpoint is rejected before another operation is
+sent.
+
+For persisted tasks, non-cacheable operations also use a durable dispatch guard
+stored under the versioned `operation_guard` key in
+`RuntimeTaskAttempt.execution_result`. It records only a fingerprint of the
+canonical operation, target and arguments, plus admission/completion outcome;
+it does not store arguments or credentials. Admission is fenced by the active
+plan, task and expected attempt under short database transactions. The guard
+covers the current task and its `continuation_of` ancestors, not sibling tasks.
+The trusted `DirectOperationExecutor` callback admits the operation after target
+and credential resolution and MCP initialization, immediately before the
+provider request. If the worker disappears after admission, a matching retry is
+reported as unknown and is blocked for verification; a recorded completion
+blocks redispatch even when the result itself was a failure. Only an operation
+explicitly classified with `side_effects=false` and `risk_level=safe` bypasses
+this durable write guard. There is no automatic retry of a dispatched provider
+write.
+
+Every execution-claim-bound store read or mutation carries the worker's
+`expected_attempt_number`: task request loading, task-memory persistence,
+heartbeat, pause/confirmation, execution linking, and attempt success or failure.
+The SQL store locks and refreshes the plan, task and exact attempt, then requires
+an active plan and matching running task/attempt before proceeding; the
+in-memory store enforces the same claim checks. Missing or stale claims fail
+closed. If another worker has superseded a claim, the orchestrator treats
+`StaleTaskClaimError` as a benign `waiting_retry` handoff and does not mark the
+new worker's task failed. SQL claim reads use `populate_existing` so an ORM
+identity-map copy cannot overwrite newer state, including the separately saved
+operation guard.
 
 `result.read` accepts a bounded JSON Pointer `path` and `view=auto|value|children`.
 `auto` returns a selected object/array if it fits, otherwise a paged child

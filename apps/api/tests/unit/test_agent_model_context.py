@@ -211,6 +211,271 @@ def test_projection_compacts_older_read_facts_even_when_they_reference_a_saved_r
     assert "records" not in projected
 
 
+def test_compaction_preserves_current_reader_identity_separately_from_next_page():
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "read", "type": "function",
+            "function": {"name": "result.read", "arguments": json.dumps({
+                "result_id": "r-1", "revision": 7, "offset": 10, "limit": 2,
+                "view": "children", "path": "/items/0", "text_offset": 4,
+                "text_limit": 80, "query": "q" * 600,
+            })}}]},
+        {"role": "tool", "tool_call_id": "read", "content": json.dumps({
+            "status": "ready", "result_id": "r-1", "revision": 7,
+            "read_complete": False, "source_coverage": {"complete": None, "total": None},
+            "result_observation": {"offset": 10, "limit": 2, "read_complete": False,
+                                   "source_complete": None, "next_offset": 12},
+            "next_action": {"tool": "result.read", "arguments": {
+                "result_id": "r-1", "revision": 7, "offset": 12, "limit": 2,
+            }},
+            "records": [{"body": "already seen " * 100}],
+        })},
+        {"role": "assistant", "tool_calls": [{"id": "next", "type": "function"}]},
+    ]
+    compact = json.loads(project_model_messages(messages)[1]["content"])
+    current = compact["current_result"]
+    assert current["reader_arguments"]["offset"] == 10
+    assert current["reader_arguments"]["path"] == "/items/0"
+    assert "query" not in current["reader_arguments"]
+    assert current["arguments_omission"]["omitted_keys"] == ["query"]
+    assert current["result_observation"]["next_offset"] == 12
+    assert current["result_observation"]["source_complete"] is None
+    assert compact["next_action"]["arguments"]["offset"] == 12
+    assert "records" not in compact
+
+
+def test_compaction_keeps_bounded_distinct_mcp_text_and_warning_omission_manifest_redacted():
+    content = json.dumps({
+        "_runtime_result": {"result_id": "r-mcp", "revision": 2, "inline_complete": False},
+        "mcp_content": [
+            {"type": "text", "text": "useful citation A"},
+            {"type": "text", "text": "useful citation B token=do-not-leak"},
+            {"type": "text", "text": "huge " + "x" * 900},
+            {"type": "resource", "uri": "file://sensitive.txt", "text": "file body must not survive"},
+            {"type": "text", "text": "duplicate"},
+            {"type": "text", "text": "duplicate"},
+        ],
+        "warnings": ["partial response", "warning " + "w" * 800],
+        "data": {"records": [{"fact": "body " * 300}]},
+    })
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+            "function": {"name": "api.search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "old", "content": content},
+        {"role": "assistant", "tool_calls": [{"id": "new", "type": "function"}]},
+    ]
+    compact = json.loads(project_model_messages(messages)[1]["content"])
+    summary = compact["mcp_content"]
+    assert summary["items"] == [{"type": "text", "text": "useful citation A", "excerpt_complete": True},
+                                {"type": "text", "text": "useful citation B token=***", "excerpt_complete": True},
+                                {"type": "text", "text": "huge " + "x" * 315,
+                                 "excerpt_complete": False},
+                                {"type": "text", "text": "duplicate", "excerpt_complete": True}]
+    assert summary["coverage"]["omitted_items"] == 2
+    assert summary["coverage"]["omitted_text_chars"] > 500
+    assert summary["coverage"]["complete"] is False
+    assert compact["warnings"]["items"][1]["text"] == ("warning " + "w" * 312)
+    assert compact["warnings"]["coverage"]["omitted_text_chars"] > 400
+    encoded = json.dumps(compact, ensure_ascii=False)
+    assert "do-not-leak" not in encoded
+    assert "file body must not survive" not in encoded
+    assert "body body body" not in encoded
+
+
+def test_text_result_protocol_keeps_current_reader_arguments_without_repeating_payload():
+    block = {
+        "tool": "result.read", "success": True,
+        "arguments": {"result_id": "r-text", "revision": 3, "offset": 20, "limit": 5},
+        "result": json.dumps({"status": "ready", "result_id": "r-text", "revision": 3,
+                              "offset": 20, "limit": 5, "records": ["seen" * 100],
+                              "next_action": {"tool": "result.read", "arguments": {
+                                  "result_id": "r-text", "revision": 3, "offset": 25, "limit": 5}}}),
+    }
+    messages = [
+        {"role": "user", "content": "```tool_result\n" + json.dumps(block) + "\n```"},
+        {"role": "assistant", "content": "next step"},
+        {"role": "user", "content": "```tool_result\n{}\n```"},
+    ]
+    projected = project_model_messages(messages)[0]["content"]
+    compact = json.loads(projected.split("```tool_result\n", 1)[1].split("\n```", 1)[0])
+    current = compact["result"]["current_result"]
+    assert current["reader_arguments"]["offset"] == 20
+    assert compact["result"]["next_action"]["arguments"]["offset"] == 25
+    assert "records" not in compact["result"]
+
+
+def test_direct_overflow_receipt_compaction_keeps_recovery_identity_and_mcp_summary():
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "overflow", "type": "function",
+            "function": {"name": "result.read", "arguments": '{"result_id":"r-o","revision":4,"offset":0,"limit":5}'}}]},
+        {"role": "tool", "tool_call_id": "overflow", "content": json.dumps({
+            "status": "ready", "result_id": "r-o", "revision": 4,
+            "recoverability": "direct_overflow_saved", "reason": "context_budget",
+            "mcp_content": [{"type": "text", "text": "overflow detail"}],
+            "next_action": {"tool": "result.read", "arguments": {
+                "result_id": "r-o", "revision": 4, "offset": 5, "limit": 5}},
+        })},
+        {"role": "assistant", "tool_calls": [{"id": "new", "type": "function"}]},
+    ]
+    compact = json.loads(project_model_messages(messages)[1]["content"])
+    assert compact["recoverability"] == "direct_overflow_saved"
+    assert compact["current_result"]["reader_arguments"]["offset"] == 0
+    assert compact["next_action"]["arguments"]["offset"] == 5
+    assert compact["mcp_content"]["items"] == [{"type": "text", "text": "overflow detail",
+                                                "excerpt_complete": True}]
+
+
+def test_long_only_mcp_excerpt_marks_incomplete_coverage():
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+            "function": {"name": "api.search", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "old", "content": json.dumps({
+            "_runtime_result": {"result_id": "r-long"},
+            "mcp_content": [{"type": "text", "text": "A" * 700}],
+        })},
+        {"role": "assistant", "tool_calls": [{"id": "new", "type": "function"}]},
+    ]
+    compact = json.loads(project_model_messages(messages)[1]["content"])
+    summary = compact["mcp_content"]
+    assert len(summary["items"][0]["text"]) == 320
+    assert summary["items"][0]["excerpt_complete"] is False
+    assert summary["coverage"]["omitted_text_chars"] == 380
+    assert summary["coverage"]["complete"] is False
+
+
+def test_text_compaction_bounds_outer_arguments_and_next_action_without_raw_values():
+    block = {
+        "tool": "result.read", "success": True,
+        "arguments": {
+            "result_id": "r-bounded", "revision": 9, "offset": 3, "limit": 4,
+            "query": "q" * 700, "fields": ["f" * 700],
+            "api_key": "must-not-appear", "payload": "large raw value " * 500,
+        },
+        "result": json.dumps({
+            "status": "ready", "result_id": "r-bounded", "revision": 9,
+            "records": [{"body": "already presented " * 500}],
+            "next_action": {"tool": "result.read", "arguments": {
+                "result_id": "r-bounded", "revision": 9, "offset": 7, "limit": 4,
+                "query": "password=supersecret", "api_key": "must-not-appear",
+            }},
+        }),
+    }
+    messages = [
+        {"role": "user", "content": "```tool_result\n" + json.dumps(block) + "\n```"},
+        {"role": "assistant", "content": "continue"},
+        {"role": "user", "content": "```tool_result\n{}\n```"},
+    ]
+    text = project_model_messages(messages)[0]["content"]
+    compact = json.loads(text.split("```tool_result\n", 1)[1].split("\n```", 1)[0])
+    encoded = json.dumps(compact, ensure_ascii=False)
+    current = compact["result"]["current_result"]
+    assert current["reader_arguments"]["offset"] == 3
+    assert current["arguments_omission"]["omitted_keys"] == ["api_key", "fields", "payload", "query"]
+    assert "arguments" not in compact
+    assert "current_result" not in compact
+    assert compact["result"]["next_action"]["arguments"] == {
+        "result_id": "r-bounded", "revision": 9, "offset": 7, "limit": 4,
+    }
+    assert compact["result"]["next_action"]["arguments_omission"]["omitted_keys"] == [
+        "api_key", "query",
+    ]
+    assert "must-not-appear" not in encoded
+    assert "supersecret" not in encoded
+    assert "large raw value" not in encoded
+    assert "already presented" not in encoded
+
+
+def test_actual_mcp_normalizer_attach_and_compaction_preserve_envelope_counters():
+    from app.agents.context import ToolResult
+    from app.agents.operation_executor import _meaningful_mcp_content
+    from app.agents.runtime.agent import _attach_mcp_content
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    structured = {"result_id": "mcp-result", "revision": 1, "offset": 5, "limit": 5,
+                  "value": [{"id": "one"}], "source_complete": None}
+    content = [{"type": "text", "text": json.dumps(structured)}]
+    content.extend({"type": "text", "text": f"Warning: source warning {index}"}
+                   for index in range(24))
+    content.extend({"type": "text", "text": f"Distinct MCP annotation {index}"}
+                   for index in range(31))
+    content.append({"type": "resource", "uri": "file://opaque-resource"})
+    normalized = _meaningful_mcp_content(content, structured)
+    assert normalized["duplicate_count"] == 1
+    assert normalized["omitted_count"] > 0
+    assert normalized["warnings_omitted"] == 4
+
+    tool_result = ToolResult.ok(structured, mcp_content=normalized)
+    formatted = OperationExecutionFacade.format_result_for_context(
+        tool_result, operation_slug="result.read",
+        stored_result={"result_id": "mcp-result", "revision": 1, "row_count": 1,
+                       "source_complete": None},
+    )
+    attached = _attach_mcp_content(formatted, tool_result.metadata["mcp_content"])
+    messages = [
+        {"role": "assistant", "tool_calls": [{"id": "mcp", "type": "function",
+            "function": {"name": "result.read", "arguments": json.dumps({
+                "result_id": "mcp-result", "revision": 1, "offset": 5, "limit": 5,
+            })}}]},
+        {"role": "tool", "tool_call_id": "mcp", "content": attached},
+        {"role": "assistant", "tool_calls": [{"id": "next", "type": "function"}]},
+    ]
+    compact = json.loads(project_model_messages(messages)[1]["content"])
+    envelope = compact["mcp_content"]
+    assert envelope["original_count"] == normalized["original_count"]
+    assert envelope["omitted_count"] >= normalized["omitted_count"]
+    assert envelope["duplicate_count"] == normalized["duplicate_count"]
+    assert envelope["warnings_omitted"] >= normalized["warnings_omitted"]
+    assert envelope["warning_summaries"]
+    assert envelope["coverage"]["complete"] is False
+    assert envelope["coverage"]["upstream_truncated"] is True
+
+
+def test_real_formatter_find_and_aggregate_actions_survive_native_and_text_compaction():
+    from app.agents.context import ToolResult
+    from app.agents.runtime.tools import OperationExecutionFacade
+
+    for operation in ("result.find", "result.aggregate"):
+        query_args = {"result_id": "source-r", "revision": 6, "offset": 20, "limit": 5}
+        data = {"operation": operation.rsplit(".", 1)[1], "input_result_id": "source-r",
+                "input_revision": 6, "offset": 20, "limit": 5, "page_may_have_more": True,
+                "query_complete": True}
+        if operation == "result.find":
+            query_args.update(q="needle", columns=["owner"])
+            data.update(q="needle", columns=["owner"])
+        else:
+            query_args["columns"] = ["owner"]
+            data["columns"] = ["owner"]
+        rendered = OperationExecutionFacade.format_result_for_context(
+            ToolResult.ok(data), operation_slug=operation,
+            stored_result={"result_id": "derived-r", "revision": 4,
+                           "row_count": 0, "source_complete": True},
+        )
+        expected = {"result_id": "source-r", "revision": 6, "offset": 25,
+                    "limit": 5, "columns": ["owner"]}
+        if operation == "result.find":
+            expected["q"] = "needle"
+        native_messages = [
+            {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+                "function": {"name": operation, "arguments": json.dumps(query_args)}}]},
+            {"role": "tool", "tool_call_id": "old", "content": rendered},
+            {"role": "assistant", "tool_calls": [{"id": "next", "type": "function"}]},
+        ]
+        native = json.loads(project_model_messages(native_messages)[1]["content"])
+        assert native["next_action"]["tool"] == operation
+        assert native["next_action"]["arguments"] == expected
+
+        text_messages = [
+            {"role": "user", "content": "```tool_result\n" + json.dumps({
+                "tool": operation, "result": rendered,
+            }) + "\n```"},
+            {"role": "assistant", "content": "continue"},
+            {"role": "user", "content": "```tool_result\n{}\n```"},
+        ]
+        compact_text = project_model_messages(text_messages)[0]["content"]
+        receipt = json.loads(compact_text.split("```tool_result\n", 1)[1].split("\n```", 1)[0])
+        assert receipt["result"]["next_action"]["tool"] == operation
+        assert receipt["result"]["next_action"]["arguments"] == expected
+
+
 def test_result_metadata_reads_compact_delivery_and_preserves_explicit_false():
     assert runtime_result_metadata(json.dumps({"_runtime_result": {
         "result_id": "r1", "inline_complete": False, "source_complete": False,

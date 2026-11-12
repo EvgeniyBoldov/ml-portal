@@ -38,6 +38,22 @@ class TaskNotFoundError(KeyError):
     pass
 
 
+class StaleTaskClaimError(PlanValidationError):
+    """Raised when a worker attempts to act on a superseded task claim."""
+
+
+def _validate_memory_claim(plan: Dict[str, Any], task: Dict[str, Any], expected_attempt_number: Optional[int]) -> int:
+    attempts = plan.get("attempts", {}).get(task.get("task_id"), [])
+    expected = expected_attempt_number
+    if (plan.get("status") != PlanStatus.ACTIVE.value
+            or task.get("status") != TaskStatus.RUNNING.value
+            or not isinstance(expected, int) or task.get("attempts") != expected
+            or not attempts or attempts[-1].get("attempt_number") != expected
+            or attempts[-1].get("status") != AttemptStatus.RUNNING.value):
+        raise StaleTaskClaimError("task claim is no longer current")
+    return expected
+
+
 def _task_interactions(snapshot: dict[str, Any], task_id: str) -> dict[str, Any]:
     history = interaction_history(snapshot.get("pauses", []), stage="agent", task_id=task_id)
     return {
@@ -151,6 +167,14 @@ def _safe_failure_limitation(code: str) -> Dict[str, Any]:
         "message": "The task could not be completed due to an execution problem.",
         "action": "retry_later",
     }
+
+
+def _terminal_execution_result(receipt: Dict[str, Any], previous: Any) -> Dict[str, Any]:
+    """Merge the reserved durable admission record into the typed receipt."""
+    result = dict(receipt)
+    if isinstance(previous, dict) and "operation_guard" in previous:
+        result["operation_guard"] = deepcopy(previous["operation_guard"])
+    return result
 
 
 def _binding_value(value: Any, schema: Optional[Dict[str, Any]] = None) -> Any:
@@ -398,10 +422,11 @@ class InMemoryPlanStore:
         plan = self.get(plan_id)
         plan["memory_context"] = _merge_memory_results(list(plan.get("memory_context") or []), results)
 
-    def update_task_memory(self, plan_id: str, task_id: str, context: list[dict[str, Any]]) -> None:
-        task = self.get(plan_id)["tasks"][task_id]
-        if task["status"] != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task memory update requires a running task")
+    def update_task_memory(self, plan_id: str, task_id: str, context: list[dict[str, Any]], *,
+                           expected_attempt_number: Optional[int] = None) -> None:
+        plan = self.get(plan_id)
+        task = plan["tasks"][task_id]
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
         task["memory_context"] = document_memory(context)
 
     def get(self, plan_id: str) -> Dict[str, Any]:
@@ -456,10 +481,12 @@ class InMemoryPlanStore:
                 pause["status"] = "cancelled"
         plan["status"] = PlanStatus.CANCELLED.value
 
-    def heartbeat_task(self, plan_id: str, task_id: str) -> None:
-        task = self.get(plan_id)["tasks"].get(task_id)
-        if task is None or task["status"] != TaskStatus.RUNNING.value:
+    def heartbeat_task(self, plan_id: str, task_id: str, *, expected_attempt_number: Optional[int] = None) -> None:
+        plan = self.get(plan_id)
+        task = plan["tasks"].get(task_id)
+        if task is None:
             raise PlanValidationError("task heartbeat requires a running task")
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
         # In-memory state has no updated_at column; retain a lease timestamp
         # for parity with SQL and for deterministic tests.
         task["lease_heartbeat_at"] = _now().isoformat()
@@ -526,12 +553,12 @@ class InMemoryPlanStore:
         iteration["checkpoint_claimed_at"] = _now().isoformat()
         return deepcopy(iteration)
 
-    def finish_attempt(self, plan_id: str, task_id: str, *, execution: TaskExecutionReceipt, result: TaskResult) -> Dict[str, Any]:
+    def finish_attempt(self, plan_id: str, task_id: str, *, expected_attempt_number: Optional[int] = None,
+                       execution: TaskExecutionReceipt, result: TaskResult) -> Dict[str, Any]:
         plan, task = self.get(plan_id), self.get(plan_id)["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        if task["status"] != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task is not running")
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
         if result.outcome == TaskOutcome.COMPLETED:
             task["status"] = TaskStatus.COMPLETED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
@@ -540,15 +567,19 @@ class InMemoryPlanStore:
         else:
             task["status"] = TaskStatus.UNFULFILLABLE.value
         task["result"] = result.model_dump(mode="json")
-        attempt = plan["attempts"][task_id][-1]
-        attempt.update({"status": AttemptStatus.COMPLETED.value, "execution_result": execution.model_dump(mode="json"), "finished_at": _now().isoformat()})
+        attempt = next(item for item in plan["attempts"][task_id] if item.get("attempt_number") == expected)
+        attempt.update({"status": AttemptStatus.COMPLETED.value, "execution_result": _terminal_execution_result(
+            execution.model_dump(mode="json"), attempt.get("execution_result")), "finished_at": _now().isoformat()})
         return deepcopy(task)
 
-    def finish_failure(self, plan_id: str, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int, retry_at: Optional[datetime] = None) -> Dict[str, Any]:
+    def finish_failure(self, plan_id: str, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int,
+                       expected_attempt_number: Optional[int] = None,
+                       retry_at: Optional[datetime] = None) -> Dict[str, Any]:
         plan, task = self.get(plan_id), self.get(plan_id)["tasks"].get(task_id)
-        if task is None or task["status"] != TaskStatus.RUNNING.value:
+        if task is None:
             raise PlanValidationError("task is not running")
-        attempt = plan["attempts"][task_id][-1]
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
+        attempt = next(item for item in plan["attempts"][task_id] if item.get("attempt_number") == expected)
         attempt.update({"status": AttemptStatus.TIMED_OUT.value if failure.timed_out else AttemptStatus.FAILED.value, "error": failure.model_dump(mode="json"), "finished_at": _now().isoformat()})
         if failure.retryable and task["attempts"] < max_attempts:
             task["status"] = TaskStatus.WAITING_RETRY.value
@@ -561,13 +592,12 @@ class InMemoryPlanStore:
                                **({"verified": observed, "sources": observed.get("sources", []), "attachments": observed.get("artifacts", [])} if isinstance(observed, dict) else {})}
         return deepcopy(task)
 
-    def task_request(self, plan_id: str, task_id: str) -> Dict[str, Any]:
+    def task_request(self, plan_id: str, task_id: str, *, expected_attempt_number: Optional[int] = None) -> Dict[str, Any]:
         plan = self.get(plan_id)
         task = plan["tasks"].get(task_id)
         if task is None:
             raise TaskNotFoundError(task_id)
-        if task["status"] != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task request requires a running claim")
+        _validate_memory_claim(plan, task, expected_attempt_number)
         inputs = deepcopy(task["inputs"])
         for binding in plan["bindings"]:
             if binding["consumer_task_id"] == task_id:
@@ -593,7 +623,8 @@ class InMemoryPlanStore:
                                         if binding["consumer_task_id"] == task_id],
                 "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, plan, inputs), **_task_interactions(plan, task_id)}
 
-    def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction) -> None:
+    def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction, *,
+                          expected_attempt_number: Optional[int] = None) -> None:
         plan = self.get(plan_id)
         if plan["status"] == PlanStatus.WAITING_INPUT.value:
             raise PlanValidationError("plan already has an active interaction")
@@ -602,8 +633,9 @@ class InMemoryPlanStore:
         task_id = interaction.requester.task_id
         if task_id:
             task = plan["tasks"].get(task_id)
-            if task is None or task["status"] != TaskStatus.RUNNING.value:
+            if task is None:
                 raise PlanValidationError("interaction requires a running task")
+            _validate_memory_claim(plan, task, expected_attempt_number)
             task["status"] = TaskStatus.WAITING_INPUT.value
             plan["attempts"][task_id][-1].update(status="cancelled", finished_at=_now().isoformat(),
                 error={"code": "interaction_required", "message": interaction.question})
@@ -641,14 +673,17 @@ class InMemoryPlanStore:
                     iteration["checkpoint_status"], iteration["checkpoint_claimed_at"] = "idle", None
         plan["status"] = PlanStatus.ACTIVE.value
 
-    def pause_confirmation(self, plan_id: str, task_id: str, payload: Dict[str, Any]) -> None:
+    def pause_confirmation(self, plan_id: str, task_id: str, payload: Dict[str, Any], *,
+                           expected_attempt_number: Optional[int] = None) -> None:
         plan = self.get(plan_id)
         task = plan["tasks"].get(task_id)
         fingerprint = str(payload.get("operation_fingerprint") or "").strip()
-        if task is None or task["status"] != TaskStatus.RUNNING.value or not fingerprint:
+        if task is None or not fingerprint:
             raise PlanValidationError("confirmation pause requires a running task and operation fingerprint")
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
         task["status"] = TaskStatus.WAITING_CONFIRMATION.value
-        attempt = plan["attempts"].get(task_id, [])[-1]
+        attempt = next(item for item in plan["attempts"].get(task_id, [])
+                       if item.get("attempt_number") == expected)
         attempt.update({"status": AttemptStatus.CANCELLED.value, "error": {"code": "confirmation_required", "message": "Operation requires confirmation"}, "finished_at": _now().isoformat()})
         plan["pauses"].append({"task_id": task_id, "kind": "confirmation", "operation_fingerprint": fingerprint, "payload": deepcopy(payload), "status": "waiting"})
         plan["status"] = PlanStatus.WAITING_INPUT.value
@@ -709,8 +744,14 @@ class InMemoryPlanStore:
                 iteration["checkpoint_status"] = "idle"
                 iteration["checkpoint_claimed_at"] = None
 
-    def link_attempt_execution(self, plan_id: str, task_id: str, agent_execution_id: UUID) -> None:
-        attempt = self.get(plan_id)["attempts"][task_id][-1]
+    def link_attempt_execution(self, plan_id: str, task_id: str, agent_execution_id: UUID, *,
+                               expected_attempt_number: Optional[int] = None) -> None:
+        plan = self.get(plan_id)
+        task = plan["tasks"].get(task_id)
+        if task is None:
+            raise PlanValidationError("attempt execution link requires a running task")
+        expected = _validate_memory_claim(plan, task, expected_attempt_number)
+        attempt = next(item for item in plan["attempts"][task_id] if item.get("attempt_number") == expected)
         attempt["agent_execution_id"] = str(agent_execution_id)
 
 
@@ -723,6 +764,28 @@ class SqlPlanStore:
     async def _commit(self) -> None:
         """Persist a lifecycle boundary before any caller can do external work."""
         await self._session.commit()
+
+    async def _claimed_attempt(
+        self, plan_id: UUID, task_id: str, expected_attempt_number: Optional[int],
+    ) -> tuple[RuntimePlan, RuntimePlanTask, RuntimeTaskAttempt]:
+        """Lock and validate the caller's exact live task claim."""
+        if expected_attempt_number is None:
+            raise StaleTaskClaimError("task claim attempt number is required")
+        plan = await self._plan(plan_id, lock=True)
+        task = (await self._session.execute(select(RuntimePlanTask).where(
+            RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id,
+        ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+        if task is None:
+            raise TaskNotFoundError(task_id)
+        attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(
+            RuntimeTaskAttempt.task_row_id == task.id,
+            RuntimeTaskAttempt.attempt_number == expected_attempt_number,
+        ).with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
+        if (plan.status != PlanStatus.ACTIVE.value or task.status != TaskStatus.RUNNING.value
+                or task.attempts != expected_attempt_number or attempt is None
+                or attempt.status != AttemptStatus.RUNNING.value):
+            raise StaleTaskClaimError("task claim is no longer current")
+        return plan, task, attempt
 
     async def get_by_run(self, root_run_id: UUID) -> Optional[RuntimePlan]:
         return (await self._session.execute(select(RuntimePlan).where(RuntimePlan.root_run_id == root_run_id))).scalar_one_or_none()
@@ -742,13 +805,8 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def update_task_memory(self, plan_id: UUID, task_id: str, context: list[dict[str, Any]]) -> None:
-        await self._plan(plan_id, lock=True)
-        row = (await self._session.execute(select(RuntimePlanTask).where(
-            RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id,
-        ).with_for_update())).scalar_one()
-        if row.status != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task memory update requires a running task")
+    async def update_task_memory(self, plan_id: UUID, task_id: str, context: list[dict[str, Any]], *, expected_attempt_number: Optional[int] = None) -> None:
+        _, row, _ = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         row.memory_context = document_memory(context)
         await self._session.flush()
         await self._commit()
@@ -804,11 +862,8 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def heartbeat_task(self, plan_id: UUID, task_id: str) -> None:
-        await self._plan(plan_id, lock=True)
-        row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
-        if row is None or row.status != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task heartbeat requires a running task")
+    async def heartbeat_task(self, plan_id: UUID, task_id: str, *, expected_attempt_number: Optional[int] = None) -> None:
+        _, row, _ = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         # Assigning the same status does not reliably mark an ORM row dirty;
         # updated_at is the durable lease heartbeat.
         row.updated_at = _now()
@@ -961,7 +1016,8 @@ class SqlPlanStore:
         await self._commit()
         return row
 
-    async def task_request(self, plan_id: UUID, task_id: str) -> Dict[str, Any]:
+    async def task_request(self, plan_id: UUID, task_id: str, *, expected_attempt_number: Optional[int] = None) -> Dict[str, Any]:
+        await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         snapshot = await self.snapshot(plan_id)
         task = snapshot["tasks"].get(task_id)
         if task is None:
@@ -986,7 +1042,7 @@ class SqlPlanStore:
             _remove_bound_output(dependency, binding["output_key"])
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": dependencies, "dependency_bindings": [binding for binding in snapshot.get("bindings", []) if binding["consumer_task_id"] == task_id], "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, snapshot, inputs), **_task_interactions(snapshot, task_id)}
 
-    async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction) -> None:
+    async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction, *, expected_attempt_number: Optional[int] = None) -> None:
         plan = await self._plan(plan_id, lock=True)
         if plan.status == PlanStatus.WAITING_INPUT.value:
             raise PlanValidationError("plan already has an active interaction")
@@ -994,13 +1050,8 @@ class SqlPlanStore:
             raise PlanValidationError("interaction belongs to another plan")
         task_id = interaction.requester.task_id
         if task_id:
-            row = (await self._session.execute(select(RuntimePlanTask).where(
-                RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one()
-            if row.status != TaskStatus.RUNNING.value:
-                raise PlanValidationError("interaction requires a running task")
+            _, row, attempt = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
             row.status = TaskStatus.WAITING_INPUT.value
-            attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(
-                RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
             attempt.status, attempt.finished_at = "cancelled", _now()
             attempt.error = {"code": "interaction_required", "message": interaction.question}
         self._session.add(RuntimePause(plan_id=plan_id, task_id=task_id or "", kind="interaction",
@@ -1042,14 +1093,12 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any]) -> None:
-        plan = await self._plan(plan_id, lock=True)
+    async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any], *, expected_attempt_number: Optional[int] = None) -> None:
         fingerprint = str(payload.get("operation_fingerprint") or "").strip()
-        row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
-        if row is None or row.status != TaskStatus.RUNNING.value or not fingerprint:
+        if not fingerprint:
             raise PlanValidationError("confirmation pause requires a running task and operation fingerprint")
+        plan, row, attempt = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         row.status, plan.status = TaskStatus.WAITING_CONFIRMATION.value, PlanStatus.WAITING_INPUT.value
-        attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
         attempt.status, attempt.error, attempt.finished_at = AttemptStatus.CANCELLED.value, {"code": "confirmation_required", "message": "Operation requires confirmation"}, _now()
         self._session.add(RuntimePause(plan_id=plan_id, task_id=task_id, kind="confirmation", operation_fingerprint=fingerprint, payload=payload))
         await self._session.flush()
@@ -1081,11 +1130,8 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def finish_attempt(self, plan_id: UUID, task_id: str, *, execution: TaskExecutionReceipt, result: TaskResult) -> RuntimePlanTask:
-        await self._plan(plan_id, lock=True)
-        row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
-        if row is None or row.status != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task is not running")
+    async def finish_attempt(self, plan_id: UUID, task_id: str, *, expected_attempt_number: Optional[int] = None, execution: TaskExecutionReceipt, result: TaskResult) -> RuntimePlanTask:
+        _, row, attempt = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         if result.outcome == TaskOutcome.COMPLETED:
             row.status = TaskStatus.COMPLETED.value
         elif result.outcome == TaskOutcome.NEEDS_DEPENDENCY:
@@ -1094,18 +1140,17 @@ class SqlPlanStore:
         else:
             row.status = TaskStatus.UNFULFILLABLE.value
         row.result = result.model_dump(mode="json")
-        attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
-        attempt.status, attempt.execution_result, attempt.finished_at = AttemptStatus.COMPLETED.value, execution.model_dump(mode="json"), _now()
+        attempt.status, attempt.execution_result, attempt.finished_at = (
+            AttemptStatus.COMPLETED.value,
+            _terminal_execution_result(execution.model_dump(mode="json"), attempt.execution_result),
+            _now(),
+        )
         await self._session.flush()
         await self._commit()
         return row
 
-    async def finish_failure(self, plan_id: UUID, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int, retry_at: Optional[datetime] = None) -> RuntimePlanTask:
-        await self._plan(plan_id, lock=True)
-        row = (await self._session.execute(select(RuntimePlanTask).where(RuntimePlanTask.plan_id == plan_id, RuntimePlanTask.task_id == task_id).with_for_update())).scalar_one_or_none()
-        if row is None or row.status != TaskStatus.RUNNING.value:
-            raise PlanValidationError("task is not running")
-        attempt = (await self._session.execute(select(RuntimeTaskAttempt).where(RuntimeTaskAttempt.task_row_id == row.id, RuntimeTaskAttempt.attempt_number == row.attempts).with_for_update())).scalar_one()
+    async def finish_failure(self, plan_id: UUID, task_id: str, failure: TaskAttemptFailure, *, max_attempts: int, expected_attempt_number: Optional[int] = None, retry_at: Optional[datetime] = None) -> RuntimePlanTask:
+        _, row, attempt = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         attempt.status, attempt.error, attempt.finished_at = (AttemptStatus.TIMED_OUT.value if failure.timed_out else AttemptStatus.FAILED.value), failure.model_dump(mode="json"), _now()
         if failure.retryable and row.attempts < max_attempts:
             row.status, row.next_retry_at = TaskStatus.WAITING_RETRY.value, retry_at or _now()
@@ -1126,22 +1171,8 @@ class SqlPlanStore:
         await self._commit()
         return row
 
-    async def link_attempt_execution(self, plan_id: UUID, task_id: str, agent_execution_id: UUID) -> None:
-        await self._plan(plan_id, lock=True)
-        row = (await self._session.execute(
-            select(RuntimePlanTask).where(
-                RuntimePlanTask.plan_id == plan_id,
-                RuntimePlanTask.task_id == task_id,
-            ).with_for_update()
-        )).scalar_one_or_none()
-        if row is None or row.status != TaskStatus.RUNNING.value:
-            raise PlanValidationError("attempt execution link requires a running task")
-        attempt = (await self._session.execute(
-            select(RuntimeTaskAttempt).where(
-                RuntimeTaskAttempt.task_row_id == row.id,
-                RuntimeTaskAttempt.attempt_number == row.attempts,
-            ).with_for_update()
-        )).scalar_one()
+    async def link_attempt_execution(self, plan_id: UUID, task_id: str, agent_execution_id: UUID, *, expected_attempt_number: Optional[int] = None) -> None:
+        _, _, attempt = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
         attempt.agent_execution_id = agent_execution_id
         await self._session.flush()
         await self._commit()

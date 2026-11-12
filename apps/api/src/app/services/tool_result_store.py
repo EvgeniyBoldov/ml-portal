@@ -413,6 +413,8 @@ class ToolResultStore:
         target_task_id: str | None = None, target_agent_execution_id: str | None = None,
     ) -> dict[str, Any]:
         """Atomically copy one exact, unexpired snapshot into the current run."""
+        if source_run_id == target_run_id:
+            raise ResultSnapshotUnavailable("same_run_snapshot_import_forbidden")
         try:
             source_uuid = str(UUID(source_result_id))
         except (TypeError, ValueError) as exc:
@@ -468,7 +470,7 @@ class ToolResultStore:
                     "source_expires_at": source["expires_at"].isoformat(),
                     "continuation_was_available": bool(original_continuation),
                     "file_controlled": False,
-                    "source_result_ids": [str(value) for value in (source["source_result_ids"] or [])[:50]],
+                    "source_result_ids": [str(value) for value in (source["source_result_ids"] or [])],
                 },
             })
             await connection.execute(text("""INSERT INTO runtime_tool_payloads
@@ -519,57 +521,159 @@ class ToolResultStore:
 
     async def _is_file_controlled_snapshot(
         self, connection: AsyncConnection, *, row: dict[str, Any], tenant_id: UUID,
-        user_id: UUID, visited: set[str],
+        user_id: UUID, visited: set[str] | None = None,
     ) -> bool:
-        result_id = str(row.get("result_id") or "")
-        if not result_id or result_id in visited:
-            return True
-        visited.add(result_id)
-        meta = row.get("dataset_meta") if isinstance(row.get("dataset_meta"), dict) else {}
-        imported = meta.get("imported_from") if isinstance(meta.get("imported_from"), dict) else {}
-        if imported.get("file_controlled") is True:
-            return True
-        operations = [row.get("operation"), meta.get("source_operation"),
-                      meta.get("source_tool"), imported.get("source_operation")]
-        forbidden_prefixes = ("file.", "artifact.", "collection.doc_search",
-                              "collection.list_documents", "collection.document.", "memory.search")
-        for operation in operations:
-            normalized = str(operation or "").casefold().removeprefix("instance.")
-            normalized = normalized.replace("_", ".")
-            if normalized.startswith(forbidden_prefixes):
-                return True
-        imported_source_id = imported.get("source_result_id")
-        imported_source_run_id = imported.get("source_run_id")
-        if imported_source_id and imported_source_run_id:
-            source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
-                dataset_meta, source_result_ids FROM runtime_tool_payloads
-                WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
-                AND user_id=:user_id"""), {"id": imported_source_id, "run_id": imported_source_run_id,
-                    "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
-            if source is None or await self._is_file_controlled_snapshot(
-                    connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
-                return True
-        if imported_source_run_id:
-            for source_id in imported.get("source_result_ids") or []:
-                source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
-                    dataset_meta, source_result_ids FROM runtime_tool_payloads
-                    WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
-                    AND user_id=:user_id"""), {"id": source_id, "run_id": imported_source_run_id,
-                        "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
-                if source is None or await self._is_file_controlled_snapshot(
-                        connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
+        """Reject a snapshot when any reachable source is unsafe or unverifiable.
+
+        Lineage is an access-sensitive DAG. ``active`` detects a genuine cycle,
+        while ``completed`` memoizes safe subgraphs so a shared ancestor is not
+        mistaken for a cycle or traversed repeatedly. A single configured node
+        and depth budget covers the entire walk; exhausting either fails closed.
+        """
+        settings = get_settings()
+        max_nodes = settings.TOOL_RESULTS_LINEAGE_MAX_NODES
+        max_depth = settings.TOOL_RESULTS_LINEAGE_MAX_DEPTH
+        active: set[tuple[str, str]] = set()
+        completed: dict[tuple[str, str], bool] = {}
+        node_count = 0
+        forbidden_prefixes = (
+            "file.", "artifact.", "collection.doc.search", "collection.list.documents",
+            "collection.document.", "memory.search",
+        )
+
+        def normalize_operation(value: Any) -> str:
+            normalized = str(value or "").strip().casefold()
+            while normalized.startswith("instance."):
+                parts = normalized.split(".", 2)
+                normalized = parts[2] if len(parts) == 3 else ""
+            while normalized.startswith("instance_"):
+                normalized = normalized[len("instance_"):]
+            return ".".join(part for part in normalized.replace("_", ".").split(".") if part)
+
+        def is_forbidden_operation(value: Any) -> bool:
+            raw = ".".join(part for part in str(value or "").strip().casefold()
+                            .replace("_", ".").split(".") if part)
+            canonical = normalize_operation(value)
+            candidates = (raw, canonical)
+            for prefix in forbidden_prefixes:
+                root = prefix.rstrip(".")
+                if any(candidate.startswith(prefix) or candidate == root or candidate.endswith("." + root)
+                       or f".{root}." in f".{candidate}." for candidate in candidates):
                     return True
-        lineage = row.get("source_result_ids") or meta.get("source_result_ids") or []
-        for source_id in lineage[:50] if isinstance(lineage, list) else []:
+            return False
+
+        def lineage_ids(value: Any) -> list[str] | None:
+            if value is None:
+                return []
+            if not isinstance(value, list):
+                return None
+            output: list[str] = []
+            for item in value:
+                try:
+                    output.append(str(UUID(str(item))))
+                except (TypeError, ValueError):
+                    return None
+            return list(dict.fromkeys(output))
+
+        async def load_source(source_id: str, source_run_id: str) -> dict[str, Any] | None:
             source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
                 dataset_meta, source_result_ids FROM runtime_tool_payloads
                 WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
-                AND user_id=:user_id"""), {"id": source_id, "run_id": row.get("run_id"),
+                AND user_id=:user_id"""), {"id": source_id, "run_id": source_run_id,
                     "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
-            if source is None or await self._is_file_controlled_snapshot(
-                    connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
+            return dict(source) if source is not None else None
+
+        async def visit(current: dict[str, Any], *, depth: int) -> bool:
+            nonlocal node_count
+            try:
+                result_id = str(UUID(str(current.get("result_id") or "")))
+                run_id = str(current.get("run_id") or "")
+                if not run_id:
+                    return True
+            except (TypeError, ValueError):
                 return True
-        return False
+            identity = (run_id, result_id)
+            if identity in active:
+                return True
+            if identity in completed:
+                return completed[identity]
+            if depth > max_depth or node_count >= max_nodes:
+                return True
+            node_count += 1
+            active.add(identity)
+            safe = True
+            try:
+                meta_value = current.get("dataset_meta")
+                if meta_value is None:
+                    meta: dict[str, Any] = {}
+                elif isinstance(meta_value, dict):
+                    meta = meta_value
+                else:
+                    safe = False
+                    meta = {}
+                imported_value = meta.get("imported_from")
+                if imported_value is None:
+                    imported: dict[str, Any] = {}
+                elif isinstance(imported_value, dict):
+                    imported = imported_value
+                    try:
+                        imported_run_id = str(imported["source_run_id"])
+                        imported_result_id = str(UUID(str(imported["source_result_id"])))
+                        imported_revision = int(imported["source_revision"])
+                        imported_operation = imported["source_operation"]
+                        if (not imported_run_id or imported_revision < 1
+                                or not isinstance(imported_operation, str) or not imported_operation.strip()):
+                            safe = False
+                    except (KeyError, TypeError, ValueError):
+                        safe = False
+                        imported_run_id = ""
+                        imported_result_id = ""
+                    if imported.get("file_controlled") is not False:
+                        safe = False
+                else:
+                    safe = False
+                    imported = {}
+
+                operations = [current.get("operation"), meta.get("source_operation"),
+                              meta.get("source_tool"), imported.get("source_operation")]
+                if any(is_forbidden_operation(operation) for operation in operations if operation is not None):
+                    safe = False
+
+                row_ids = lineage_ids(current.get("source_result_ids"))
+                meta_ids = lineage_ids(meta.get("source_result_ids"))
+                imported_ids = lineage_ids(imported.get("source_result_ids"))
+                if row_ids is None or meta_ids is None or imported_ids is None:
+                    safe = False
+                    row_ids = meta_ids = imported_ids = []
+                source_run_id = run_id
+                edges: set[tuple[str, str]] = {
+                    (source_run_id, source_id) for source_id in [*row_ids, *meta_ids]
+                }
+                edges.update((str(imported["source_run_id"]), source_id) for source_id in imported_ids)
+                if imported_value is not None and imported:
+                    edges.add((str(imported["source_run_id"]), str(UUID(str(imported["source_result_id"])))))
+
+                if len(edges) > max_nodes:
+                    safe = False
+                for edge_run_id, edge_result_id in edges:
+                    if not safe:
+                        break
+                    source = await load_source(edge_result_id, edge_run_id)
+                    if source is None or await visit(source, depth=depth + 1):
+                        safe = False
+                        break
+            except (KeyError, TypeError, ValueError):
+                safe = False
+            finally:
+                active.discard(identity)
+            completed[identity] = not safe
+            return not safe
+
+        # ``visited`` is retained as a source-compatible argument for callers;
+        # it is deliberately not used as a global seen set because that would
+        # reject safe shared ancestors as if they were cycles.
+        _ = visited
+        return await visit(row, depth=0)
 
     async def execute_sql(
         self, *, sql: str, run_id: str, tenant_id: UUID, user_id: UUID,

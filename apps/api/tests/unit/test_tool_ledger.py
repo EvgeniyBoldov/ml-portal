@@ -60,6 +60,8 @@ def test_tool_ledger_find_successful_result_by_signature():
         iteration=1,
         agent_slug="a",
         phase_id=None,
+        operation_side_effects=False,
+        risk_level="safe",
     )
     ledger.register_result(
         call_id="c1", success=True, data={"rows": [1]},
@@ -94,6 +96,7 @@ def test_tool_ledger_reuse_matches_resolved_target_and_can_ignore_cache_ttl():
     ledger.register_call(
         operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
         iteration=1, agent_slug="a", phase_id="execution-a", target_identity="provider-a/db-a",
+        operation_side_effects=False, risk_level="safe",
     )
     ledger.register_result(call_id="c1", success=True, data={"rows": [1]})
 
@@ -125,6 +128,8 @@ def test_tool_ledger_preserves_duplicate_status_when_large_result_is_not_cached(
     ledger.register_call(operation="collection.sql.execute", call_id="c1", arguments={"query": "select 1"},
                          iteration=1, agent_slug="a", phase_id="task-a", target_identity="db")
     ledger.set_call_target(call_id="c1", target_identity="db", execution_id="exec-a")
+    ledger.entries[-1].operation_side_effects = False
+    ledger.entries[-1].risk_level = "safe"
     ledger.register_result(call_id="c1", success=True, data={"payload": "x" * 25_000})
     prior = ledger.find_successful_result(operation="collection.sql.execute", arguments={"query": "select 1"},
                                           execution_id="exec-a", target_identity="db", max_age_seconds=None)
@@ -136,6 +141,15 @@ def test_tool_ledger_preserves_duplicate_status_when_large_result_is_not_cached(
 def test_tool_ledger_marks_explicit_null_result_as_cached():
     ledger = ToolLedger()
     ledger.register_call(operation="collection.sql.execute", call_id="c1", arguments={},
-                         iteration=1, agent_slug="a", phase_id="task-a")
+                         iteration=1, agent_slug="a", phase_id="task-a",
+                         operation_side_effects=False, risk_level="safe")
     ledger.register_result(call_id="c1", success=True, data=None)
     assert ledger.entries[0].result_data_available
+
+
+def test_unknown_operation_classification_is_not_reusable_as_a_read_cache():
+    ledger = ToolLedger()
+    ledger.register_call(operation="jira_get_issue", call_id="c1", arguments={"key": "OPS-1"},
+                         iteration=1, agent_slug="a", phase_id="task-a")
+    ledger.register_result(call_id="c1", success=True, data={"key": "OPS-1"})
+    assert ledger.find_successful_result(operation="jira_get_issue", arguments={"key": "OPS-1"}) is None

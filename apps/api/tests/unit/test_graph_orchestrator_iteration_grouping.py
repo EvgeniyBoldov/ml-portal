@@ -23,13 +23,13 @@ class AsyncMemoryStore:
     async def next_decision(self, plan_id): return self.inner.next_decision(str(plan_id))
     async def claim_task(self, plan_id, task_id): return self.inner.claim_task(str(plan_id), task_id)
     async def claim_checkpoint(self, plan_id, kind): return self.inner.claim_checkpoint(str(plan_id), kind)
-    async def task_request(self, plan_id, task_id): return self.inner.task_request(str(plan_id), task_id)
+    async def task_request(self, plan_id, task_id, **kwargs): return self.inner.task_request(str(plan_id), task_id, **kwargs)
     async def finish_attempt(self, plan_id, task_id, **kwargs): return self.inner.finish_attempt(str(plan_id), task_id, **kwargs)
     async def finish_failure(self, plan_id, task_id, failure, **kwargs): return self.inner.finish_failure(str(plan_id), task_id, failure, **kwargs)
     async def complete_synthesis(self, plan_id): return self.inner.complete_synthesis(str(plan_id))
     async def mark_failed(self, plan_id, code, message): return self.inner.mark_failed(str(plan_id), code, message)
     async def recover_stale_claims(self, plan_id, **kwargs): return self.inner.recover_stale_claims(str(plan_id), **kwargs)
-    async def link_attempt_execution(self, plan_id, task_id, agent_execution_id): return self.inner.link_attempt_execution(str(plan_id), task_id, agent_execution_id)
+    async def link_attempt_execution(self, plan_id, task_id, agent_execution_id, **kwargs): return self.inner.link_attempt_execution(str(plan_id), task_id, agent_execution_id, **kwargs)
 
 
 class Planner:

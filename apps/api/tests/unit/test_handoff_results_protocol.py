@@ -124,8 +124,14 @@ async def test_dispatched_write_timeout_is_unknown_but_read_timeout_remains_retr
         description="write", input_schema={"type": "object", "properties": {}},
         data_instance_id="instance", data_instance_slug="instance", source="mcp",
         target=target, side_effects=True, risk_level="write")
-    write_executor = AsyncMock()
-    write_executor.execute.side_effect = asyncio.TimeoutError()
+    class DispatchedTimeoutExecutor:
+        supports_runtime_execution_guard = True
+
+        async def execute(self, _call, context):
+            await context.extra["runtime_operation_dispatch_guard"]()
+            raise asyncio.TimeoutError()
+
+    write_executor = DispatchedTimeoutExecutor()
     deps = RuntimeDependencies(operation_executor=write_executor)
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
     ctx.set_runtime_deps(deps)

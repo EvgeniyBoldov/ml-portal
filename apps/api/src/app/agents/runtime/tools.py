@@ -39,6 +39,7 @@ from app.runtime.operation_errors import (
     OperationValidationError,
     RuntimeErrorCode,
 )
+from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
 
 logger = get_logger(__name__)
 
@@ -223,6 +224,16 @@ class OperationExecutionFacade:
             ctx=ctx,
         )
 
+        execution_guard = ctx.extra.get("runtime_execution_guard_service")
+        guard_key: Optional[str] = None
+        guard_required = not (
+            operation.side_effects is False and str(operation.risk_level or "").lower() == "safe"
+        )
+
+        async def persist_guard_result(*, success: bool | None) -> None:
+            if guard_key is not None and execution_guard is not None:
+                await execution_guard.complete(guard_key, success=success)
+
         try:
             dispatched = False
             logger.info(f"Executing tool: {operation_call.tool_name}")
@@ -247,15 +258,50 @@ class OperationExecutionFacade:
                     ),
                 ), []
 
+            persisted_guard_required = bool(ctx.extra.get("runtime_execution_guard_required") and guard_required)
+            if persisted_guard_required:
+                if execution_guard is None:
+                    raise RuntimeExecutionGuardError(
+                        "execution_guard_unavailable",
+                        "Durable execution guard is unavailable; tool execution is blocked.",
+                    )
+                if not bool(getattr(executor, "supports_runtime_execution_guard", False)):
+                    raise RuntimeExecutionGuardError(
+                        "execution_guard_unavailable",
+                        "Operation executor cannot make durable admission at dispatch; tool execution is blocked.",
+                    )
+
+            async def admit_before_dispatch() -> None:
+                nonlocal guard_key, dispatched
+                if guard_key is not None:
+                    raise RuntimeExecutionGuardError(
+                        "execution_guard_duplicate_dispatch",
+                        "Operation executor attempted to dispatch the same guarded call more than once.",
+                    )
+                if guard_required and execution_guard is not None:
+                    guard_key = await execution_guard.admit(
+                        operation=operation_call.tool_name,
+                        target=target_identity,
+                        arguments=operation_call.arguments or {},
+                    )
+                dispatched = True
+
             previous_call_id = ctx.extra.get("runtime_active_tool_call_id")
             previous_tool_slug = ctx.extra.get("runtime_active_tool_slug")
             previous_timeout = ctx.extra.get("runtime_operation_timeout_s")
+            previous_dispatch_guard = ctx.extra.get("runtime_operation_dispatch_guard")
             ctx.extra["runtime_active_tool_call_id"] = operation_call.id
             ctx.extra["runtime_active_tool_slug"] = operation_call.tool_name
+            if guard_required and bool(getattr(executor, "supports_runtime_execution_guard", False)):
+                ctx.extra["runtime_operation_dispatch_guard"] = admit_before_dispatch
             if timeout_s is not None:
                 ctx.extra["runtime_operation_timeout_s"] = timeout_s
             try:
-                dispatched = True
+                if not persisted_guard_required and not bool(getattr(executor, "supports_runtime_execution_guard", False)):
+                    # Standalone/local callers keep the historical timeout
+                    # classification. Persisted calls require the provider's
+                    # trusted pre-dispatch callback above.
+                    dispatched = True
                 if timeout_s is not None:
                     result = await asyncio.wait_for(
                         executor.execute(operation_call, ctx), timeout=timeout_s,
@@ -275,6 +321,10 @@ class OperationExecutionFacade:
                     ctx.extra.pop("runtime_operation_timeout_s", None)
                 else:
                     ctx.extra["runtime_operation_timeout_s"] = previous_timeout
+                if previous_dispatch_guard is None:
+                    ctx.extra.pop("runtime_operation_dispatch_guard", None)
+                else:
+                    ctx.extra["runtime_operation_dispatch_guard"] = previous_dispatch_guard
 
             sources: List[dict] = []
             if result.success and result.metadata.get("sources"):
@@ -291,7 +341,7 @@ class OperationExecutionFacade:
                         f"{warning_count} warnings/errors",
                     )
 
-            if not result.success and dispatched and operation.side_effects:
+            if not result.success and dispatched and (operation.side_effects or guard_key is not None):
                 failure = result.metadata.get("mcp_failure")
                 category = failure.get("category") if isinstance(failure, dict) else None
                 kind = failure.get("kind") if isinstance(failure, dict) else None
@@ -302,13 +352,25 @@ class OperationExecutionFacade:
                         or category in {"availability", "unknown"}
                         or kind in {"transport", "http", "protocol"}):
                     result.metadata.update(outcome_unknown=True, error_code="tool_outcome_unknown", retryable=False)
+            await persist_guard_result(success=(None if result.metadata.get("outcome_unknown") else result.success))
             return result, sources
+
+        except RuntimeExecutionGuardError as e:
+            unknown = e.code == "tool_outcome_unknown"
+            return ToolResult.fail(
+                str(e), error_code=e.code, retryable=False,
+                outcome_unknown=unknown,
+            ), []
 
         except asyncio.TimeoutError:
             logger.error(
                 f"Tool {operation_call.tool_name} timed out after {timeout_s}s",
             )
-            outcome_unknown = bool(dispatched and operation.side_effects)
+            outcome_unknown = bool(dispatched and (operation.side_effects or guard_key is not None))
+            try:
+                await persist_guard_result(success=(None if outcome_unknown else False))
+            except Exception:
+                logger.exception("Failed to persist timed out tool execution guard")
             err = OperationExecutionError(
                 code=RuntimeErrorCode.OPERATION_TIMEOUT,
                 message=f"Execution timed out after {timeout_s} seconds",
@@ -334,7 +396,11 @@ class OperationExecutionFacade:
                 f"Tool {operation_call.tool_name} execution failed: {e}",
                 exc_info=True,
             )
-            outcome_unknown = bool(dispatched and operation.side_effects)
+            outcome_unknown = bool(dispatched and (operation.side_effects or guard_key is not None))
+            try:
+                await persist_guard_result(success=(None if outcome_unknown else False))
+            except Exception:
+                logger.exception("Failed to persist failed tool execution guard")
             err = OperationExecutionError(
                 code=RuntimeErrorCode.OPERATION_EXECUTION_FAILED,
                 message=str(e),

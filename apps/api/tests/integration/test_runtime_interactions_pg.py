@@ -70,19 +70,19 @@ async def test_task_interaction_and_answer_survive_new_sessions(database, respon
         plan_id = plan.id
         await store.apply_iteration(plan_id, IterationProposal(tasks=[PlannedTask(
             task_id="work", executor="research", intent="work", instructions="original")], terminal="planner"))
-        await store.claim_task(plan_id, "work")
+        claim = await store.claim_task(plan_id, "work")
         interaction = RuntimeInteraction.create(InteractionQuestion(question="Выбор?", response_type="text" if isinstance(response, str) else "boolean"),
             InteractionRequester(stage="agent", entity_id=str(uuid4()), plan_id=str(plan_id), task_id="work", agent_slug="research"),
             checkpoint={"messages": [{"role": "tool", "content": "completed result"}]})
-        await store.pause_interaction(plan_id, interaction)
+        await store.pause_interaction(plan_id, interaction, expected_attempt_number=claim.attempts)
     async with sessions() as session:
         store = SqlPlanStore(session)
         assert (await store.snapshot(plan_id))["status"] == "waiting_input"
         await store.resume_interaction(plan_id, interaction.id, response)
     async with sessions() as session:
         store = SqlPlanStore(session)
-        await store.claim_task(plan_id, "work")
-        request = await store.task_request(plan_id, "work")
+        claim = await store.claim_task(plan_id, "work")
+        request = await store.task_request(plan_id, "work", expected_attempt_number=claim.attempts)
         assert request["resume_checkpoint"] == interaction.checkpoint
         assert request["interaction_history"][-1]["response"] == response
         assert request["instructions"] == "original"
@@ -104,10 +104,10 @@ async def test_cancelling_plan_resolves_persisted_interaction(database):
         plan_id = plan.id
         await store.apply_iteration(plan_id, IterationProposal(tasks=[PlannedTask(
             task_id="work", executor="research", intent="work", instructions="original")], terminal="planner"))
-        await store.claim_task(plan_id, "work")
+        claim = await store.claim_task(plan_id, "work")
         interaction = RuntimeInteraction.create(InteractionQuestion(question="Выбор?"),
             InteractionRequester(stage="agent", entity_id=str(uuid4()), plan_id=str(plan_id), task_id="work", agent_slug="research"))
-        await store.pause_interaction(plan_id, interaction)
+        await store.pause_interaction(plan_id, interaction, expected_attempt_number=claim.attempts)
     async with sessions() as session:
         await SqlPlanStore(session).cancel_plan(plan_id, reason="user_cancelled")
     async with sessions() as session:

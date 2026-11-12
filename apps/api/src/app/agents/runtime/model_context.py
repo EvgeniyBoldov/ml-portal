@@ -10,6 +10,331 @@ from collections.abc import Callable
 from app.runtime.memory.tool_ledger import canonical_operation_name
 
 
+_RESULT_READER_ARGUMENT_KEYS = (
+    "result_id", "revision", "query", "q", "columns", "selection_id", "view", "path", "offset", "limit", "fields",
+    "text_offset", "text_limit", "child_offset", "child_limit",
+    "input_result_id", "input_revision", "query_complete", "page_may_have_more", "schema_offset",
+)
+_RESULT_OBSERVATION_KEYS = (
+    "result_id", "revision", "q", "columns", "offset", "limit", "fields", "read_complete", "next_offset",
+    "source_complete", "source_total", "query_complete", "input_result_id", "input_revision",
+    "page_may_have_more", "path", "text_offset", "text_limit", "next_text_offset",
+    "child_offset", "child_limit", "next_child_offset", "recovery_reason", "delivery",
+    "row_count", "view",
+)
+_COMPACT_SUMMARY_ITEMS = 8
+_COMPACT_SUMMARY_TEXT_CHARS = 320
+
+
+def _bounded_distinct_summary(value: Any, *, plain_text_items: bool = False) -> dict[str, Any] | None:
+    """Retain bounded redacted MCP text while accounting for omitted material.
+
+    Only MCP text blocks are eligible. Resource, file and binary bodies are
+    deliberately excluded from the prompt compaction receipt.
+    """
+    from app.runtime.redactor import RuntimeRedactor
+
+    blocks = value if isinstance(value, list) else [value]
+    if (not plain_text_items and isinstance(value, dict) and isinstance(value.get("items"), list)
+            and any(key in value for key in ("original_count", "omitted_count", "warning_summaries"))):
+        return _compact_normalized_mcp_content(value)
+
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    omitted_items = 0
+    duplicate_items = 0
+    omitted_chars = 0
+    text_chars = 0
+    for block in blocks:
+        if plain_text_items and isinstance(block, str):
+            raw_text = block
+        elif plain_text_items and isinstance(block, dict):
+            warning_parts = [str(block[key]) for key in ("code", "warning", "message", "detail")
+                             if isinstance(block.get(key), str)]
+            raw_text = ": ".join(warning_parts) if warning_parts else None
+        elif isinstance(block, dict) and str(block.get("type") or "").lower() == "text":
+            raw_text = block.get("text")
+        else:
+            omitted_items += 1
+            omitted_chars += len(json.dumps(block, ensure_ascii=False, default=str))
+            continue
+        if not isinstance(raw_text, str):
+            omitted_items += 1
+            continue
+        safe_text = str(RuntimeRedactor().redact(raw_text))
+        if safe_text in seen:
+            omitted_items += 1
+            duplicate_items += 1
+            omitted_chars += len(safe_text)
+            continue
+        seen.add(safe_text)
+        text_chars += len(safe_text)
+        if len(items) >= _COMPACT_SUMMARY_ITEMS:
+            omitted_items += 1
+            omitted_chars += len(safe_text)
+            continue
+        excerpt = safe_text[:_COMPACT_SUMMARY_TEXT_CHARS]
+        omitted_chars += max(0, len(safe_text) - len(excerpt))
+        items.append({"type": "text", "text": excerpt,
+                      "excerpt_complete": len(safe_text) <= _COMPACT_SUMMARY_TEXT_CHARS})
+    if not items and omitted_items == 0:
+        return None
+    return {
+        "items": items,
+        "coverage": {
+            "included_items": len(items),
+            "omitted_items": omitted_items,
+            "duplicate_items": duplicate_items,
+            "omitted_text_chars": omitted_chars,
+            "observed_text_chars": text_chars,
+            "complete": omitted_items == 0 and omitted_chars == 0,
+        },
+    }
+
+
+def _compact_normalized_mcp_content(value: dict[str, Any]) -> dict[str, Any]:
+    """Compact the production `_meaningful_mcp_content` envelope and its counters."""
+    summary = _bounded_distinct_summary(value.get("items", [])) or {
+        "items": [], "coverage": {"included_items": 0, "omitted_items": 0,
+            "duplicate_items": 0, "omitted_text_chars": 0, "observed_text_chars": 0,
+            "complete": True},
+    }
+    source_omitted = value.get("omitted_count")
+    source_omitted = source_omitted if isinstance(source_omitted, int) and source_omitted >= 0 else 0
+    source_duplicates = value.get("duplicate_count")
+    source_duplicates = source_duplicates if isinstance(source_duplicates, int) and source_duplicates >= 0 else 0
+    summary_coverage = summary["coverage"]
+    summary_omitted = summary_coverage["omitted_items"]
+    summary_duplicates = summary_coverage.get("duplicate_items", 0)
+    omitted_count = source_omitted + max(0, summary_omitted - summary_duplicates)
+
+    warning_summary = _bounded_distinct_summary(
+        value.get("warning_summaries", []), plain_text_items=True
+    ) or {"items": [], "coverage": {"included_items": 0, "omitted_items": 0,
+        "duplicate_items": 0, "omitted_text_chars": 0, "observed_text_chars": 0,
+        "complete": True}}
+    source_warnings_omitted = value.get("warnings_omitted")
+    source_warnings_omitted = (source_warnings_omitted if isinstance(source_warnings_omitted, int)
+                               and source_warnings_omitted >= 0 else 0)
+    warnings_omitted = source_warnings_omitted + warning_summary["coverage"]["omitted_items"]
+    upstream_truncated = value.get("truncated") is True
+    complete = (summary_coverage["complete"] and warning_summary["coverage"]["complete"]
+                and not upstream_truncated and source_omitted == 0 and source_warnings_omitted == 0)
+    original_count = value.get("original_count")
+    return {
+        "items": summary["items"],
+        "original_count": original_count if isinstance(original_count, int) and original_count >= 0 else None,
+        "omitted_count": omitted_count,
+        "duplicate_count": source_duplicates + summary_duplicates,
+        "truncated": upstream_truncated or omitted_count > 0 or summary_coverage["omitted_text_chars"] > 0,
+        "warning_summaries": [item["text"] for item in warning_summary["items"]],
+        "warnings_omitted": warnings_omitted,
+        "coverage": {
+            **summary_coverage,
+            "upstream_omitted_count": source_omitted,
+            "upstream_truncated": upstream_truncated,
+            "complete": complete,
+        },
+        "warning_summary_coverage": warning_summary["coverage"],
+    }
+
+
+def _bounded_identity_value(value: Any) -> tuple[Any, int] | None:
+    """Keep an entire safe reader identity value or omit it with a count."""
+    from app.runtime.redactor import RuntimeRedactor
+
+    redactor = RuntimeRedactor()
+    if isinstance(value, str):
+        if len(value) > 512 or redactor.redact(value) != value:
+            return None
+        return value, 0
+    if isinstance(value, list):
+        if len(value) > 16:
+            return None
+        if any(not (isinstance(item, (str, int, float, bool)) or item is None) for item in value):
+            return None
+        if any(isinstance(item, str) and
+               (len(item) > 512 or redactor.redact(item) != item) for item in value):
+            return None
+        return value, 0
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value, 0
+    return None
+
+
+def _bounded_next_action(value: Any) -> dict[str, Any] | None:
+    """Retain only a supported result reader action and bounded reader args."""
+    if not isinstance(value, dict):
+        return None
+    tool = value.get("tool")
+    if tool not in {"result.read", "result.describe", "result.aggregate", "result.find"}:
+        return None
+    arguments = value.get("arguments")
+    if not isinstance(arguments, dict):
+        return None
+    allowed = {
+        "result.read": {"result_id", "revision", "offset", "limit", "fields", "path", "text_offset",
+                        "text_limit", "child_offset", "child_limit", "view"},
+        "result.describe": {"result_id", "offset", "limit", "query", "schema_offset"},
+        "result.aggregate": {"result_id", "revision", "offset", "limit", "columns"},
+        "result.find": {"result_id", "revision", "offset", "limit", "q", "columns"},
+    }[tool]
+    bounded = _current_result_observation({}, {key: item for key, item in arguments.items() if key in allowed})
+    result = {"tool": tool, "arguments": bounded["reader_arguments"] if bounded else {}}
+    omitted_keys = set((bounded or {}).get("arguments_omission", {}).get("omitted_keys", []))
+    unknown_keys = set(arguments) - allowed
+    omitted_keys.update(str(key) for key in unknown_keys)
+    if omitted_keys:
+        result["arguments_omission"] = {
+            "omitted_values": len(omitted_keys),
+            "omitted_keys": sorted(omitted_keys),
+            "complete": False,
+        }
+    required = {
+        "result.read": ("result_id", "offset", "limit"),
+        "result.describe": ("result_id",),
+        "result.aggregate": ("result_id", "revision", "offset", "limit", "columns"),
+        "result.find": ("result_id", "revision", "offset", "limit", "q"),
+    }[tool]
+    if any(key not in result["arguments"] for key in required):
+        return None
+    if tool == "result.find" and (not isinstance(result["arguments"].get("q"), str)
+                                   or not result["arguments"]["q"].strip()):
+        return None
+    if tool == "result.aggregate" and (not isinstance(result["arguments"].get("columns"), list)
+                                        or not result["arguments"]["columns"]):
+        return None
+    if tool in {"result.find", "result.aggregate"} and (
+        not isinstance(result["arguments"].get("revision"), int)
+        or isinstance(result["arguments"].get("revision"), bool)
+        or result["arguments"]["revision"] < 1
+    ):
+        return None
+    if tool in {"result.find", "result.aggregate"}:
+        page_offset = result["arguments"].get("offset")
+        page_limit = result["arguments"].get("limit")
+        if (not isinstance(page_offset, int) or isinstance(page_offset, bool) or page_offset < 0
+                or not isinstance(page_limit, int) or isinstance(page_limit, bool)
+                or not 1 <= page_limit <= 100):
+            return None
+    return result
+
+
+def _fallback_action_from_current(operation: str | None, current: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Use supported current reader arguments when required identity is intact."""
+    if not operation or not isinstance(current, dict):
+        return None
+    tool = canonical_operation_name(operation)
+    if tool not in {"result.read", "result.describe", "result.aggregate", "result.find"}:
+        return None
+    arguments = current.get("reader_arguments")
+    if not isinstance(arguments, dict):
+        return None
+    required = {
+        "result.read": ("result_id", "offset", "limit"),
+        "result.describe": ("result_id",),
+        "result.aggregate": ("result_id", "revision", "offset", "limit", "columns"),
+        "result.find": ("result_id", "revision", "offset", "limit", "q"),
+    }[tool]
+    if any(key not in arguments for key in required):
+        return None
+    # The current receipt separately records any dropped optional or unknown
+    # values. Do not copy those raw values back into an executable action.
+    return _bounded_next_action({"tool": tool, "arguments": arguments})
+
+
+def _current_result_observation(value: dict[str, Any], reader_arguments: Any = None) -> dict[str, Any] | None:
+    """Keep current read identity independently of any future next_action."""
+    args = reader_arguments if isinstance(reader_arguments, dict) else {}
+    observation = value.get("result_observation")
+    if not isinstance(observation, dict):
+        runtime = value.get("_runtime_result")
+        observation = runtime.get("result_observation") if isinstance(runtime, dict) else None
+    observation = observation if isinstance(observation, dict) else {}
+    current_args: dict[str, Any] = {}
+    omitted_fields = 0
+    omitted_keys: list[str] = []
+    omitted_keys.extend(str(key) for key in set(args) - set(_RESULT_READER_ARGUMENT_KEYS))
+    omitted_fields += len(set(args) - set(_RESULT_READER_ARGUMENT_KEYS))
+    for key in _RESULT_READER_ARGUMENT_KEYS:
+        if key not in args:
+            continue
+        item = args[key]
+        bounded = _bounded_identity_value(item)
+        if bounded is None:
+            omitted_fields += 1
+            omitted_keys.append(key)
+        else:
+            current_args[key] = bounded[0]
+    current_observation: dict[str, Any] = {}
+    for key in _RESULT_OBSERVATION_KEYS:
+        if key not in observation:
+            continue
+        item = observation[key]
+        bounded = _bounded_identity_value(item)
+        if bounded is None:
+            omitted_fields += 1
+            omitted_keys.append(key)
+        else:
+            current_observation[key] = bounded[0]
+    # Native workspace replies echo the actual current read arguments at root.
+    for key in _RESULT_READER_ARGUMENT_KEYS:
+        if key not in current_args and key in value:
+            item = value[key]
+            bounded = _bounded_identity_value(item)
+            if bounded is None:
+                omitted_fields += 1
+                omitted_keys.append(key)
+            else:
+                current_args[key] = bounded[0]
+    if not current_args and not current_observation and not omitted_fields:
+        return None
+    result = {"reader_arguments": current_args, "result_observation": current_observation}
+    if omitted_fields:
+        result["arguments_omission"] = {
+            "omitted_values": omitted_fields, "omitted_keys": sorted(set(omitted_keys)), "complete": False,
+        }
+    return result
+
+
+def _compact_recoverable_result(
+    value: dict[str, Any], *, reader_arguments: Any = None, operation: str | None = None,
+) -> dict[str, Any]:
+    """Build a compact receipt, retaining the exact page already observed."""
+    compact = {key: value[key] for key in (
+        "status", "result_id", "revision", "source_coverage", "source_complete", "source_total",
+        "query_complete", "page_may_have_more", "read_complete", "snapshot_only", "imported_from",
+        "recoverability", "reason", "recovery_reason", "omitted_ids", "coverage", "view",
+    ) if key in value}
+    current = _current_result_observation(value, reader_arguments)
+    if current:
+        compact["current_result"] = current
+    action = value.get("next_action")
+    bounded_action = _bounded_next_action(action) if action is not None else None
+    if bounded_action is None:
+        bounded_action = _fallback_action_from_current(operation, current)
+    if bounded_action is not None:
+        compact["next_action"] = bounded_action
+    for key in ("mcp_content", "warnings", "warning"):
+        if key in value:
+            summary = _bounded_distinct_summary(value[key], plain_text_items=key != "mcp_content")
+            if summary is not None:
+                compact[key] = summary
+    runtime = value.get("_runtime_result")
+    if isinstance(runtime, dict):
+        metadata = {key: runtime[key] for key in (
+            "result_id", "operation", "payload_type", "row_count", "inline_complete", "source_complete",
+            "revision", "source_total", "snapshot_only", "imported_from", "delivery", "view",
+        ) if key in runtime}
+        for key in ("mcp_content", "warnings", "warning"):
+            if key in runtime:
+                summary = _bounded_distinct_summary(runtime[key], plain_text_items=key != "mcp_content")
+                if summary is not None and summary != compact.get(key):
+                    metadata[key] = summary
+        compact["_runtime_result"] = metadata
+    return compact
+
+
 @dataclass(frozen=True)
 class BatchContextBudget:
     model: str | None
@@ -133,6 +458,7 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
         default=-1,
     )
     call_names: dict[str, str] = {}
+    call_arguments: dict[str, Any] = {}
     latest_text_result_index = max((i for i, message in enumerate(projected)
                                     if message.get("role") == "user"
                                     and isinstance(message.get("content"), str)
@@ -146,6 +472,13 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
             function = call.get("function") if isinstance(call.get("function"), dict) else {}
             if call.get("id"):
                 call_names[str(call["id"])] = str(function.get("name") or "")
+                raw_arguments = function.get("arguments")
+                if isinstance(raw_arguments, str):
+                    try:
+                        raw_arguments = json.loads(raw_arguments)
+                    except (TypeError, ValueError):
+                        raw_arguments = None
+                call_arguments[str(call["id"])] = raw_arguments
     for index, message in enumerate(projected):
         if message.get("role") == "user":
             content = message.get("content")
@@ -159,10 +492,10 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
         if not isinstance(content, str):
             continue
         operation = call_names.get(str(message.get("tool_call_id") or ""), "")
+        reader_arguments = call_arguments.get(str(message.get("tool_call_id") or ""))
         # Keep the latest read facts in full; compact older tool payloads into a
         # pointer with any runtime receipt metadata retained.
         try:
-            import json
             value = json.loads(content)
         except (TypeError, ValueError):
             value = None
@@ -172,38 +505,18 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
             # Preserve ordinary direct evidence even if it resembles metadata.
             if not metadata.get("result_id"):
                 continue
-            message["content"] = json.dumps({
-                "_runtime_result": {key: metadata.get(key) for key in (
-                    "result_id", "operation", "payload_type", "row_count", "inline_complete",
-                    "source_complete", "revision", "result_observation", "next_action", "offset", "limit",
-                    "fields", "path", "text_offset", "text_limit", "child_offset", "child_limit",
-                    "next_offset", "read_complete", "query_complete", "input_result_id", "input_revision",
-                    "page_may_have_more", "recovery_reason", "delivery", "source_total",
-                    "snapshot_only", "imported_from",
-                    "view",
-                ) if key in metadata},
-                "receipt": "Earlier result retained in the runtime result store; inspect it again if needed.",
-            }, ensure_ascii=False)
+            compact = _compact_recoverable_result(value, reader_arguments=reader_arguments, operation=operation)
+            compact["_runtime_result"] = _compact_recoverable_result(
+                {"_runtime_result": metadata}, reader_arguments=reader_arguments, operation=operation
+            ).get("_runtime_result", {})
+            compact["receipt"] = "Earlier result retained in the runtime result store; inspect it again if needed."
+            message["content"] = json.dumps(compact, ensure_ascii=False)
         elif (isinstance(value, dict) and value.get("status") in {"ready", "already_completed"}
               and isinstance(value.get("result_id"), str) and value.get("result_id")
               and canonical_operation_name(operation).split(".", 1)[0] == "result"):
-            message["content"] = json.dumps({
-                "status": value["status"],
-                "result_id": value["result_id"],
-                "revision": value.get("revision", 1),
-                "source_coverage": value.get("source_coverage"),
-                "snapshot_only": value.get("snapshot_only"),
-                "imported_from": value.get("imported_from"),
-                "view": value.get("view"),
-                "next_action": value.get("next_action") or {
-                    "tool": "result.read",
-                    "arguments": {"result_id": value["result_id"], "revision": value.get("revision", 1),
-                                  **{key: value[key] for key in ("offset", "limit", "fields", "path",
-                                      "text_offset", "text_limit", "child_offset", "child_limit", "view") if key in value}},
-                    "message": "Read the saved records if needed.",
-                },
-                "receipt": "Earlier saved result; inspect it again if needed.",
-            }, ensure_ascii=False)
+            compact = _compact_recoverable_result(value, reader_arguments=reader_arguments, operation=operation)
+            compact["receipt"] = "Earlier saved result; inspect it again if needed."
+            message["content"] = json.dumps(compact, ensure_ascii=False)
     return projected
 
 
@@ -240,15 +553,23 @@ def _compact_text_tool_results(content: str) -> str:
                     "result_id", "revision", "recoverability", "omitted_ids", "coverage"):
             if key in value:
                 receipt[key] = value[key]
-        for key in ("status", "result_id", "revision", "source_coverage", "next_action",
-                    "read_complete", "page_may_have_more", "query_complete", "omitted_ids",
-                    "snapshot_only", "imported_from", "view"):
-            if key in nested_value:
-                receipt[key] = nested_value[key]
+        nested_input = deepcopy(nested_value)
+        if (isinstance(nested_input, dict) and "result_observation" not in nested_input
+                and isinstance(value.get("result_observation"), dict)):
+            nested_input["result_observation"] = value["result_observation"]
+        receipt["result"] = _compact_recoverable_result(
+            nested_input, reader_arguments=value.get("arguments"), operation=tool_name
+        )
+        for key in ("mcp_content", "warnings", "warning"):
+            if key in value:
+                summary = _bounded_distinct_summary(value[key], plain_text_items=key != "mcp_content")
+                if summary is not None:
+                    receipt[key] = summary
         metadata = value.get("_runtime_result")
         if isinstance(metadata, dict):
-            receipt["_runtime_result"] = {key: metadata[key] for key in (
-                "result_id", "revision", "inline_complete", "source_complete") if key in metadata}
+            receipt["_runtime_result"] = _compact_recoverable_result(
+                {"_runtime_result": metadata}, reader_arguments=value.get("arguments"), operation=tool_name
+            ).get("_runtime_result", {})
         if not receipt:
             return match.group(0)
         receipt["receipt"] = "Earlier tool result body omitted from model context; identifiers and explicit omissions retained."
@@ -371,7 +692,6 @@ def bound_document_memory_request(
 def runtime_result_metadata(content: str) -> dict[str, Any]:
     """Extract the runtime-owned receipt envelope from model-visible content."""
     try:
-        import json
         value = json.loads(content)
     except (TypeError, ValueError):
         return {}

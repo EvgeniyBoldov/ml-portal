@@ -228,6 +228,46 @@ whether more output pages exist. Analyzer delegation
 continues through agent needs and planner decisions, not automatic runtime task
 creation.
 
+## Reusing results from an earlier chat run
+
+`result.history(source_run_id, offset?, limit?)` returns a bounded, metadata-only
+catalog for an authorized prior run in the same chat and sandbox branch. The
+source run need not be terminal; paused and failed runs may still have useful
+saved results. The current run cannot be its own history source. The default
+page size is 30 and the maximum is 50. It does not return dataset rows. The
+caller revalidates current chat/branch ownership and the Result Store checks
+current user, tenant and expiry. Each returned entry includes its current
+revision; exact revision validation happens at import. A catalog entry that cannot
+be safely imported is returned with an unavailable reason rather than as an
+importable reference.
+
+`result.import(source_run_id, result_id, revision)` copies that exact immutable
+snapshot into the current run. The import is idempotent for the same source
+identity and revision; its expiry is inherited from the source. The result is
+marked `snapshot_only`, and `result.load` cannot use it to fetch additional
+source pages. It represents historical data and never satisfies a fresh
+retrieval requirement. File-controlled results and results whose source
+lineage cannot be validated are not eligible for import. Import does not
+re-run a provider operation; later reads use `result.read` on the copied
+snapshot. This is cross-run snapshot reuse, not a permission grant: chat
+ownership, branch, user, tenant, expiry and revision checks still apply.
+The source row is locked while the revision is checked and the copy is made.
+The import's file-safety check walks the complete source-result DAG, including
+lineage inherited through earlier imports. It denies forbidden document, file,
+artifact and memory sources and fails closed on missing/corrupt lineage, cycles,
+or traversal-budget exhaustion. The configured defaults are 256 distinct nodes
+and depth 64 (`TOOL_RESULTS_LINEAGE_MAX_NODES` and
+`TOOL_RESULTS_LINEAGE_MAX_DEPTH`). Shared ancestors are visited once.
+
+The exact tool schemas and limits are derived from `HistoryArgs` and
+`ImportArgs` in the runtime workspace tools. `RuntimeResultReuseService` joins
+chat-run ownership with the Result Store checks. Chat context may retain only
+bounded references to verified task datasets; it never stores their payloads
+or uses runtime journal events to reconstruct them. The next run reauthorizes
+those references and projects a bounded prior-result inventory into planner
+inputs. If inventory coverage is partial or unavailable, that state remains
+explicit; an empty list is not used to imply successful historical discovery.
+
 ## MCP failure observations
 
 MCP failure diagnostics use the shared `portal_mcp_contract.MCPFailure` model
@@ -281,6 +321,21 @@ message list and tool/schema options are sent to the provider, recorded in
 input-token estimation.
 The full journal transcript remains available for resume and audit, but is not
 reported as the content sent to the model.
+
+When an older recoverable tool reply is compacted from the model projection,
+the receipt keeps the identity of the page already read (`current_result`),
+including bounded reader arguments and its `result_observation`, separately
+from a future `next_action`. Find and aggregate readers also retain their `q`
+or grouping `columns`. The latter remains the continuation to execute;
+it must not be used to reconstruct the page that produced the current reply.
+Oversized argument values are marked as omitted instead of being silently
+truncated into an executable-looking cursor. Distinct MCP text and warning
+messages may retain up to eight distinct redacted excerpts, each bounded to 320
+characters, with explicit omitted, duplicate and warning counts. The normalized
+MCP envelope retains its original item count and upstream truncation state.
+File/resource bodies are excluded, and the complete tool transcript remains
+available for resume. This projection preserves useful text without copying a
+recoverable dataset payload into the prompt a second time.
 
 Before executing a batch of tool calls, runtime estimates the input room for
 the next model request with `inspect_context`, including current history, the

@@ -19,7 +19,7 @@ from app.runtime.orchestrator_contracts import (
     FreshnessPolicy, ResponseSpec, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
 )
 from app.runtime.interaction import InteractionRequired, RuntimeInteraction, InteractionQuestion, InteractionRequester, interaction_history
-from app.runtime.plan_store import PlanValidationError
+from app.runtime.plan_store import PlanValidationError, StaleTaskClaimError
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
@@ -338,7 +338,7 @@ class GraphOrchestrator:
         self._task_state_lock = asyncio.Lock()
 
     async def _execute_with_heartbeat(
-        self, *, plan_id: UUID, task_id: str, heartbeat_seconds: float, **kwargs: Any,
+        self, *, plan_id: UUID, task_id: str, attempt: int, heartbeat_seconds: float, **kwargs: Any,
     ) -> TaskExecutionReceipt:
         """Keep a claimed task live while an agent waits on an external call."""
         execution_task = asyncio.create_task(self.executor.execute_attempt(**kwargs))
@@ -350,7 +350,7 @@ class GraphOrchestrator:
                     return execution_task.result()
                 if heartbeat is not None:
                     async with self._task_state_lock:
-                        await heartbeat(plan_id, task_id)
+                        await heartbeat(plan_id, task_id, expected_attempt_number=attempt)
         except BaseException:
             if not execution_task.done():
                 execution_task.cancel()
@@ -497,10 +497,32 @@ class GraphOrchestrator:
             return len(json.dumps(value, ensure_ascii=False, default=str))
 
         bounded = compact(ledger)
+        # The canonical planner ledger may keep a large-result pointer under
+        # result.evidence, while generic compaction can replace that mapping
+        # with an omission marker. Preserve the trusted runtime pointer by task
+        # identity before any destructive compaction pass.
+        recovery_refs: dict[str, Dict[str, Any]] = {}
+        original_tasks = ledger.get("tasks", [])
+        if isinstance(original_tasks, list):
+            for original_task in original_tasks:
+                if not isinstance(original_task, dict) or not original_task.get("task_id"):
+                    continue
+                original_result = original_task.get("result") if isinstance(original_task.get("result"), dict) else {}
+                original_evidence = original_result.get("evidence") if isinstance(original_result.get("evidence"), dict) else {}
+                original_verified = original_result.get("verified") if isinstance(original_result.get("verified"), dict) else {}
+                result_ref = (original_evidence.get("task_result_ref")
+                              or original_verified.get("task_result_ref")
+                              or original_result.get("task_result_ref"))
+                if isinstance(result_ref, dict) and result_ref.get("status") == "available" and result_ref.get("result_id"):
+                    recovery_refs[str(original_task["task_id"])] = result_ref
         for task in bounded.get("tasks", []):
             if not isinstance(task, dict):
                 continue
             result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            task_id = str(task.get("task_id") or "")
+            if task_id in recovery_refs:
+                evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+                result["evidence"] = {**evidence, "task_result_ref": recovery_refs[task_id]}
             rendered = json.dumps(result, ensure_ascii=False, default=str)
             if '"_omitted": true' not in rendered:
                 continue
@@ -540,9 +562,14 @@ class GraphOrchestrator:
                 key: result[key] for key in ("reason_code", "answer", "limitation", "completion")
                 if result.get(key) is not None
             }
+            evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
             verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
-            if isinstance(verified.get("task_result_ref"), dict):
-                result_summary["task_result_ref"] = verified["task_result_ref"]
+            result_ref = (evidence.get("task_result_ref") or verified.get("task_result_ref")
+                          or result.get("task_result_ref"))
+            task_manifest = task.get("omission_manifest") if isinstance(task.get("omission_manifest"), dict) else {}
+            result_ref = result_ref or task_manifest.get("result_ref")
+            if isinstance(result_ref, dict) and result_ref.get("status") == "available" and result_ref.get("result_id"):
+                result_summary["task_result_ref"] = result_ref
             minimal_tasks.append({
                 key: task[key] for key in ("task_id", "status", "attempts", *( ("iteration_id",) if len(iteration_ids) > 1 else () ))
                 if key in task
@@ -842,10 +869,11 @@ class GraphOrchestrator:
                   planner_kwargs: Optional[Dict[str, Any]] = None) -> AsyncIterator[OrchestratorEvent]:
         planner_kwargs = dict(planner_kwargs or {})
         artifacts = list(available_artifacts or [])
-        async def pause_user(interaction: RuntimeInteraction, task_id: str | None = None) -> OrchestratorEvent:
+        async def pause_user(interaction: RuntimeInteraction, task_id: str | None = None,
+                             expected_attempt_number: int | None = None) -> OrchestratorEvent:
             requester = interaction.requester.model_copy(update={"plan_id": str(plan_id), "task_id": task_id})
             interaction = interaction.model_copy(update={"requester": requester})
-            await self.store.pause_interaction(plan_id, interaction)
+            await self.store.pause_interaction(plan_id, interaction, expected_attempt_number=expected_attempt_number)
             event_type = (RuntimeEventType.CONFIRMATION_REQUIRED if interaction.reason == "waiting_confirmation"
                           else RuntimeEventType.WAITING_INPUT)
             return OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent(event_type, {
@@ -1152,7 +1180,14 @@ class GraphOrchestrator:
                     "agent_execution_id": execution_id,
                     "step_id": current_step_id,
                 }
-                await self.store.link_attempt_execution(plan_id, task_id, UUID(execution_id))
+                try:
+                    await self.store.link_attempt_execution(
+                        plan_id, task_id, UUID(execution_id), expected_attempt_number=attempt,
+                    )
+                except StaleTaskClaimError:
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                            status="waiting_retry", reason="task_claim_superseded")
+                    return
                 yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.step_start(
                     step_id=current_step_id, iteration_id=iteration_id, kind="agent_task",
                     title=(task.intent if hasattr(task, "intent") else task.get("intent")),
@@ -1177,7 +1212,9 @@ class GraphOrchestrator:
                     attempt=attempt,
                 ))
                 try:
-                    request = TaskRequest.model_validate(await self.store.task_request(plan_id, task_id))
+                    request = TaskRequest.model_validate(await self.store.task_request(
+                        plan_id, task_id, expected_attempt_number=attempt,
+                    ))
                     plan_snapshot = await self.store.snapshot(plan_id)
                     context_items = list(plan_snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or [])
                     request = request.model_copy(update={
@@ -1192,13 +1229,19 @@ class GraphOrchestrator:
                     task_kwargs = dict(planner_kwargs)
                     async def persist_task_memory(context: list[dict[str, Any]]) -> None:
                         async with self._task_state_lock:
-                            await self.store.update_task_memory(plan_id, task_id, context)
+                            await self.store.update_task_memory(
+                                plan_id, task_id, context, expected_attempt_number=attempt,
+                            )
                     task_kwargs["memory_persist"] = persist_task_memory
                     task_ctx = task_kwargs.get("ctx")
                     if task_ctx is not None and hasattr(task_ctx, "with_extra"):
                         task_scope_context = dict(request.scope_context or {})
                         selected = task_scope_context.get("selected") or []
                         task_kwargs["ctx"] = task_ctx.with_extra(
+                            runtime_root_run_id=str(plan_snapshot.get("root_run_id") or ""),
+                            runtime_plan_id=str(plan_id),
+                            runtime_task_id=str(task_id),
+                            runtime_task_attempt_number=int(attempt),
                             project_context={"effective_scope_keys": [row.get("key") for row in selected],
                                              "effective_project_keys": [], "effective_team_keys": [],
                                              "scope_ceiling_keys": [row.get("key") for row in selected],
@@ -1211,6 +1254,7 @@ class GraphOrchestrator:
                     execution = await self._execute_with_heartbeat(
                         plan_id=plan_id,
                         task_id=task_id,
+                        attempt=attempt,
                         heartbeat_seconds=max(5.0, min(30.0, lease_seconds / 3)),
                         request=request,
                         lifecycle_agent_execution_id=execution_id,
@@ -1220,7 +1264,10 @@ class GraphOrchestrator:
                     if not isinstance(execution, TaskExecutionReceipt):
                         raise TypeError("executor must return TaskExecutionReceipt")
                     result = self.reducer.reduce(request=request, declaration=execution.declaration, verified=execution.verified)
-                    await self.store.finish_attempt(plan_id, task_id, execution=execution, result=result)
+                    await self.store.finish_attempt(
+                        plan_id, task_id, expected_attempt_number=attempt,
+                        execution=execution, result=result,
+                    )
                     runtime_state = planner_kwargs.get("runtime_state")
                     if runtime_state is not None and hasattr(runtime_state, "add_task_result"):
                         runtime_state.add_task_result({
@@ -1268,7 +1315,12 @@ class GraphOrchestrator:
                     try:
                         await self.store.finish_failure(
                             plan_id, task_id, failure, max_attempts=self.max_attempts,
+                            expected_attempt_number=attempt,
                         )
+                    except StaleTaskClaimError:
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                                status="waiting_retry", reason="task_claim_superseded")
+                        return
                     except Exception:
                         logger.exception(
                             "runtime_task_cancel_persist_failed plan_id=%s task_id=%s",
@@ -1303,7 +1355,12 @@ class GraphOrchestrator:
                         InteractionQuestion(question=str(exc.payload.get("question") or exc.payload.get("summary") or "Подтвердите действие"), response_type="boolean"),
                         InteractionRequester(stage="agent", entity_id=execution_id, task_id=task_id, agent_slug=task_executor),
                         operation=exc.payload)
-                    interaction_event = await pause_user(interaction, task_id)
+                    try:
+                        interaction_event = await pause_user(interaction, task_id, attempt)
+                    except StaleTaskClaimError:
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                                status="waiting_retry", reason="task_claim_superseded")
+                        return
                     yield OrchestratorEvent(type="task_paused", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,
@@ -1365,7 +1422,16 @@ class GraphOrchestrator:
                                                              if completed_task_calls else {})})
                     retry_after_ms = exc.details.get("retry_after_ms") if isinstance(exc.details, dict) else None
                     retry_delay = max(0, int(retry_after_ms) / 1000) if isinstance(retry_after_ms, int) else self.retry_delay_seconds
-                    failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts, retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay))
+                    try:
+                        failed_task = await self.store.finish_failure(
+                            plan_id, task_id, failure, max_attempts=self.max_attempts,
+                            expected_attempt_number=attempt,
+                            retry_at=datetime.now(timezone.utc) + timedelta(seconds=retry_delay),
+                        )
+                    except StaleTaskClaimError:
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                                status="waiting_retry", reason="task_claim_superseded")
+                        return
                     yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"), **trace_links)
                     failed_status = failed_task.status if hasattr(failed_task, "status") else failed_task.get("status")
                     yield OrchestratorEvent(type=("task_retry_scheduled" if failed_status == "waiting_retry" else "task_failed"), plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
@@ -1388,9 +1454,23 @@ class GraphOrchestrator:
                         plan_id=str(plan_id), task_id=task_id, task_entity_id=task_entity_id,
                         attempt=attempt, attempt_id=current_attempt_id, agent_execution_id=execution_id,
                     ))
+                except StaleTaskClaimError:
+                    # Another worker reclaimed or completed this task. This
+                    # execution no longer owns any lifecycle transition.
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                            status="waiting_retry", reason="task_claim_superseded")
+                    return
                 except Exception as exc:
                     failure = TaskAttemptFailure(code=type(exc).__name__, message=str(exc) or "task execution failed", retryable=False)
-                    failed_task = await self.store.finish_failure(plan_id, task_id, failure, max_attempts=self.max_attempts)
+                    try:
+                        failed_task = await self.store.finish_failure(
+                            plan_id, task_id, failure, max_attempts=self.max_attempts,
+                            expected_attempt_number=attempt,
+                        )
+                    except StaleTaskClaimError:
+                        yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id),
+                                                status="waiting_retry", reason="task_claim_superseded")
+                        return
                     yield OrchestratorEvent(type="task_attempt_failed", plan_id=str(plan_id), task_id=task_id, attempt=(failed_task.attempts if hasattr(failed_task, "attempts") else failed_task.get("attempts")), error=failure.model_dump(mode="json"), **trace_links)
                     yield OrchestratorEvent(type="task_failed", plan_id=str(plan_id), task_id=task_id, attempt=attempt, **trace_links)
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(

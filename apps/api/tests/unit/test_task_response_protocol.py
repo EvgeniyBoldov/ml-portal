@@ -57,11 +57,11 @@ def test_legacy_result_is_adapted_without_normalizing_values():
 
 def finish(store, plan_id, task_id, payload):
     from app.runtime.orchestrator_contracts import TaskExecutionReceipt
-    store.claim_task(plan_id, task_id)
-    request = TaskRequest.model_validate(store.task_request(plan_id, task_id))
+    claim = store.claim_task(plan_id, task_id)
+    request = TaskRequest.model_validate(store.task_request(plan_id, task_id, expected_attempt_number=claim["attempts"]))
     declaration = TaskCompletionDeclaration.model_validate(payload)
     result = TaskAttemptResultReducer().reduce(request=request, declaration=declaration, verified={})
-    store.finish_attempt(plan_id, task_id, execution=TaskExecutionReceipt(declaration=declaration), result=result)
+    store.finish_attempt(plan_id, task_id, expected_attempt_number=claim["attempts"], execution=TaskExecutionReceipt(declaration=declaration), result=result)
 
 
 def handoff_plan(selector):
@@ -92,8 +92,8 @@ def handoff_plan(selector):
 def test_prior_completed_result_handoff_preserves_schema_deviation_and_null():
     store, plan = handoff_plan("/structured_response/rows")
     assert store.next_decision(plan["id"]).task_id == "consumer"
-    store.claim_task(plan["id"], "consumer")
-    request = store.task_request(plan["id"], "consumer")
+    consumer_claim = store.claim_task(plan["id"], "consumer")
+    request = store.task_request(plan["id"], "consumer", expected_attempt_number=consumer_claim["attempts"])
     assert request["inputs"]["rows"] == [None]
     assert request["dependency_outputs"] == {}
     assert plan["tasks"]["source"]["result"]["diagnostics"]

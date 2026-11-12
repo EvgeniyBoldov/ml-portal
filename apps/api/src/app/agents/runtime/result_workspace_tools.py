@@ -85,7 +85,7 @@ class FindArgs(DescribeArgs):
 
 
 WORKSPACE_TOOLS = {
-    "result.history": (HistoryArgs, "List metadata-only saved snapshots from a completed run in this chat. Pages are bounded; this does not read dataset contents. These are historical snapshots, not current external state."),
+    "result.history": (HistoryArgs, "List metadata-only saved snapshots from an authorized prior run in this chat, including paused or failed runs. Pages are bounded; this does not read dataset contents. These are historical snapshots, not current external state."),
     "result.import": (ImportArgs, "Copy one exact revision of an authorized prior-run snapshot into this run without rerunning its source. Imported snapshots are historical and snapshot-only; they do not satisfy fresh retrieval."),
     "result.describe": (SchemaArgs, "Read the actual SQL column schema of a saved dataset, revision and source state. Use exact sql_columns names in result.sql or result.read. Continue with next_schema_offset or query to find a field."),
     "result.read": (ReadArgs, "Read a bounded page of saved records. This does not fetch from the source. Use next_offset and revision to continue; select fields for large records."),

@@ -48,6 +48,38 @@ class ToolCallReusePolicy:
                     reused_from_call_id=prior.call_id,
                 ), []
 
+        # A completed write receipt is reusable only within the same logical
+        # task execution (not as a read cache across arbitrary calls/tasks).
+        receipt = (ledger.find_successful_execution_receipt(
+            operation=operation_slug, arguments=arguments or {},
+            execution_id=execution_id, target_identity=target_identity,
+            exclude_call_id=str(ctx.extra.get("runtime_active_tool_call_id") or "") or None,
+        ) if execution_id and hasattr(ledger, "find_successful_execution_receipt") else None)
+        if receipt is not None:
+            if not receipt.result_data_available and not receipt.stored_result_id:
+                return ToolResult.fail(
+                    "This operation already succeeded, but its result is unavailable; it was not repeated.",
+                    error_code="duplicate_result_unavailable", retryable=False,
+                    reused_from_call_id=receipt.call_id,
+                ), []
+            recovered = ToolResult.ok(
+                receipt.result_data, delivery=receipt.result_delivery,
+                reused=True, reused_from_call_id=receipt.call_id,
+            )
+            if receipt.stored_result_id:
+                recovered.metadata["stored_result"] = {
+                    **(receipt.result_data if isinstance(receipt.result_data, dict) else {}),
+                    "result_id": receipt.stored_result_id, "inline_complete": False,
+                }
+                if receipt.result_delivery == "direct" and not receipt.result_data_available:
+                    observation = receipt.result_observation or {}
+                    recovered.metadata["direct_recovery"] = {
+                        "result_id": receipt.stored_result_id,
+                        "revision": observation.get("revision") or 1,
+                        "reason": observation.get("recovery_reason") or "batch_context_budget",
+                    }
+            return recovered, [dict(source) for source in (receipt.sources or []) if isinstance(source, dict)]
+
         reused = ledger.find_successful_result(
             operation=operation_slug,
             arguments=arguments or {},

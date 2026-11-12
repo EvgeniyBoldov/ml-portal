@@ -25,11 +25,21 @@ def test_graph_planner_input_builder_uses_the_current_ledger_payload():
 
     assert set(payload) == {
         "goal", "trigger", "execution_ledger", "datastore", "memory_context", "task_brief",
-        "available_agents", "scope_context",
+        "available_agents", "scope_context", "prior_result_inventory",
     }
     assert payload["trigger"] == "task_outcome"
     assert payload["execution_ledger"]["tasks"][0]["task_id"] == "inspect"
     assert payload["scope_context"] == {}
+    assert payload["prior_result_inventory"] == {}
+
+
+def test_graph_planner_input_builder_preserves_content_free_prior_result_inventory():
+    prior = {"source_run_id": "prior-run", "items": [{"result_id": "prior-result",
+        "revision": 3, "row_count": 2, "importable": True}], "catalog_complete": True}
+    payload = PlannerInputBuilder().build_graph_request(_request(prior_result_inventory=prior))
+
+    assert payload["prior_result_inventory"] == prior
+    assert "payload" not in json.dumps(payload["prior_result_inventory"])
 
 
 def test_planner_receives_current_scope_context():

@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     TOOL_RESULTS_SQL_TIMEOUT_SECONDS: int = Field(default=10, ge=1, le=60)
     TOOL_RESULTS_CONTEXT_TOKENS: int = Field(default=1200, ge=128, le=8192)
     TOOL_RESULTS_SQL_MAX_ROWS: int = Field(default=100000, ge=1, le=1000000)
+    TOOL_RESULTS_LINEAGE_MAX_NODES: int = Field(default=256, ge=51, le=2048)
+    TOOL_RESULTS_LINEAGE_MAX_DEPTH: int = Field(default=64, ge=1, le=256)
     TOOL_RESULTS_READ_MAX_ROWS: int = Field(default=100, ge=1, le=1000)
     TOOL_RESULTS_LOAD_MAX_PAGES: int = Field(default=20, ge=1, le=100)
     TOOL_RESULTS_LOAD_TIMEOUT_SECONDS: int = Field(default=30, ge=1, le=120)

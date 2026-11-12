@@ -233,19 +233,21 @@ def test_verified_receipt_must_match_the_declared_operation() -> None:
 def test_binding_injects_the_schema_validated_value_not_its_storage_wrapper() -> None:
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
+    plan["status"] = "active"
     plan["tasks"] = {
         "producer": {"result": {"outputs": {"value": {"id": 7}}}},
         "consumer": {
             "task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use",
-            "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running",
+            "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running", "attempts": 1,
         },
     }
     plan["bindings"] = [{
         "producer_task_id": "producer", "output_key": "value",
         "consumer_task_id": "consumer", "consumer_input_key": "resolved",
     }]
+    plan["attempts"]["consumer"] = [{"attempt_number": 1, "status": "running"}]
 
-    assert store.task_request(plan["id"], "consumer")["inputs"]["resolved"] == {"id": 7}
+    assert store.task_request(plan["id"], "consumer", expected_attempt_number=1)["inputs"]["resolved"] == {"id": 7}
 
 
 def test_needs_continuation_has_typed_state_separate_from_interaction_resume() -> None:
@@ -328,13 +330,15 @@ def test_binding_schema_is_validated_against_the_actual_value_at_handoff() -> No
 
     store = InMemoryPlanStore()
     plan = store.create(goal="g", root_run_id="run", tenant_id="tenant")
+    plan["status"] = "active"
     plan["tasks"] = {
         "producer": {"result": {"outputs": {"value": "not-an-integer"}}},
-        "consumer": {"task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use", "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running"},
+        "consumer": {"task_id": "consumer", "executor": "research", "intent": "use", "instructions": "use", "inputs": {}, "depends_on": ["producer"], "expected_outputs": [], "freshness_policy": "allow_memory", "status": "running", "attempts": 1},
     }
     plan["needs"] = [{"task_id": "old", "ref": "missing", "schema": {"type": "integer"}}]
     plan["bindings"] = [{"need_task_id": "old", "need_ref": "missing", "producer_task_id": "producer", "output_key": "value", "consumer_task_id": "consumer", "consumer_input_key": "value"}]
-    assert store.task_request(plan["id"], "consumer")["inputs"]["value"] == "not-an-integer"
+    plan["attempts"]["consumer"] = [{"attempt_number": 1, "status": "running"}]
+    assert store.task_request(plan["id"], "consumer", expected_attempt_number=1)["inputs"]["value"] == "not-an-integer"
 
 
 def test_completed_task_resolution_is_ignored_when_planner_moves_to_synthesis() -> None:

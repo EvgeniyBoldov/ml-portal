@@ -57,11 +57,11 @@ async def test_response_spec_and_schema_deviations_survive_sql_session(protocol_
                 "contract_id": "read", "version": 1, "description": "Read",
                 "input_schema": {"required": ["missing_input"]}}]}], {"tasks": [], "needs": []})
         await store.apply_iteration(plan_id, proposal)
-        await store.claim_task(plan_id, "a")
-        request = TaskRequest.model_validate(await store.task_request(plan_id, "a"))
+        claim = await store.claim_task(plan_id, "a")
+        request = TaskRequest.model_validate(await store.task_request(plan_id, "a", expected_attempt_number=claim.attempts))
         declaration = TaskCompletionDeclaration(completion="fulfilled", structured_response={"ip": None, "rows": []})
         result = TaskAttemptResultReducer().reduce(request=request, declaration=declaration, verified={})
-        await store.finish_attempt(plan_id, "a", execution=TaskExecutionReceipt(declaration=declaration), result=result)
+        await store.finish_attempt(plan_id, "a", expected_attempt_number=claim.attempts, execution=TaskExecutionReceipt(declaration=declaration), result=result)
     async with AsyncSession(protocol_pg, expire_on_commit=False) as session:
         store = SqlPlanStore(session)
         snapshot = await store.snapshot(plan_id)

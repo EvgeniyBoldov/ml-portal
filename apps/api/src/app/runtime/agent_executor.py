@@ -514,6 +514,24 @@ class AgentExecutor:
             ctx.extra["lifecycle_agent_execution_id"] = lifecycle_agent_execution_id
         ctx.extra["runtime_tool_ledger"] = state.tool_ledger
         ctx.extra["runtime_task_id"] = task.task_id
+        root_run_id = ctx.extra.get("runtime_root_run_id")
+        if root_run_id:
+            from uuid import UUID
+            from app.services.runtime_execution_guard_service import RuntimeExecutionGuardService
+
+            ctx.extra["runtime_execution_guard_required"] = True
+            session_factory = deps.session_factory
+            attempt_number = ctx.extra.get("runtime_task_attempt_number")
+            if session_factory is not None and isinstance(attempt_number, int) and attempt_number > 0:
+                try:
+                    ctx.extra["runtime_execution_guard_service"] = RuntimeExecutionGuardService(
+                        session_factory, root_run_id=UUID(str(root_run_id)), task_id=task.task_id,
+                        expected_attempt_number=attempt_number,
+                    )
+                except (TypeError, ValueError):
+                    # A malformed persisted-plan identity must fail closed in
+                    # the facade before it calls an operation provider.
+                    ctx.extra.pop("runtime_execution_guard_service", None)
         ctx.extra["runtime_task_tool_calls_used"] = max(runtime_state.task_tool_calls_used(task.task_id),
             sum(1 for entry in (task.resume_checkpoint.get("tool_ledger") or {}).get("entries", [])
                 if entry.get("phase_id") == task.task_id))
@@ -954,8 +972,8 @@ class AgentExecutor:
             raise
         finally:
             try:
-                if (logger is not root_logger and logger is not None and lifecycle_agent_execution_id
-                        and not is_chat
+                if (logger is not None and lifecycle_agent_execution_id
+                        and (logger is not root_logger or is_chat)
                         and not ctx.extra.get("shadow_execution")):
                     parent_type = str((runtime_log_parent or {}).get("entity_type") or "step")
                     parent_id = str((runtime_log_parent or {}).get("entity_id") or "") or None

@@ -91,7 +91,8 @@ def test_reuse_keeps_dataset_identity_instead_of_treating_descriptor_as_source_j
     from app.runtime.memory.tool_ledger import ToolLedger
     result_id = str(uuid4())
     ledger = ToolLedger()
-    ledger.register_call(operation="source", call_id="first", arguments={}, iteration=1, agent_slug="a", phase_id="execution")
+    ledger.register_call(operation="source", call_id="first", arguments={}, iteration=1, agent_slug="a", phase_id="execution",
+        operation_side_effects=False, risk_level="safe")
     ledger.set_call_target(call_id="first", target_identity="", execution_id="execution")
     ledger.register_result(call_id="first", success=True, data={"row_count": 50}, result_id=result_id)
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4(), extra={"runtime_tool_ledger": ledger,
@@ -261,7 +262,7 @@ def test_workspace_read_preserves_scalar_values(value):
     view = json.loads(rendered)
     assert view["records"] == value
     assert view["next_action"]["arguments"] == {
-        "result_id": "r1", "revision": 4, "offset": 1, "limit": 10, "fields": []
+        "result_id": "r1", "revision": 4, "offset": 1, "limit": 10, "fields": [], "view": "auto"
     }
 
 

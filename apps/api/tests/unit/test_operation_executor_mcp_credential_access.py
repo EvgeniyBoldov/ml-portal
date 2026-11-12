@@ -1,15 +1,74 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import pytest
+
 from app.agents.context import RuntimeDependencies, ToolContext
-from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget
+from app.agents.contracts import OperationCredentialContext, ProviderExecutionTarget, ResolvedOperation
 from app.agents.operation_executor import DirectOperationExecutor
+from app.agents.runtime.tools import OperationExecutionFacade
+from app.agents.context import ToolCall
 from app.agents.runtime_graph import (
     OperationExecutionBinding,
     OperationRuntimeContext,
     RuntimeExecutionGraph,
 )
+
+
+@pytest.mark.asyncio
+async def test_missing_credentials_fail_before_guard_admission_or_provider_dispatch():
+    operation_slug = "jira.update_issue"
+    target = ProviderExecutionTarget(
+        operation_slug=operation_slug,
+        provider_type="mcp",
+        provider_instance_id=str(uuid4()),
+        provider_instance_slug="jira-mcp",
+        provider_url="http://jira-mcp:8080/mcp",
+        data_instance_id=str(uuid4()),
+        data_instance_slug="jira-prod",
+        mcp_tool_name="update_issue",
+        credential_policy="user_only",
+    )
+    binding = OperationExecutionBinding(
+        operation_slug=operation_slug,
+        target=target,
+        context=OperationRuntimeContext(
+            instance_id=str(uuid4()), instance_slug="jira-prod",
+            provider_instance_id=target.provider_instance_id,
+            provider_instance_slug="jira-mcp", has_credentials=False,
+            credential_scope="user", config={}, provider_config={}, domain="jira",
+            data_instance_url=None, provider_url=target.provider_url,
+        ),
+        credential=None,
+    )
+    guard = SimpleNamespace(admit=AsyncMock(return_value="must-not-admit"), complete=AsyncMock())
+    ctx = ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={
+        "runtime_execution_guard_required": True,
+        "runtime_execution_guard_service": guard,
+    })
+    ctx.set_runtime_deps(RuntimeDependencies(
+        operation_executor=DirectOperationExecutor(),
+        execution_graph=RuntimeExecutionGraph(bindings={operation_slug: binding}),
+    ))
+    operation = ResolvedOperation(
+        operation_slug=operation_slug, operation="jira.update_issue", name="Update issue",
+        source="mcp", scope="system", data_instance_id=target.data_instance_id,
+        data_instance_slug=target.data_instance_slug, side_effects=True, idempotent=False,
+        risk_level="write", target=target,
+    )
+
+    result, _ = await OperationExecutionFacade().execute(
+        ToolCall(id="call-1", tool_name=operation_slug, arguments={"key": "OPS-1"}),
+        ctx, [operation],
+    )
+
+    assert result.success is False
+    assert result.metadata["error_code"] == "credential_missing"
+    guard.admit.assert_not_awaited()
+    guard.complete.assert_not_awaited()
 
 
 def test_mcp_jsonrpc_error_is_not_converted_to_an_empty_success_result():
@@ -94,7 +153,8 @@ def test_merge_mcp_args_injects_credential_access_context_when_broker_enabled():
     assert "raw-secret" not in str(merged)
 
 
-def test_merge_mcp_args_rejects_raw_credentials_when_broker_required():
+@pytest.mark.asyncio
+async def test_merge_mcp_args_rejects_raw_credentials_when_broker_required(caplog):
     operation_slug = "netbox.get_device"
     target = ProviderExecutionTarget(
         operation_slug=operation_slug,
@@ -143,7 +203,17 @@ def test_merge_mcp_args_rejects_raw_credentials_when_broker_required():
         executor._merge_mcp_args(target, {"name": "sw01"}, ctx, binding=binding)
         raise AssertionError("Expected broker-required guard to reject raw credential fallback")
     except ValueError as exc:
-        assert "broker is required" in str(exc).lower()
+        assert str(exc) == (
+            "MCP credential_access could not be issued and raw credential fallback is disabled"
+        )
+
+    result = await executor.execute(
+        ToolCall(id="call-broker-required", tool_name=operation_slug, arguments={"name": "sw01"}),
+        ctx,
+    )
+    assert result.success is False
+    assert "stage=credential_argument_build" in caplog.text
+    assert "failure_reason=broker_access_not_issued" in caplog.text
 
 
 def test_merge_mcp_args_allows_raw_credentials_when_fallback_enabled():
@@ -207,6 +277,7 @@ def test_merge_mcp_args_requires_and_preserves_bound_collection_slug():
         data_instance_id=str(uuid4()),
         data_instance_slug="docs",
         mcp_tool_name="document_search",
+        credential_policy="not_required",
     )
     collection_id = str(uuid4())
     ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())

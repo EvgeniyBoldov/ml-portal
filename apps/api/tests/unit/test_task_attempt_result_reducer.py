@@ -74,17 +74,28 @@ def test_each_required_artifact_needs_a_matching_file():
         ],
         verified={"artifacts": [{"artifact_id": "note", "file_name": "note.txt"}]},
     )
-    assert result.output_states["report_pdf"]["status"] == "missing"
-    assert result.output_states["table_csv"]["status"] == "missing"
-    assert result.reason_code == "required_artifact_missing"
+    assert result.output_states["report_pdf"]["status"] == "unbound"
+    assert result.output_states["table_csv"]["status"] == "unbound"
+    assert result.outcome.value == "completed"
+    assert result.reason_code is None
 
 
-def test_artifact_filename_can_match_its_expected_output_key():
+def test_explicit_artifact_output_key_fulfils_expected_output():
     result = reduce(
         {"completion": "fulfilled"},
         expected_outputs=[
             {"key": "report_pdf", "description": "Report", "fulfillment": "artifact", "required": True},
         ],
-        verified={"artifacts": [{"artifact_id": "report", "file_name": "report.pdf"}]},
+        verified={"artifacts": [{"artifact_id": "report", "file_name": "report.pdf",
+                                  "output_key": "report_pdf"}]},
     )
     assert result.output_states["report_pdf"]["status"] == "fulfilled"
+
+
+def test_missing_required_artifact_still_blocks_completion():
+    result = reduce({"completion": "fulfilled", "answer": "Report is ready"}, expected_outputs=[{
+        "key": "report_pdf", "description": "Report", "fulfillment": "artifact", "required": True,
+    }])
+    assert result.output_states["report_pdf"]["status"] == "missing"
+    assert result.outcome.value == "unfulfillable"
+    assert result.reason_code == "required_artifact_missing"

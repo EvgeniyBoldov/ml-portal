@@ -113,13 +113,20 @@ async def test_nullable_migration_append_coverage_and_nested_reader(isolated_res
     next_text = await workspace.read(**next_text_args, **scope)
     assert next_text["value"] == ["fgh"]
 
-    child_read = await workspace.read(result_id=first["result_id"], path="/nested",
+    auto_read = await workspace.read(result_id=first["result_id"], path="/nested", limit=1, **scope)
+    assert auto_read["view"] == "auto"
+    assert auto_read["value"] == [{"text": "abcdefghijk", "second": 1, "third": 2}]
+    auto_view = json_module.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(auto_read, workspace_view=True), operation_slug="result.read"))
+    assert auto_view["records"] == auto_read["value"]
+
+    child_read = await workspace.read(result_id=first["result_id"], path="/nested", view="children",
         child_offset=0, child_limit=1, limit=1, **scope)
     child_view = json_module.loads(OperationExecutionFacade.format_result_for_context(
         ToolResult.ok(child_read, workspace_view=True), operation_slug="result.read"))
     assert child_view["read_complete"] is False
     next_child_args = child_view["next_action"]["arguments"]
-    assert next_child_args["child_offset"] == 1
+    assert next_child_args["child_offset"] == 1 and next_child_args["view"] == "children"
     next_child = await workspace.read(**next_child_args, **scope)
     assert next_child["value"][0]["children"][0]["key"] == "text"
 

@@ -82,6 +82,26 @@ request bodies are scrubbed and are not replayed as authorization: the operation
 must be freshly authorized before dispatch. A malformed persisted write-guard
 checkpoint fails before another operation is sent.
 
+For a persisted task, dispatch of a non-cacheable operation is admitted in a
+short transaction against the active plan, running task and expected attempt.
+The versioned guard stores a fingerprint and outcome only. The operation
+executor calls the admission hook after target/credential resolution and MCP
+initialization, immediately before sending the provider operation. A crash after
+admission leaves an unknown outcome, which blocks a matching retry; a completed
+matching operation also cannot be dispatched again. Guard lookup follows the
+task's `continuation_of` chain across attempts and pause/resume, without sharing
+guards between sibling tasks. Only operations explicitly marked
+`side_effects=false` with `risk_level=safe` bypass this durable guard.
+
+The same worker claim fences lifecycle store access: each task request, memory
+write, heartbeat, pause/confirmation, execution link, and attempt completion or
+failure carries its expected attempt number. The SQL store locks and refreshes
+the plan, task and exact attempt and checks that the plan is active and task and
+attempt are running. The in-memory store applies the equivalent state check.
+Missing or superseded claims fail closed. The orchestrator treats a stale claim
+as a benign retry handoff instead of recording failure against a task another
+worker now owns.
+
 ## Persistence and transport
 
 Plan and task interactions use `runtime_pauses.payload`. Task status is

@@ -70,12 +70,12 @@ def interrupted_task():
         scope_context={"selected": [{"key": "company"}], "ceiling_keys": ["company"]})
     proposal = IterationProposal(tasks=[PlannedTask(task_id="original", executor="research", intent="work", instructions="work")], terminal="planner")
     store.apply_iteration(plan["id"], proposal)
-    store.claim_task(plan["id"], "original")
-    store.update_task_memory(plan["id"], "original", accumulate_document_memory([], search("task detail")))
+    original_claim = store.claim_task(plan["id"], "original")
+    store.update_task_memory(plan["id"], "original", accumulate_document_memory([], search("task detail")), expected_attempt_number=original_claim["attempts"])
     execution = TaskExecutionReceipt(declaration=TaskCompletionDeclaration(completion="needs", report="need input",
         needs=[{"ref": "inventory", "key": "inventory", "description": "Read inventory"}]))
     result = TaskResult(outcome="needs_dependency", description="need input", needs=execution.declaration.needs)
-    store.finish_attempt(plan["id"], "original", execution=execution, result=result)
+    store.finish_attempt(plan["id"], "original", expected_attempt_number=original_claim["attempts"], execution=execution, result=result)
     store.claim_checkpoint(plan["id"], SchedulerActionKind.INVOKE_PLANNER)
     return store, plan
 
@@ -91,12 +91,12 @@ def test_only_explicit_continuation_restores_task_memory():
     assert plan["tasks"]["helper"]["memory_context"] == []
     assert passages(plan["tasks"]["original"]["memory_context"])[0]["text"] == "task detail"
     assert passages(plan["tasks"]["continued"]["memory_context"])[0]["text"] == "task detail"
-    store.claim_task(plan["id"], "helper")
     helper = TaskExecutionReceipt(declaration=TaskCompletionDeclaration(completion="fulfilled", report="done"))
-    store.finish_attempt(plan["id"], "helper", execution=helper, result=TaskResult(outcome="completed", description="done"))
-    store.claim_task(plan["id"], "continued")
-    restored = store.task_request(plan["id"], "continued")["memory_context"]
-    store.update_task_memory(plan["id"], "continued", accumulate_document_memory(restored, search("new detail")))
+    helper_claim = store.claim_task(plan["id"], "helper")
+    store.finish_attempt(plan["id"], "helper", expected_attempt_number=helper_claim["attempts"], execution=helper, result=TaskResult(outcome="completed", description="done"))
+    continued_claim = store.claim_task(plan["id"], "continued")
+    restored = store.task_request(plan["id"], "continued", expected_attempt_number=continued_claim["attempts"])["memory_context"]
+    store.update_task_memory(plan["id"], "continued", accumulate_document_memory(restored, search("new detail")), expected_attempt_number=continued_claim["attempts"])
     assert len(passages(plan["tasks"]["continued"]["memory_context"])) == 2
     assert len(passages(plan["tasks"]["original"]["memory_context"])) == 1
 
@@ -140,7 +140,15 @@ async def test_planner_searches_update_persisted_owner_snapshot_and_next_prompt(
     assert "first" not in str(inputs[2]["memory_tool_results"])
     assert len(persisted) == 2
     assert [item["text"] for item in passages(events[-1].data["memory_context"])] == ["first", "second"]
-    assert all(event.data["memory_owner"] == "planner" for event in events)
+    memory_snapshots = [
+        event for event in events
+        if event.type.value == "status" and event.data.get("stage") == "memory_context_used"
+    ]
+    assert len(memory_snapshots) == 3
+    assert {event.data["reason"] for event in memory_snapshots} == {
+        "iteration_started", "search_completed"
+    }
+    assert all(event.data["memory_owner"] == "planner" for event in memory_snapshots)
 
 
 @pytest.mark.asyncio
@@ -159,14 +167,21 @@ async def test_agent_logs_complete_tool_response_and_owner_snapshot_without_repe
         agent_slug="research", agent_execution_id="execution-1", llm_call_id="llm-1", ctx=ctx,
         available_operations=[], policy=SimpleNamespace(max_tool_calls_total=10, tool_timeout_ms=1000),
         run_session=session, all_operation_outputs=outputs, all_sources=[], loop_state=AgentLoopState(),
-        operation_results_for_context=messages, operation_calls_total_ref=[0], remaining_wall_time_ms=10_000)]
+        operation_results_for_context=messages, operation_calls_total_ref=[0],
+        result_context_budget_tokens=256, result_context_model="gpt-4o-mini",
+        remaining_wall_time_ms=10_000)]
     response = next(event for event in events if event.type.value == "tool_result")
     snapshot = next(event for event in events if event.data.get("stage") == "memory_context_used")
     assert response.data["data"]["groups"][0]["items"][1]["text"] == raw["groups"][0]["items"][1]["text"]
+    assert response.data["data"] == raw
     assert len(passages(snapshot.data["memory_context"])) == 2
     assert snapshot.data["memory_owner_id"] == "task-1"
     assert "previous finding" not in messages[0][1]
     assert "new finding" not in messages[0][1]
+    from app.adapters.impl.llm_context import estimate_request_tokens
+    assert estimate_request_tokens({"model": "gpt-4o-mini", "messages": [
+        {"role": "tool", "content": messages[0][1]},
+    ]}) <= 256
     assert len(passages(ctx.extra["task_memory_context"])) == 2
 
 

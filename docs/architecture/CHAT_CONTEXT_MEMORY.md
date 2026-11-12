@@ -742,15 +742,46 @@ task_entity_id
 outcome
 safe_summary
 artifact_ids[]
-completed_at
 source_run_id
+result_refs[]
+result_refs_truncated
 ```
 
 The safe summary comes from a runtime-owned bounded result or final synthesis
 receipt. It is not copied from raw journal data.
 
+Each `result_refs` item is a bounded, typed reference to a verified dataset:
+`result_id`, source operation and run, optional revision and coverage metadata,
+and an optional bounded `ResultObservation`. It contains no result rows or raw
+tool arguments. A task reference carries at most 20 dataset references and
+sets `result_refs_truncated` when further references were omitted. These IDs
+are discovery hints only. On the next turn, the runtime rechecks source-run
+ownership against the current chat and sandbox branch, then applies current
+Result Store user, tenant, expiry and revision checks before exposing metadata
+or allowing an exact snapshot import. See
+[`RUNTIME_TOOL_RESULTS.md`](RUNTIME_TOOL_RESULTS.md#reusing-results-from-an-earlier-chat-run)
+for the source catalog and import contract.
+
 Task-result references are persisted as bounded, provenance-backed context
 items. Their configured default limit is 20 and their default TTL is 30 days.
+
+### 12.4 Prior result inventory
+
+Before planner input is built, the runtime resolves persisted task-result
+references into a content-free `prior_result_inventory`. It rechecks each
+source run against the current chat owner and sandbox branch; the Result Store
+then applies user, tenant and expiry checks. Inventory values expose bounded
+dataset metadata and, for importable snapshots, the exact `result.import`
+arguments. If a task has no selected dataset IDs, the planner receives a
+bounded `result.history` action to inspect the source run's metadata catalog.
+The inventory carries explicit `available`, `history_available`, `unavailable`
+or `empty` status and partial coverage/omission counts. It is a prompt
+projection, not persistence or authorization.
+
+Defaults are 10 source runs, 30 dataset items, and no more than 50 selected
+dataset IDs per source run; configuration bounds these values. The underlying
+history/import tools cap a page at 50. Neither the inventory nor chat context
+copies dataset payloads, prompts, raw tool arguments, or trace events.
 
 ## 13. Error and limitation projection
 
