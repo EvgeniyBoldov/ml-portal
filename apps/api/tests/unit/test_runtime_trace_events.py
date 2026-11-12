@@ -109,6 +109,32 @@ async def test_run_session_journal_mapper_preserves_result_metadata_and_unknown_
     assert "result_inline_complete" not in unknown_event.data
 
 
+async def test_run_session_preserves_status_stage_without_duplicate_keyword() -> None:
+    session = RunSession(
+        ctx=object(), agent_slug="test", logging_level="full", mode="sandbox",
+    )
+    session.run_id = uuid4()
+    events = []
+
+    async def capture(event):
+        events.append(event)
+
+    session._emit = capture
+    source_event = RuntimeEvent.status(
+        "result_batch_projected", result_id="result-1", row_count=3,
+    )
+
+    await session.record_event("tool_result_batch_projected", source_event.data)
+
+    assert len(events) == 1
+    assert events[0].type is RuntimeEventType.STATUS
+    assert events[0].data == {
+        "stage": "result_batch_projected",
+        "result_id": "result-1",
+        "row_count": 3,
+    }
+
+
 def test_agent_start_contains_executor_identity() -> None:
     event = RuntimeEvent.agent_start(
         agent_execution_id="planner-1",

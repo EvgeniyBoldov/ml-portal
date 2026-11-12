@@ -163,7 +163,8 @@ class RunSession:
             final_payload.pop("run_id", None)
             event = RuntimeEvent.final(content, run_id=str(self.run_id), **final_payload)
         elif event_type is RuntimeEventType.STATUS:
-            event = RuntimeEvent.status(step_type, **payload)
+            stage = str(payload.pop("stage", step_type))
+            event = RuntimeEvent.status(stage, **payload)
         else:
             event = RuntimeEvent(event_type, payload)
         await self._emit(event)
