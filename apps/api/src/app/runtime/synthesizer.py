@@ -595,14 +595,33 @@ class Synthesizer:
         """Select only explicit successful receipts and selected result-tool evidence."""
         allowed_tools = {"result.read", "result.describe", "result.sql", "result.analyze",
                          "result.aggregate", "result.find", "result.load"}
-        selected: Dict[tuple[str, Any, tuple[str, ...]], Dict[str, Any]] = {}
+        selected: Dict[tuple[Any, ...], Dict[str, Any]] = {}
+
+        def view_key(item: Dict[str, Any]) -> tuple[Any, ...]:
+            fields = tuple(str(field) for field in item.get("fields", []) if isinstance(field, str))
+            return (str(item.get("result_id") or ""), item.get("revision"), item.get("offset"),
+                    fields, item.get("path"), item.get("text_offset"), item.get("text_limit"),
+                    item.get("next_text_offset"), item.get("child_offset"), item.get("child_limit"),
+                    item.get("next_child_offset"), item.get("view"))
 
         def add(item: Dict[str, Any]) -> None:
             result_id = str(item.get("result_id") or "")
             if not result_id:
                 return
-            fields = tuple(str(field) for field in item.get("fields", []) if isinstance(field, str))
-            key = (result_id, item.get("offset"), fields)
+            observation = item.get("observation") if isinstance(item.get("observation"), dict) else {}
+            reader_arguments = item.get("reader_arguments") if isinstance(item.get("reader_arguments"), dict) else {}
+            # The runtime observation is authoritative for what was actually
+            # returned. The original read arguments fill any request-only
+            # fields that the receipt does not repeat.
+            for name in ("offset", "limit", "fields", "path", "text_offset", "text_limit",
+                         "child_offset", "child_limit", "view"):
+                if name in observation:
+                    item[name] = observation[name]
+                elif name not in item and name in reader_arguments:
+                    item[name] = reader_arguments[name]
+            if not reader_arguments:
+                item.pop("reader_arguments", None)
+            key = view_key(item)
             previous = selected.get(key)
             previous_revision = previous.get("revision") if previous else None
             revision = item.get("revision")
@@ -625,8 +644,10 @@ class Synthesizer:
             for reference in report.get("verified_result_refs") or []:
                 if not isinstance(reference, dict) or not reference.get("result_id"):
                     continue
-                item = {key: reference[key] for key in ("result_id", "operation", "revision", "source_complete")
-                        if key in reference}
+                item = {key: reference[key] for key in (
+                    "result_id", "operation", "revision", "source_complete", "source_total", "row_count",
+                    "observation", "reader_arguments", "offset", "limit", "fields", "path",
+                    "text_offset", "text_limit", "child_offset", "child_limit", "view") if key in reference}
                 add(item)
         for evidence in run_context.get("evidence") or []:
             if not isinstance(evidence, dict) or evidence.get("tool") not in allowed_tools:
@@ -643,11 +664,14 @@ class Synthesizer:
                 **({"offset": arguments["offset"]} if isinstance(arguments.get("offset"), int) else {}),
                 **({"limit": arguments["limit"]} if isinstance(arguments.get("limit"), int) else {}),
                 **({"fields": arguments["fields"]} if isinstance(arguments.get("fields"), list) else {}),
+                **({"path": arguments["path"]} if isinstance(arguments.get("path"), str) else {}),
+                **({key: arguments[key] for key in ("text_offset", "text_limit", "child_offset", "child_limit", "view")
+                   if key in arguments}),
+                "reader_arguments": dict(arguments),
+                **({"observation": data["result_observation"]}
+                   if isinstance(data.get("result_observation"), dict) else {}),
             })
-        return sorted(selected.values(), key=lambda item: (
-            str(item.get("result_id") or ""), int(item.get("offset") or 0),
-            tuple(item.get("fields") or []),
-        ))
+        return sorted(selected.values(), key=lambda item: tuple(str(value or "") for value in view_key(item)))
 
     @staticmethod
     async def _prepare_result_evidence(
@@ -680,7 +704,14 @@ class Synthesizer:
             catalog_entry = catalog_by_id[result_id]
             current_revision = int(catalog_entry.get("revision") or 1)
             expected_revision = reference.get("revision")
-            if expected_revision is not None and int(expected_revision) != current_revision:
+            if expected_revision is None:
+                limitations.append({
+                    "code": "selected_result_revision_unpinned",
+                    "message": "A selected result has no observed revision; synthesis did not read a potentially changed snapshot.",
+                    "result_id": result_id, "current_revision": current_revision,
+                })
+                continue
+            if int(expected_revision) != current_revision:
                 limitations.append({
                     "code": "selected_result_revision_changed",
                     "message": "A selected result changed revision before synthesis; its page was not read.",
@@ -692,10 +723,19 @@ class Synthesizer:
                 offset = reference.get("offset", 0)
                 limit = min(5, max(1, int(reference.get("limit") or 5)))
                 fields = reference.get("fields")
+                reader_arguments = reference.get("reader_arguments") if isinstance(reference.get("reader_arguments"), dict) else {}
+                read_kwargs: Dict[str, Any] = {}
+                for key in ("path", "text_offset", "text_limit", "child_offset", "child_limit", "view"):
+                    value = reference.get(key, reader_arguments.get(key))
+                    if value is not None:
+                        read_kwargs[key] = value
+                if read_kwargs.get("path") is not None:
+                    limit = 1
                 page = await workspace.read(
                     result_id=result_id, run_id=run_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
                     offset=offset if isinstance(offset, int) and offset >= 0 else 0,
                     limit=limit, fields=fields if isinstance(fields, list) else None, revision=current_revision,
+                    **read_kwargs,
                     context_budget_tokens=per_result_budget,
                     context_model=None,
                 )
@@ -716,13 +756,23 @@ class Synthesizer:
                 "source_complete": page.get("source_complete"),
                 "source_total": catalog_entry.get("source_total"),
                 "stored_count": catalog_entry.get("row_count", 0),
+                "offset": page.get("offset", offset), "limit": page.get("limit", limit),
+                "path": page.get("path"), "view": page.get("view"),
+                "text_offset": page.get("text_offset"), "text_limit": page.get("text_limit"),
+                "next_text_offset": page.get("next_text_offset"),
+                "child_offset": page.get("child_offset"), "child_limit": page.get("child_limit"),
+                "next_child_offset": page.get("next_child_offset"),
                 **({"requested_fields": page["requested_fields"]} if "requested_fields" in page else {}),
             })
-            if page.get("record_too_large") or page.get("next_offset") is not None:
+            if (page.get("record_too_large") or page.get("next_offset") is not None
+                    or page.get("next_text_offset") is not None or page.get("next_child_offset") is not None):
                 limitations.append({
                     "code": "selected_result_page_partial",
-                    "message": "Only the first bounded saved-data page is included in synthesis evidence.",
+                    "message": "Only the observed bounded saved-data view is included in synthesis evidence.",
                     "result_id": result_id, "next_offset": page.get("next_offset"),
+                    "next_text_offset": page.get("next_text_offset"),
+                    "next_child_offset": page.get("next_child_offset"),
+                    "path": page.get("path"), "view": page.get("view"),
                     "record_too_large": bool(page.get("record_too_large")),
                 })
         return pages, limitations

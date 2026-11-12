@@ -118,10 +118,15 @@ def test_collection_info_large_schema_projection_stays_valid_json():
             "filter_hints": {"fields": {f"field_{index}": {"choices": ["value" * 100] * 10} for index in range(20)}},
         }),
         operation_slug="collection.info",
+        context_budget_tokens=1200,
+        context_model="gpt-4o-mini",
     )
 
     payload = json.loads(context)
-    assert len(context) <= 4000
+    from app.adapters.impl.llm_context import estimate_request_tokens
+    assert estimate_request_tokens({"model": "gpt-4o-mini", "messages": [
+        {"role": "tool", "content": context},
+    ]}) <= 1200
     assert payload["collection"]["slug"] == "large"
     assert payload["fields"] or payload["filter_hints"]
 

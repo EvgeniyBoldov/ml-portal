@@ -141,6 +141,10 @@ class PlannerInputBuilder:
                     if isinstance(item, dict))],
                 results=context.available_results, results_status=context.result_catalog_status,
                 deleted_artifact_ids=context.deleted_artifact_ids),
+            # Prior-run snapshots remain a distinct, content-free inventory;
+            # they are not current evidence and must be explicitly selected
+            # into a task input before a worker imports one.
+            "prior_result_inventory": context.prior_result_inventory,
             "memory_context": _planner_memory_projection(
                 context.memory_context, list(context.scope_context.get("keys") or []),
             ),

@@ -34,6 +34,15 @@ provider/context failure is a terminal plan failure after the synthesizer's
 own retry policy is exhausted; it is not presented to the planner as a fake
 task result or a mutable rewrite of the terminal iteration.
 
+Tool execution memory is scoped by root run and logical task, across task
+attempts and pause/resume. It retains verified receipts and successful write
+guards; an unknown outcome after dispatching a write fails closed, while safe
+reads may be retried. Native and text call IDs share duplicate validation.
+Checkpoint restoration preserves a pending native batch and rejects malformed
+write-guard state before dispatch. File-derived raw operation bodies are scrubbed
+from checkpoints and require fresh authorization. See [Agent Runtime](../../../../../docs/architecture/AGENT_RUNTIME.md)
+and [Runtime Interactions](../../../../../docs/architecture/RUNTIME_INTERACTIONS.md).
+
 ## Ports and Adapters
 
 Runtime code should depend on `ports.py` contracts, not concrete DB/HTTP classes.

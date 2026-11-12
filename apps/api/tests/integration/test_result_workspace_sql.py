@@ -31,7 +31,7 @@ async def workspace_pg(monkeypatch):
         json_deserializer=lambda value: json.loads(value, parse_float=Decimal))
     def migrate(connection):
         with Operations.context(MigrationContext.configure(connection)):
-            for filename in ("0001_tool_payloads.py", "0002_sql_result_rows.py", "0003_result_datasets.py", "0004_virtual_table_rows.py"):
+            for filename in ("0001_tool_payloads.py", "0002_sql_result_rows.py", "0003_result_datasets.py", "0004_virtual_table_rows.py", "0005_nullable_source_complete.py"):
                 path = Path("app/tool_results_migrations/versions") / filename
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 module = importlib.util.module_from_spec(spec)
@@ -80,7 +80,7 @@ async def test_oversized_nested_record_can_be_projected_and_delivered_to_model(w
     view = json.loads(rendered)
     assert view["records"] == [{"name": fields["name"], "description": fields["description"],
                               "status": "Open", "type": "Task", "comments": None}]
-    assert view["source_coverage"]["complete"] is False
+    assert view["source_coverage"].get("complete") is None
     assert len(rendered.encode()) <= get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3
 
 
@@ -205,7 +205,7 @@ async def test_read_projection_survives_formatter_and_next_page(workspace_pg):
         ToolResult.ok(first, workspace_view=True), operation_slug="result.read"))
     next_args = first_view["next_action"]["arguments"]
     assert next_args == {"result_id": saved["result_id"], "revision": 1, "offset": 1,
-                         "limit": 10, "fields": ["id", "name"]}
+                         "limit": 10, "fields": ["id", "name"], "view": "value"}
 
     second = await workspace.read(**next_args, **scope)
     assert second["value"] == [{"id": 2, "name": "second"}, {"id": 3, "name": "third"}]
@@ -305,7 +305,7 @@ async def test_synthesis_prepares_only_authorized_selected_saved_results(workspa
     assert stale_limitations[0]["code"] == "selected_result_revision_changed"
 
     denied, denied_limitations = await Synthesizer._prepare_result_evidence(
-        references=[{"result_id": saved["result_id"], "operation": "netbox_get_objects"}],
+        references=[{"result_id": saved["result_id"], "operation": "netbox_get_objects", "revision": 1}],
         catalog_by_id={saved["result_id"]: entry},
         ctx=SimpleNamespace(user_id=uuid4(), tenant_id=uuid4()), run_id=scope["run_id"],
     )
@@ -318,7 +318,7 @@ async def test_synthesis_prepares_only_authorized_selected_saved_results(workspa
     oversized_catalog = await ToolResultStore().list_for_run(**scope)
     oversized_entry = next(item for item in oversized_catalog if item["result_id"] == oversized["result_id"])
     oversized_pages, oversized_limitations = await Synthesizer._prepare_result_evidence(
-        references=[{"result_id": oversized["result_id"], "operation": "external.large"}],
+        references=[{"result_id": oversized["result_id"], "operation": "external.large", "revision": oversized["revision"]}],
         catalog_by_id={oversized["result_id"]: oversized_entry}, ctx=ctx, run_id=scope["run_id"],
     )
     assert oversized_pages[0]["record_too_large"] is True and oversized_pages[0]["records"] == []
@@ -494,7 +494,7 @@ async def test_initial_records_and_original_page_commit_atomically(workspace_pg)
     async with engine.connect() as conn:
         page = (await conn.execute(text("SELECT payload FROM runtime_tool_result_pages WHERE result_id=CAST(:id AS uuid)"),
                                    {"id": saved["result_id"]})).scalar_one()
-        assert page["results"] == [{"id": 1, "ip": None}]
+        assert page["value"] == [{"id": 1, "ip": None}]
 
 
 @pytest.mark.asyncio

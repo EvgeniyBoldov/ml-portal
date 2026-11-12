@@ -200,7 +200,7 @@ describe('sandbox trace state', () => {
 
     const calls = projectTraceStages(state)[0].executorRuns[0].calls;
     expect(calls.map((call) => call.kind)).toEqual(['clarify', 'confirm', 'error']);
-    expect(calls.map((call) => call.title)).toEqual(['Какой проект?', 'Подтвердить запись?', 'Ошибка инструмента']);
+    expect(calls.map((call) => call.title)).toEqual(['Какой проект?', 'Подтвердить запись?', 'Операция не выполнена.']);
   });
 
   it('projects the displayed step from the executor task snapshot', () => {

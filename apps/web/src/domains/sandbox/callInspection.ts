@@ -77,7 +77,7 @@ export function sanitizeDisplay(value: unknown): unknown {
 export function parseCallContent(value: unknown): ParsedContent {
   if (typeof value !== 'string') return { kind: 'json', data: value };
   const trimmed = value.trim();
-  const fenced = trimmed.match(/^```(?:json|tool_call)?\s*\n?([\s\S]*?)\n?```$/i);
+  const fenced = trimmed.match(/^```(?:json|tool_call|tool_result)?\s*\n?([\s\S]*?)\n?```$/i);
   const candidate = fenced?.[1]?.trim() ?? trimmed;
   try {
     const data = JSON.parse(candidate) as unknown;
@@ -212,7 +212,7 @@ function failureFrom(payload: Record<string, unknown>): ToolFailure | undefined 
   return undefined;
 }
 
-export function toolResult(payload: Record<string, unknown>): { success?: boolean; message?: string; data: unknown; details: DisplayEntry[]; failure?: ToolFailure; diagnostic?: unknown; resultId?: string; delivery?: string; storedDescriptor: boolean; inlineComplete?: boolean; sourceComplete?: boolean; sourceTotal?: number; returnedCount?: number; receivedCount?: number; queryComplete?: boolean; truncated: boolean } {
+export function toolResult(payload: Record<string, unknown>): { success?: boolean; message?: string; data: unknown; details: DisplayEntry[]; failure?: ToolFailure; diagnostic?: unknown; resultId?: string; revision?: number; recoveryReason?: string; delivery?: string; storedDescriptor: boolean; inlineComplete?: boolean; sourceComplete?: boolean; sourceTotal?: number; returnedCount?: number; receivedCount?: number; queryComplete?: boolean; readComplete?: boolean; pageMayHaveMore?: boolean; truncated: boolean } {
   const nested = asRecord(payload.result);
   const envelope = asRecord(payload.result_envelope);
   const failure = failureFrom(payload);
@@ -250,12 +250,14 @@ export function toolResult(payload: Record<string, unknown>): { success?: boolea
   const rawData = nested.data ?? envelope.data ?? payload.data;
   const dataRecord = asRecord(rawData);
   const runtimeResult = recordAt(dataRecord?._runtime_result);
+  const observation = recordAt(payload.result_observation);
+  const observationCoverage = recordAt(observation?.source_coverage);
   const descriptorRecord = runtimeResult ?? dataRecord;
   const dataMeta = asRecord(dataRecord?.meta);
   const isResultPage = Boolean(dataRecord && Array.isArray(dataRecord.value) && dataMeta);
-  const delivery = [payload.result_delivery, envelope.result_delivery, nested.result_delivery, runtimeResult?.delivery]
+  const delivery = [payload.result_delivery, envelope.result_delivery, nested.result_delivery, observation?.delivery, runtimeResult?.delivery]
     .find((value): value is string => typeof value === 'string');
-  const resultId = [payload.result_id, envelope.result_id, nested.result_id, dataRecord?.result_id, runtimeResult?.result_id]
+  const resultId = [payload.result_id, envelope.result_id, nested.result_id, observation?.result_id, dataRecord?.result_id, runtimeResult?.result_id]
     .find((value): value is string => typeof value === 'string');
   const hasInlinePayload = Boolean(dataRecord && (
     Array.isArray(dataRecord.value) || Array.isArray(dataRecord.rows) || Array.isArray(dataRecord.sample)
@@ -269,8 +271,6 @@ export function toolResult(payload: Record<string, unknown>): { success?: boolea
       'row_count' in descriptorRecord || 'payload_type' in descriptorRecord || 'observed_schema' in descriptorRecord
     ))) || (delivery === undefined && strongLegacyDescriptor)
   );
-  const inlineComplete = [payload.result_inline_complete, envelope.result_inline_complete, nested.result_inline_complete, runtimeResult?.inline_complete]
-    .find((value): value is boolean => typeof value === 'boolean');
   const countValue = [payload.result_row_count, envelope.result_row_count, nested.result_row_count, dataRecord?.row_count, runtimeResult?.row_count, dataMeta?.row_count, dataMeta?.returned_count, isResultPage ? (dataRecord?.value as unknown[]).length : undefined, payload.returned_count, envelope.returned_count, nested.returned_count, payload.row_count, nested.row_count]
     .find((value) => typeof value === 'number' && Number.isFinite(value));
   const sourceTotalValue = [payload.result_source_total, envelope.result_source_total, nested.result_source_total, dataRecord?.source_total, runtimeResult?.source_total, dataMeta?.source_total, isResultPage ? dataMeta?.total : undefined, dataRecord?.total, nested.source_total, nested.total]
@@ -284,14 +284,18 @@ export function toolResult(payload: Record<string, unknown>): { success?: boolea
     failure,
     diagnostic: failure?.details ?? legacyDiagnostics,
     resultId,
+    revision: typeof observation?.revision === 'number' ? observation.revision : undefined,
+    recoveryReason: typeof observation?.recovery_reason === 'string' ? observation.recovery_reason : undefined,
     delivery: delivery ?? (storedDescriptor ? 'stored' : undefined),
     storedDescriptor,
     inlineComplete: [payload.result_inline_complete, envelope.result_inline_complete, nested.result_inline_complete, runtimeResult?.inline_complete].find((value): value is boolean => typeof value === 'boolean'),
-    sourceComplete: [payload.result_source_complete, envelope.result_source_complete, nested.result_source_complete, runtimeResult?.source_complete, dataRecord?.source_complete, dataMeta?.source_complete, isResultPage ? dataMeta?.complete : undefined].find((value): value is boolean => typeof value === 'boolean'),
+    sourceComplete: [payload.result_source_complete, envelope.result_source_complete, nested.result_source_complete, observation?.source_complete, observationCoverage?.complete, runtimeResult?.source_complete, dataRecord?.source_complete, dataMeta?.source_complete, isResultPage ? dataMeta?.complete : undefined].find((value): value is boolean => typeof value === 'boolean'),
     sourceTotal: typeof sourceTotalValue === 'number' ? sourceTotalValue : undefined,
     returnedCount: typeof countValue === 'number' ? countValue : undefined,
     receivedCount: typeof receivedValue === 'number' ? receivedValue : undefined,
-    queryComplete: [payload.query_complete, envelope.query_complete, nested.query_complete, runtimeResult?.query_complete, dataRecord?.query_complete, dataMeta?.query_complete].find((value): value is boolean => typeof value === 'boolean'),
+    queryComplete: [payload.query_complete, envelope.query_complete, nested.query_complete, observation?.query_complete, runtimeResult?.query_complete, dataRecord?.query_complete, dataMeta?.query_complete].find((value): value is boolean => typeof value === 'boolean'),
+    readComplete: typeof observation?.read_complete === 'boolean' ? observation.read_complete : undefined,
+    pageMayHaveMore: typeof observation?.page_may_have_more === 'boolean' ? observation.page_may_have_more : undefined,
     truncated: payload.truncated === true || envelope.truncated === true || nested.truncated === true || runtimeResult?.sample_complete === false,
     details: toDisplayEntries({
       ...payload,

@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     CHAT_CONTEXT_OPEN_LOOP_LIMIT: int = Field(default=5, ge=1, le=20)
     CHAT_CONTEXT_DECISION_LIMIT: int = Field(default=10, ge=1, le=50)
     CHAT_CONTEXT_TASK_RESULT_LIMIT: int = Field(default=20, ge=1, le=100)
+    CHAT_CONTEXT_PRIOR_RESULT_RUN_LIMIT: int = Field(default=10, ge=1, le=20)
+    CHAT_CONTEXT_PRIOR_RESULT_LIMIT: int = Field(default=30, ge=1, le=50)
     CHAT_CONTEXT_HISTORY_LIMIT: int = Field(default=12, ge=1, le=50)
     CHAT_FILE_READ_MAX_CHARS: int = Field(default=32_000, ge=1)
     CHAT_FILE_READ_MAX_BYTES: int = Field(default=8 * 1024 * 1024, ge=1)

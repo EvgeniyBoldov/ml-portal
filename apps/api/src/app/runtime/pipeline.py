@@ -633,6 +633,15 @@ class RuntimePipeline:
             if request.chat_context_snapshot is not None
             else {"chat_id": chat_id, "sandbox_branch_id": branch_id, "revision": 0}
         )
+        from app.runtime.datastore_context import load_prior_result_inventory
+        prior_result_inventory = await load_prior_result_inventory(
+            session=self._session, chat_snapshot=chat_context, chat_id=str(chat_id),
+            owner_id=str(user_id), branch_id=branch_id, tenant_id=tenant_id, user_id=user_id,
+        )
+        # TurnPreflight receives authorized metadata so it can route a followup
+        # that refers to prior datasets; payloads remain absent and import is
+        # still an explicit planner/task choice.
+        chat_context["prior_result_inventory"] = prior_result_inventory
         base_scope_context = await _base_scope_context(
             self._session, chat_context=chat_context,
             user_id=user_id, tenant_id=tenant_id,
@@ -693,6 +702,7 @@ class RuntimePipeline:
             artifact_descriptions={item["artifact_id"]: item.get("description", "")
                 for item in chat_context.get("artifacts", []) if item.get("artifact_id")},
             chat_snapshot=chat_context, recent_dialogue=_recent_dialogue(list(request.messages or [])))
+        runtime_state.run_context.prior_result_inventory = prior_result_inventory
         ctx.extra["runtime_turn_state"] = runtime_state
         ctx.extra["runtime_branch_id"] = branch_id
         runtime_state.execution_mode = execution_mode

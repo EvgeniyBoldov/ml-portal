@@ -28,9 +28,11 @@ async def test_delivery_owner_ack_and_task_states(monkeypatch):
                 await connection.execute(text('''CREATE TEMP TABLE shadow_invocations (
                     id uuid primary key, user_id uuid not null, tenant_id uuid not null,
                     agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
-                    request_id varchar(255) not null, status varchar(20) not null,
+                    request_id varchar(255) not null, idempotency_key varchar(255),
+                    request_fingerprint varchar(64), status varchar(20) not null,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
-                    created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+                    created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+                    UNIQUE (user_id, tenant_id, idempotency_key)
                 ) ON COMMIT DROP'''))
                 async with AsyncSession(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint") as session:
                     owner, other, tenant = uuid4(), uuid4(), uuid4()
@@ -64,6 +66,58 @@ async def test_delivery_owner_ack_and_task_states(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_read_scope_keeps_owned_result_across_active_tenant_order_and_denies_revoked_membership():
+    """Effective tenant ordering must not hide an owned result from another active tenant."""
+    engine = create_async_engine(get_settings().ASYNC_DB_URL)
+    try:
+        async with engine.connect() as connection:
+            transaction = await connection.begin()
+            try:
+                await connection.execute(text('''CREATE TEMP TABLE shadow_invocations (
+                    id uuid primary key, user_id uuid not null, tenant_id uuid not null,
+                    agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
+                    request_id varchar(255) not null, idempotency_key varchar(255),
+                    request_fingerprint varchar(64), status varchar(20) not null,
+                    result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
+                    created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+                    UNIQUE (user_id, tenant_id, idempotency_key)
+                ) ON COMMIT DROP'''))
+                async with AsyncSession(bind=connection, expire_on_commit=False,
+                                        join_transaction_mode="create_savepoint") as session:
+                    from app.core.exceptions import NotFoundError
+                    from app.models.shadow_invocation import ShadowInvocation
+                    owner, source_tenant, current_default = uuid4(), uuid4(), uuid4()
+                    source = ShadowInvocation(user_id=owner, tenant_id=source_tenant, agent="source",
+                        data={}, scopes=[], request_id="source", status="completed", result={"source": True})
+                    current = ShadowInvocation(user_id=owner, tenant_id=current_default, agent="current",
+                        data={}, scopes=[], request_id="current", status="completed", result={"current": True})
+                    session.add_all([source, current])
+                    await session.commit()
+                    service = ShadowInvocationService(session, SimpleNamespace())
+
+                    # Source tenant is still an active membership, but resolver
+                    # order now puts a different effective default first.
+                    memberships = [current_default, source_tenant]
+                    assert {item.id for item in await service.list_ready(owner, tenant_ids=memberships)} == {
+                        source.id, current.id}
+                    assert (await service.get(source.id, owner, tenant_ids=memberships)).result == {"source": True}
+                    await service.acknowledge(source.id, owner, tenant_ids=memberships)
+                    assert (await service.get(source.id, owner, tenant_ids=memberships)).delivered_at is not None
+
+                    # Once source-tenant membership is revoked, other active
+                    # memberships do not authorize the old tenant's result.
+                    assert [item.id for item in await service.list_ready(owner, tenant_ids=[current_default])] == [current.id]
+                    with pytest.raises(NotFoundError):
+                        await service.get(source.id, owner, tenant_ids=[current_default])
+                    with pytest.raises(NotFoundError):
+                        await service.acknowledge(source.id, owner, tenant_ids=[current_default])
+            finally:
+                await transaction.rollback()
+    finally:
+        await engine.dispose()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
 async def test_worker_persists_completion_or_failure(monkeypatch, fails):
     from contextlib import asynccontextmanager
@@ -78,9 +132,11 @@ async def test_worker_persists_completion_or_failure(monkeypatch, fails):
                 await connection.execute(text('''CREATE TEMP TABLE shadow_invocations (
                     id uuid primary key, user_id uuid not null, tenant_id uuid not null,
                     agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
-                    request_id varchar(255) not null, status varchar(20) not null,
+                    request_id varchar(255) not null, idempotency_key varchar(255),
+                    request_fingerprint varchar(64), status varchar(20) not null,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
-                    created_at timestamptz not null default now(), updated_at timestamptz not null default now()
+                    created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
+                    UNIQUE (user_id, tenant_id, idempotency_key)
                 ) ON COMMIT DROP'''))
                 async with AsyncSession(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint") as session:
                     user = Users(login="shadow-worker-" + uuid4().hex)

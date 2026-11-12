@@ -7,7 +7,7 @@ import hashlib
 import math
 from decimal import Decimal
 from datetime import date, datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from sqlalchemy import text
@@ -17,6 +17,14 @@ from app.core.config import get_settings
 
 _engine: AsyncEngine | None = None
 logger = logging.getLogger(__name__)
+
+
+def _is_uuid(value: Any) -> bool:
+    try:
+        UUID(str(value))
+        return True
+    except (TypeError, ValueError):
+        return False
 
 
 def _json_dumps_exact(value: Any, **kwargs: Any) -> str:
@@ -85,6 +93,12 @@ async def dispose_tool_results_engine() -> None:
 
 class ToolResultStoreError(RuntimeError):
     pass
+
+
+class ResultSnapshotUnavailable(ToolResultStoreError):
+    def __init__(self, reason: str = "snapshot_unavailable") -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 class ToolResultStore:
@@ -188,7 +202,7 @@ class ToolResultStore:
                         "sample_complete": bool(existing["sample_complete"]),
                         "row_count": int(existing["row_count"] or 0),
                         "source_total": existing["source_total"],
-                        "source_complete": bool(existing["source_complete"]),
+                        "source_complete": existing["source_complete"],
                         "inline_complete": not (source_page is not None and int(existing["revision"]) > 1)
                             and len(current_payload) <= settings.TOOL_RESULTS_INLINE_CONTEXT_CHARS
                             and len(current_payload.encode("utf-8")) <= settings.TOOL_RESULTS_CONTEXT_TOKENS * 3,
@@ -210,7 +224,7 @@ class ToolResultStore:
                     "payload": serialized,
                     "payload_sha256": hashlib.sha256(serialized.encode("utf-8")).hexdigest(),
                     "source_total": (dataset_meta or {}).get("total", _source_total(payload)),
-                    "source_complete": _source_complete(payload) if source_complete is None else bool(source_complete),
+                    "source_complete": (dataset_meta or {}).get("complete", _source_complete(payload)) if source_complete is None else source_complete,
                     "observed_schema": _json_dumps_exact(observed_schema, ensure_ascii=False),
                     "sample": _json_dumps_exact(sample, ensure_ascii=False, default=str) if sample is not None else None,
                     "sample_complete": sample_complete,
@@ -256,7 +270,7 @@ class ToolResultStore:
                     "sample_complete": sample_complete,
                     "row_count": len(rows),
                     "source_total": (dataset_meta or {}).get("total", _source_total(payload)),
-                    "source_complete": _source_complete(payload) if source_complete is None else bool(source_complete),
+                    "source_complete": (dataset_meta or {}).get("complete", _source_complete(payload)) if source_complete is None else source_complete,
                     "inline_complete": len(serialized) <= settings.TOOL_RESULTS_INLINE_CONTEXT_CHARS and len(serialized.encode("utf-8")) <= settings.TOOL_RESULTS_CONTEXT_TOKENS * 3,
                     "query_sql": query_sql,
                     "source_result_ids": source_result_ids or [],
@@ -296,7 +310,7 @@ class ToolResultStore:
             "agent_execution_id": row["agent_execution_id"],
             "row_count": int(row["row_count"] or 0),
             "payload_type": row["payload_type"],
-            "source_complete": bool(row["source_complete"]),
+            "source_complete": row["source_complete"],
             "observed_schema": row["observed_schema"] or {},
             "sample": row["sample"],
             "schema_complete": bool(row["schema_complete"]),
@@ -307,6 +321,255 @@ class ToolResultStore:
             "revision": row["revision"],
             "source_total": row["source_total"],
         } for row in rows]
+
+    async def list_prior_snapshots(
+        self, *, source_run_id: str, tenant_id: UUID, user_id: UUID,
+        offset: int = 0, limit: int = 30, selected_result_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Return a bounded metadata-only catalog for an authorized prior run."""
+        if offset < 0 or not 1 <= limit <= 50:
+            raise ToolResultStoreError("Invalid snapshot catalog offset or limit")
+        async with get_tool_results_engine().connect() as connection:
+            params = {"run_id": source_run_id, "tenant_id": tenant_id, "user_id": user_id}
+            if selected_result_ids is not None:
+                if len(selected_result_ids) > 50:
+                    raise ToolResultStoreError("At most 50 selected result IDs may be resolved")
+                requested = list(dict.fromkeys(str(value) for value in selected_result_ids))
+                clauses: list[str] = []
+                selected_params: dict[str, Any] = {}
+                for index, value in enumerate(requested):
+                    try:
+                        normalized_id = str(UUID(value))
+                    except (TypeError, ValueError):
+                        continue
+                    name = f"selected_{index}"
+                    clauses.append(f"id=CAST(:{name} AS uuid)")
+                    selected_params[name] = normalized_id
+                if clauses:
+                    rows = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                        task_id, row_count, jsonb_typeof(payload) AS payload_type, source_complete,
+                        source_total, revision, created_at, expires_at, dataset_meta, source_result_ids
+                        FROM runtime_tool_payloads WHERE run_id=:run_id AND tenant_id=:tenant_id
+                        AND user_id=:user_id AND expires_at>now() AND (""" + " OR ".join(clauses) + ")"),
+                        {**params, **selected_params})).mappings().all()
+                else:
+                    rows = []
+                row_by_id = {str(row["result_id"]): row for row in rows}
+                requested = requested[offset:offset + limit]
+                selected = [row_by_id[str(UUID(value))] for value in requested
+                            if _is_uuid(value) and str(UUID(value)) in row_by_id]
+                total = len(list(dict.fromkeys(str(value) for value in selected_result_ids)))
+                has_more = offset + len(requested) < total
+                missing = [value for value in requested if not _is_uuid(value) or str(UUID(value)) not in row_by_id]
+            else:
+                total = int((await connection.execute(text("""SELECT count(*) FROM runtime_tool_payloads
+                    WHERE run_id=:run_id AND tenant_id=:tenant_id AND user_id=:user_id AND expires_at>now()"""),
+                    params)).scalar_one())
+                rows = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                    task_id, row_count, jsonb_typeof(payload) AS payload_type, source_complete,
+                    source_total, revision, created_at, expires_at, dataset_meta, source_result_ids
+                    FROM runtime_tool_payloads WHERE run_id=:run_id AND tenant_id=:tenant_id
+                    AND user_id=:user_id AND expires_at>now()
+                    ORDER BY created_at DESC, id DESC OFFSET :offset LIMIT :limit"""),
+                    {**params, "offset": offset, "limit": limit + 1})).mappings().all()
+                has_more = len(rows) > limit
+                selected = rows[:limit]
+                missing = []
+            items: list[dict[str, Any]] = []
+            for row in selected:
+                file_controlled = await self._is_file_controlled_snapshot(
+                    connection, row=dict(row), tenant_id=tenant_id, user_id=user_id,
+                    visited=set(),
+                )
+                meta = row["dataset_meta"] or {}
+                imported_from = meta.get("imported_from") if isinstance(meta.get("imported_from"), dict) else None
+                importable = not file_controlled
+                items.append({
+                    "result_id": row["result_id"], "source_run_id": source_run_id,
+                    "operation": str(meta.get("source_operation") or row["operation"]),
+                    "producer": {"task_id": row["task_id"]},
+                    "row_count": int(row["row_count"] or 0), "payload_type": row["payload_type"],
+                    "revision": int(row["revision"]), "source_complete": row["source_complete"],
+                    "source_total": row["source_total"], "created_at": row["created_at"].isoformat(),
+                    "expires_at": row["expires_at"].isoformat(),
+                    "snapshot_only": bool(meta.get("snapshot_only")),
+                    "imported_from": imported_from,
+                    "importable": importable,
+                    "unavailable_reason": None if importable else "source_reauthorization_required",
+                })
+            items.extend({"result_id": value, "source_run_id": source_run_id, "importable": False,
+                          "unavailable_reason": "snapshot_unavailable"} for value in missing)
+            if selected_result_ids is not None:
+                items.sort(key=lambda item: selected_result_ids.index(item["result_id"])
+                           if item["result_id"] in selected_result_ids else len(selected_result_ids))
+        return {"status": "ready", "source_run_id": source_run_id, "items": items,
+                "offset": offset, "limit": limit, "total": total,
+                "next_offset": offset + len(items) if has_more else None,
+                "catalog_complete": not has_more}
+
+    async def import_snapshot(
+        self, *, source_run_id: str, source_result_id: str, source_revision: int,
+        target_run_id: str, target_tenant_id: UUID, target_user_id: UUID,
+        target_task_id: str | None = None, target_agent_execution_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Atomically copy one exact, unexpired snapshot into the current run."""
+        try:
+            source_uuid = str(UUID(source_result_id))
+        except (TypeError, ValueError) as exc:
+            raise ResultSnapshotUnavailable() from exc
+        import_call_id = f"runtime-import:{source_run_id}:{source_result_id}:{source_revision}"
+        target_uuid = uuid5(NAMESPACE_URL, f"ml-portal-result:{target_run_id}:{import_call_id}")
+        async with get_tool_results_engine().begin() as connection:
+            await connection.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                                     {"key": f"{target_run_id}:{import_call_id}"})
+            source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                payload, payload_sha256, source_total, source_complete, observed_schema,
+                sample, sample_complete, schema_complete, row_count, revision, created_at,
+                expires_at, dataset_meta, source_result_ids
+                FROM runtime_tool_payloads WHERE id=:result_id AND run_id=:run_id
+                AND tenant_id=:tenant_id AND user_id=:user_id AND expires_at>now() FOR SHARE"""),
+                {"result_id": source_uuid, "run_id": source_run_id,
+                 "tenant_id": target_tenant_id, "user_id": target_user_id})).mappings().first()
+            if source is None:
+                raise ResultSnapshotUnavailable()
+            if int(source["revision"]) != source_revision:
+                raise ResultSnapshotUnavailable("result_revision_conflict")
+            source_dict = dict(source)
+            if await self._is_file_controlled_snapshot(connection, row=source_dict,
+                    tenant_id=target_tenant_id, user_id=target_user_id, visited=set()):
+                raise ResultSnapshotUnavailable("source_reauthorization_required")
+            existing = (await connection.execute(text("""SELECT id::text AS result_id, revision,
+                source_total, source_complete, row_count, payload, payload_sha256,
+                observed_schema, sample, sample_complete, schema_complete, dataset_meta,
+                expires_at FROM runtime_tool_payloads WHERE run_id=:run_id AND call_id=:call_id"""),
+                {"run_id": target_run_id, "call_id": import_call_id})).mappings().first()
+            if existing is not None:
+                meta = existing["dataset_meta"] or {}
+                origin = meta.get("imported_from") if isinstance(meta, dict) else None
+                if (not isinstance(origin, dict) or origin.get("source_run_id") != source_run_id
+                        or origin.get("source_result_id") != source_result_id
+                        or origin.get("source_revision") != source_revision):
+                    raise ToolResultStoreError("Import idempotency key conflicts with another snapshot")
+                return self._import_descriptor(existing, import_call_id, already_imported=True)
+
+            meta = dict(source["dataset_meta"] or {})
+            original_continuation = meta.pop("next_arguments", None)
+            meta.update({
+                "snapshot_only": True,
+                "source_operation": str(meta.get("source_operation") or source["operation"]),
+                "has_next": meta.get("has_next"),
+                "continuation_error": "Imported snapshots do not fetch additional source pages",
+                "imported_from": {
+                    "source_run_id": source_run_id,
+                    "source_result_id": source_result_id,
+                    "source_revision": source_revision,
+                    "source_operation": str(meta.get("source_operation") or source["operation"]),
+                    "source_created_at": source["created_at"].isoformat(),
+                    "source_expires_at": source["expires_at"].isoformat(),
+                    "continuation_was_available": bool(original_continuation),
+                    "file_controlled": False,
+                    "source_result_ids": [str(value) for value in (source["source_result_ids"] or [])[:50]],
+                },
+            })
+            await connection.execute(text("""INSERT INTO runtime_tool_payloads
+                (id,run_id,call_id,operation,tenant_id,user_id,task_id,agent_execution_id,
+                 payload,payload_sha256,source_total,source_complete,observed_schema,sample,
+                 sample_complete,schema_complete,row_count,query_sql,source_result_ids,
+                 dataset_meta,arguments,created_at,expires_at,revision)
+                VALUES (:id,:run_id,:call_id,'runtime.result.import',:tenant_id,:user_id,:task_id,
+                 :agent_execution_id,CAST(:payload AS jsonb),:payload_sha256,:source_total,:source_complete,
+                 CAST(:observed_schema AS jsonb),CAST(:sample AS jsonb),:sample_complete,:schema_complete,:row_count,NULL,
+                 CAST('[]' AS jsonb),CAST(:dataset_meta AS jsonb),CAST('{}' AS jsonb),now(),:expires_at,1)"""), {
+                "id": target_uuid, "run_id": target_run_id, "call_id": import_call_id,
+                "tenant_id": target_tenant_id, "user_id": target_user_id,
+                "task_id": target_task_id, "agent_execution_id": target_agent_execution_id,
+                "payload": _json_dumps_exact(source["payload"], ensure_ascii=False, default=str),
+                "payload_sha256": source["payload_sha256"], "source_total": source["source_total"],
+                "source_complete": source["source_complete"],
+                "observed_schema": _json_dumps_exact(source["observed_schema"] or {}, default=str),
+                "sample": _json_dumps_exact(source["sample"], default=str) if source["sample"] is not None else None,
+                "sample_complete": source["sample_complete"], "schema_complete": source["schema_complete"],
+                "row_count": source["row_count"], "dataset_meta": _json_dumps_exact(meta, default=str),
+                "expires_at": source["expires_at"],
+            })
+            await connection.execute(text("""INSERT INTO runtime_tool_result_rows(result_id,run_id,ordinal,data)
+                SELECT :target_id,:target_run_id,ordinal,data FROM runtime_tool_result_rows
+                WHERE result_id=:source_id AND run_id=:source_run_id"""), {
+                "target_id": target_uuid, "target_run_id": target_run_id,
+                "source_id": source_uuid, "source_run_id": source_run_id,
+            })
+            target = {**source_dict, "result_id": str(target_uuid), "revision": 1,
+                      "dataset_meta": meta, "expires_at": source["expires_at"]}
+            return self._import_descriptor(target, import_call_id, already_imported=False)
+
+    @staticmethod
+    def _import_descriptor(row: Any, call_id: str, *, already_imported: bool) -> dict[str, Any]:
+        meta = row["dataset_meta"] or {}
+        return {
+            "result_id": row["result_id"], "sql_ref": sql_ref_for_result(row["result_id"]),
+            "call_id": call_id, "revision": int(row["revision"]),
+            "row_count": int(row["row_count"] or 0), "source_total": row["source_total"],
+            "source_complete": row["source_complete"], "observed_schema": row["observed_schema"] or {},
+            "sample": row["sample"], "sample_complete": bool(row["sample_complete"]),
+            "schema_complete": bool(row["schema_complete"]), "dataset_meta": meta,
+            "snapshot_only": bool(meta.get("snapshot_only")),
+            "imported_from": meta.get("imported_from"),
+            "expires_at": row["expires_at"].isoformat(), "already_imported": already_imported,
+        }
+
+    async def _is_file_controlled_snapshot(
+        self, connection: AsyncConnection, *, row: dict[str, Any], tenant_id: UUID,
+        user_id: UUID, visited: set[str],
+    ) -> bool:
+        result_id = str(row.get("result_id") or "")
+        if not result_id or result_id in visited:
+            return True
+        visited.add(result_id)
+        meta = row.get("dataset_meta") if isinstance(row.get("dataset_meta"), dict) else {}
+        imported = meta.get("imported_from") if isinstance(meta.get("imported_from"), dict) else {}
+        if imported.get("file_controlled") is True:
+            return True
+        operations = [row.get("operation"), meta.get("source_operation"),
+                      meta.get("source_tool"), imported.get("source_operation")]
+        forbidden_prefixes = ("file.", "artifact.", "collection.doc_search",
+                              "collection.list_documents", "collection.document.", "memory.search")
+        for operation in operations:
+            normalized = str(operation or "").casefold().removeprefix("instance.")
+            normalized = normalized.replace("_", ".")
+            if normalized.startswith(forbidden_prefixes):
+                return True
+        imported_source_id = imported.get("source_result_id")
+        imported_source_run_id = imported.get("source_run_id")
+        if imported_source_id and imported_source_run_id:
+            source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                dataset_meta, source_result_ids FROM runtime_tool_payloads
+                WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
+                AND user_id=:user_id"""), {"id": imported_source_id, "run_id": imported_source_run_id,
+                    "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
+            if source is None or await self._is_file_controlled_snapshot(
+                    connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
+                return True
+        if imported_source_run_id:
+            for source_id in imported.get("source_result_ids") or []:
+                source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                    dataset_meta, source_result_ids FROM runtime_tool_payloads
+                    WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
+                    AND user_id=:user_id"""), {"id": source_id, "run_id": imported_source_run_id,
+                        "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
+                if source is None or await self._is_file_controlled_snapshot(
+                        connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
+                    return True
+        lineage = row.get("source_result_ids") or meta.get("source_result_ids") or []
+        for source_id in lineage[:50] if isinstance(lineage, list) else []:
+            source = (await connection.execute(text("""SELECT id::text AS result_id, run_id, operation,
+                dataset_meta, source_result_ids FROM runtime_tool_payloads
+                WHERE id=CAST(:id AS uuid) AND run_id=:run_id AND tenant_id=:tenant_id
+                AND user_id=:user_id"""), {"id": source_id, "run_id": row.get("run_id"),
+                    "tenant_id": tenant_id, "user_id": user_id})).mappings().first()
+            if source is None or await self._is_file_controlled_snapshot(
+                    connection, row=dict(source), tenant_id=tenant_id, user_id=user_id, visited=set(visited)):
+                return True
+        return False
 
     async def execute_sql(
         self, *, sql: str, run_id: str, tenant_id: UUID, user_id: UUID,
@@ -387,15 +650,15 @@ class ToolResultStore:
             agent_execution_id=agent_execution_id, payload=result_rows,
             query_sql=safe_query, source_result_ids=source_ids,
             arguments={"query_parameters": safe_parameters},
-            source_complete=all(item["source_complete"] for item in used_sources),
-            dataset_meta={"source": "sql", "complete": all(item["source_complete"] for item in used_sources),
+            source_complete=_combine_completeness(item["source_complete"] for item in used_sources),
+            dataset_meta={"source": "sql", "complete": _combine_completeness(item["source_complete"] for item in used_sources),
                           "has_next": False, "input_revisions": {item["result_id"]: item.get("revision", 1) for item in used_sources}},
         )
         saved["inline_complete"] = saved["inline_complete"] and len(result_rows) <= 25
         return {
             "mode": "sql", "result_id": saved["result_id"],
             "source_result_id": saved["result_id"], "sql_ref": saved["sql_ref"],
-            "row_count": saved["row_count"], "source_complete": all(item["source_complete"] for item in used_sources),
+            "row_count": saved["row_count"], "source_complete": _combine_completeness(item["source_complete"] for item in used_sources),
             "source_count": len(source_ids), "source_result_ids": source_ids, "query_sql": safe_query,
             "observed_schema": saved["observed_schema"], "sample": saved["sample"],
             "schema_complete": saved["schema_complete"],
@@ -516,7 +779,7 @@ class ToolResultStore:
         return {
             "result_id": result_id, "source_result_id": result_id,
             "mode": "project", "values": values,
-            "missing_paths": missing_paths, "source_complete": bool(source_row["source_complete"]),
+            "missing_paths": missing_paths, "source_complete": source_row["source_complete"],
         }
 
     async def _text(
@@ -561,7 +824,7 @@ class ToolResultStore:
             "offset": safe_offset, "length": length, "chunk": chunk,
             "complete": next_offset >= length,
             "next_offset": None if next_offset >= length else next_offset,
-            "source_complete": bool(source_row["source_complete"]),
+            "source_complete": source_row["source_complete"],
         }
 
     async def _authorized_row(self, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID):
@@ -887,9 +1150,11 @@ def _json_type(value: Any) -> str:
     return "string"
 
 
-def _source_complete(payload: Any) -> bool:
+def _source_complete(payload: Any) -> bool | None:
     """Detect incomplete pages, including Jira pages nested inside one issue."""
     if isinstance(payload, dict):
+        if not payload:
+            return None
         total = _source_total(payload)
         if isinstance(total, int) and not isinstance(total, bool):
             for key in ("issues", "comments", "worklogs", "values", "results"):
@@ -905,7 +1170,31 @@ def _source_complete(payload: Any) -> bool:
             return False
         if payload.get("isLast") is False or payload.get("nextPage"):
             return False
-        return all(_source_complete(value) for value in payload.values())
+        children = [_source_complete(value) for value in payload.values()]
+        if any(value is False for value in children):
+            return False
+        if any(value is None for value in children):
+            return None
+        return True
     if isinstance(payload, list):
-        return all(_source_complete(value) for value in payload)
+        if not payload:
+            return None
+        children = [_source_complete(value) for value in payload]
+        if any(value is False for value in children):
+            return False
+        if any(value is None for value in children):
+            return None
+        return True
+    return None
+
+
+def _combine_completeness(values: Iterable[bool | None]) -> bool | None:
+    """Combine source lineage without turning an unknown input into false/true."""
+    states = list(values)
+    if not states:
+        return None
+    if any(state is False for state in states):
+        return False
+    if any(state is None for state in states):
+        return None
     return True

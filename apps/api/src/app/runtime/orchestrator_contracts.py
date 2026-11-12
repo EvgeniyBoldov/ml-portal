@@ -13,6 +13,7 @@ from pydantic_core import CoreSchema
 
 from app.runtime.task_value_normalization import is_absent
 from app.runtime.interaction import InteractionQuestion
+from app.agents.runtime.result_context import ResultObservation
 
 
 def _normalize_reference_list(value: Any) -> Any:
@@ -185,6 +186,7 @@ class ContinuationResultReference(BaseModel):
     operation: str = Field(..., min_length=1)
     revision: Optional[int] = Field(default=None, ge=1)
     source_complete: Optional[bool] = None
+    observation: Optional[ResultObservation] = None
     model_config = {"extra": "forbid"}
 
 
@@ -460,6 +462,7 @@ class PlannerContext(BaseModel):
     available_artifacts: List[Dict[str, Any]] = Field(default_factory=list)
     available_results: List[Dict[str, Any]] = Field(default_factory=list)
     result_catalog_status: str = "available"
+    prior_result_inventory: Dict[str, Any] = Field(default_factory=dict)
     deleted_artifact_ids: List[str] = Field(default_factory=list)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     task_brief: Dict[str, Any] = Field(default_factory=dict)
@@ -494,6 +497,7 @@ class TaskRequest(BaseModel):
     instructions: str = Field(..., min_length=1)
     inputs: Dict[str, Any] = Field(default_factory=dict)
     dependency_outputs: Dict[str, Any] = Field(default_factory=dict)
+    dependency_bindings: List[NeedBinding] = Field(default_factory=list)
     memory_context: List[Dict[str, Any]] = Field(default_factory=list)
     interaction_history: List[Dict[str, Any]] = Field(default_factory=list)
     resume_checkpoint: Dict[str, Any] = Field(default_factory=dict, exclude=True)

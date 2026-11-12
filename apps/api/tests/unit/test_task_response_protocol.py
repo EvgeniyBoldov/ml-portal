@@ -36,6 +36,8 @@ def test_runtime_artifact_needs_no_model_selection():
                     verified={"artifacts": [{"artifact_id": "f", "artifact_ref": "f"}]})
     assert result.outcome.value == "completed"
     assert result.attachments[0]["artifact_id"] == "f"
+    assert result.output_states["file"]["status"] == "unbound"
+    assert result.output_states["file"]["available_artifact_count"] == 1
     missing = reduce({"completion": "fulfilled", "answer": "File creation failed"}, outputs=[spec])
     assert missing.reason_code == "required_artifact_missing"
     assert missing.answer == "File creation failed"
@@ -132,7 +134,8 @@ async def test_large_task_context_is_saved_without_cutting_json(monkeypatch):
     task = TaskRequest(task_id="a", executor="agent", intent="use", instructions="use", inputs={"rows": ["x" * 10000]})
     ctx = SimpleNamespace(extra={"runtime_root_run_id": "root"}, tenant_id="t", user_id="u")
     bounded = await AgentExecutor._prepare_task_context(task, ctx, "execution")
-    assert save.await_args.kwargs["payload"] == task.inputs
-    assert bounded.inputs["saved_context"]["sql_ref"] == "result_stored"
+    assert save.await_args.kwargs["payload"] == {"value": task.inputs}
+    assert bounded.inputs["saved_context"]["path"] == "/value"
+    assert bounded.inputs["saved_context"]["reader"] == "result.read"
     assert task.inputs == {"rows": ["x" * 10000]}
-    assert "result_stored" in AgentExecutor._build_sub_messages([], bounded, "g")[-1]["content"]
+    assert '"result_id": "stored"' in AgentExecutor._build_sub_messages([], bounded, "g")[-1]["content"]

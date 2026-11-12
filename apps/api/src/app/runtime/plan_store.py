@@ -81,10 +81,19 @@ def _continuation_context(task: dict[str, Any], snapshot: dict[str, Any], inputs
         if not isinstance(receipt, dict) or receipt.get("success") is not True or not receipt.get("result_id"):
             continue
         analysis = receipt.get("analysis") if isinstance(receipt.get("analysis"), dict) else {}
+        observation = receipt.get("result_observation") if isinstance(receipt.get("result_observation"), dict) else None
         references.append(ContinuationResultReference(
             result_id=str(receipt["result_id"]), operation=str(receipt.get("operation") or "observed"),
-            revision=analysis.get("revision") if isinstance(analysis.get("revision"), int) else None,
+            revision=(observation.get("revision") if isinstance(observation, dict) and isinstance(observation.get("revision"), int)
+                      else analysis.get("revision") if isinstance(analysis.get("revision"), int) else None),
             source_complete=receipt.get("source_complete") if isinstance(receipt.get("source_complete"), bool) else None,
+            observation=ResultObservation.model_validate(observation) if observation else None,
+        ))
+    task_result_ref = verified.get("task_result_ref")
+    if isinstance(task_result_ref, dict) and task_result_ref.get("status") == "available" and task_result_ref.get("result_id"):
+        references.append(ContinuationResultReference(
+            result_id=str(task_result_ref["result_id"]), operation="runtime.task.result",
+            revision=task_result_ref.get("revision") if isinstance(task_result_ref.get("revision"), int) else None,
         ))
     bindings = []
     need_by_ref = {str(item.get("ref")): item for item in snapshot.get("needs", [])
@@ -102,7 +111,15 @@ def _continuation_context(task: dict[str, Any], snapshot: dict[str, Any], inputs
             producer_task_id=str(item["producer_task_id"]), output_key=str(item["output_key"]),
         ))
     fulfilled_refs = {binding.need_ref for binding in bindings}
-    prior_outputs = result.outputs if result.outputs != result.structured_response else {}
+    bound_output_keys = {binding.output_key for binding in bindings}
+    prior_structured_response = deepcopy(result.structured_response)
+    prior_outputs = deepcopy(result.outputs if result.outputs != result.structured_response else {})
+    if bound_output_keys:
+        if isinstance(prior_structured_response, dict):
+            for key in bound_output_keys:
+                prior_structured_response.pop(key, None)
+        for key in bound_output_keys:
+            prior_outputs.pop(key, None)
     prior_constraints = (prior.get("inputs") or {}).get("constraints", [])
     if isinstance(prior_constraints, str):
         prior_constraints = [prior_constraints]
@@ -112,7 +129,7 @@ def _continuation_context(task: dict[str, Any], snapshot: dict[str, Any], inputs
         prior_task_id=str(prior_task_id),
         prior_goal=str(prior.get("intent") or prior.get("instructions") or "Continue prior task"),
         remaining_goal=str(task.get("instructions") or task.get("intent") or "Continue the task"),
-        prior_structured_response=result.structured_response,
+        prior_structured_response=prior_structured_response,
         prior_outputs=prior_outputs,
         verification_status=str(verified.get("status") or "unverified"),
         prior_diagnostics=result.diagnostics,
@@ -155,6 +172,34 @@ def _result_value(result: Dict[str, Any], selector: str) -> Any:
         return value
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise PlanValidationError("binding_result_missing: requested result path is absent") from exc
+
+
+def _remove_bound_output(result: Dict[str, Any], selector: str) -> None:
+    """Remove only the exact value selected by an explicit binding path."""
+    if not selector.startswith("/"):
+        outputs = result.get("outputs")
+        if isinstance(outputs, dict):
+            outputs.pop(selector, None)
+        structured = result.get("structured_response")
+        if isinstance(structured, dict):
+            structured.pop(selector, None)
+        return
+    tokens = [token.replace("~1", "/").replace("~0", "~") for token in selector.split("/")[1:]]
+    if not tokens:
+        return
+    current: Any = result
+    try:
+        for token in tokens[:-1]:
+            current = current[int(token)] if isinstance(current, list) and token.isdigit() else current[token]
+        last = tokens[-1]
+        if isinstance(current, list) and last.isdigit():
+            index = int(last)
+            if 0 <= index < len(current):
+                current[index] = {"_bound_to_consumer_input": True}
+        elif isinstance(current, dict):
+            current.pop(last, None)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return
 
 
 
@@ -511,7 +556,9 @@ class InMemoryPlanStore:
         else:
             limitation = _safe_failure_limitation(failure.code)
             task["status"] = TaskStatus.FAILED.value
-            task["result"] = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": limitation["message"], "reason_code": failure.code, "outputs": {}, "limitation": limitation}
+            observed = failure.details.get("runtime_observed_partial") if isinstance(failure.details, dict) else None
+            task["result"] = {"outcome": TaskOutcome.UNFULFILLABLE.value, "description": limitation["message"], "reason_code": failure.code, "outputs": {}, "limitation": limitation,
+                               **({"verified": observed, "sources": observed.get("sources", []), "attachments": observed.get("artifacts", [])} if isinstance(observed, dict) else {})}
         return deepcopy(task)
 
     def task_request(self, plan_id: str, task_id: str) -> Dict[str, Any]:
@@ -529,9 +576,21 @@ class InMemoryPlanStore:
                 need = next((item for item in plan["needs"] if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
-        dependencies = {dep: plan["tasks"][dep]["result"] for dep in task["depends_on"]}
+        dependencies = {dep: deepcopy(plan["tasks"][dep]["result"]) for dep in task["depends_on"]}
+        # A bound output is already present under its consumer input key.
+        # Keep the dependency identity and all other outputs, but avoid
+        # serializing the same potentially large JSON value twice.
+        for binding in plan["bindings"]:
+            if binding["consumer_task_id"] != task_id:
+                continue
+            dependency = dependencies.get(binding["producer_task_id"])
+            if not isinstance(dependency, dict):
+                continue
+            _remove_bound_output(dependency, binding["output_key"])
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"],
                 "inputs": inputs, "dependency_outputs": dependencies,
+                "dependency_bindings": [binding for binding in plan["bindings"]
+                                        if binding["consumer_task_id"] == task_id],
                 "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, plan, inputs), **_task_interactions(plan, task_id)}
 
     def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction) -> None:
@@ -917,7 +976,15 @@ class SqlPlanStore:
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
         _validate_compiled_inputs(task, inputs)
-        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": {dep: snapshot["tasks"][dep]["result"] for dep in task["depends_on"]}, "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, snapshot, inputs), **_task_interactions(snapshot, task_id)}
+        dependencies = {dep: deepcopy(snapshot["tasks"][dep]["result"]) for dep in task["depends_on"]}
+        for binding in snapshot.get("bindings", []):
+            if binding["consumer_task_id"] != task_id:
+                continue
+            dependency = dependencies.get(binding["producer_task_id"])
+            if not isinstance(dependency, dict):
+                continue
+            _remove_bound_output(dependency, binding["output_key"])
+        return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": dependencies, "dependency_bindings": [binding for binding in snapshot.get("bindings", []) if binding["consumer_task_id"] == task_id], "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, snapshot, inputs), **_task_interactions(snapshot, task_id)}
 
     async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction) -> None:
         plan = await self._plan(plan_id, lock=True)
@@ -1050,6 +1117,10 @@ class SqlPlanStore:
                 "reason_code": failure.code,
                 "outputs": {},
                 "limitation": limitation,
+                **({"verified": failure.details["runtime_observed_partial"],
+                    "sources": failure.details["runtime_observed_partial"].get("sources", []),
+                    "attachments": failure.details["runtime_observed_partial"].get("artifacts", [])}
+                   if isinstance(failure.details.get("runtime_observed_partial"), dict) else {}),
             }
         await self._session.flush()
         await self._commit()

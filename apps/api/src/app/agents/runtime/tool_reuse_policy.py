@@ -38,9 +38,13 @@ class ToolCallReusePolicy:
                 exclude_call_id=str(ctx.extra.get("runtime_active_tool_call_id") or "") or None,
             )
             if prior is not None and prior.status != "succeeded":
+                unknown = prior.status == "outcome_unknown" or prior.outcome_unknown
                 return ToolResult.fail(
-                    "This identical tool call already has an unresolved execution in this agent run.",
-                    error_code="duplicate_execution_blocked", retryable=False,
+                    ("This identical operation already has an unknown execution outcome; verify its state "
+                     "before choosing whether another call is safe." if unknown else
+                     "This identical tool call already has an unresolved execution in this agent run."),
+                    error_code="tool_outcome_unknown" if unknown else "duplicate_execution_blocked", retryable=False,
+                    outcome_unknown=unknown,
                     reused_from_call_id=prior.call_id,
                 ), []
 
@@ -76,4 +80,11 @@ class ToolCallReusePolicy:
                 **(reused.result_data if isinstance(reused.result_data, dict) else {}),
                 "result_id": reused.stored_result_id, "inline_complete": False,
             }
+            if reused.result_delivery == "direct" and not reused.result_data_available:
+                observation = reused.result_observation or {}
+                result.metadata["direct_recovery"] = {
+                    "result_id": reused.stored_result_id,
+                    "revision": observation.get("revision") or 1,
+                    "reason": observation.get("recovery_reason") or "batch_context_budget",
+                }
         return result, [dict(source) for source in (reused.sources or []) if isinstance(source, dict)]

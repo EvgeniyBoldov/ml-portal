@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 from collections.abc import Callable
+from app.runtime.memory.tool_ledger import canonical_operation_name
 
 
 @dataclass(frozen=True)
@@ -131,6 +133,10 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
         default=-1,
     )
     call_names: dict[str, str] = {}
+    latest_text_result_index = max((i for i, message in enumerate(projected)
+                                    if message.get("role") == "user"
+                                    and isinstance(message.get("content"), str)
+                                    and "```tool_result" in message["content"]), default=-1)
     for message in projected:
         if message.get("role") != "assistant":
             continue
@@ -141,19 +147,18 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
             if call.get("id"):
                 call_names[str(call["id"])] = str(function.get("name") or "")
     for index, message in enumerate(projected):
-        if index >= latest_assistant_call:
+        if message.get("role") == "user":
+            content = message.get("content")
+            if (index < latest_text_result_index and isinstance(content, str)
+                    and "```tool_result" in content):
+                message["content"] = _compact_text_tool_results(content)
             continue
-        if message.get("role") != "tool":
+        if message.get("role") != "tool" or index >= latest_assistant_call:
             continue
         content = message.get("content")
         if not isinstance(content, str):
             continue
         operation = call_names.get(str(message.get("tool_call_id") or ""), "")
-        if operation.removeprefix("instance.") in {
-            "result.read", "result.describe", "result.sql", "result.load",
-            "result.aggregate", "result.find", "result.analyze", "memory.search",
-        }:
-            continue
         # Keep the latest read facts in full; compact older tool payloads into a
         # pointer with any runtime receipt metadata retained.
         try:
@@ -170,24 +175,196 @@ def project_model_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any
             message["content"] = json.dumps({
                 "_runtime_result": {key: metadata.get(key) for key in (
                     "result_id", "operation", "payload_type", "row_count", "inline_complete",
-                    "source_complete", "revision",
+                    "source_complete", "revision", "result_observation", "next_action", "offset", "limit",
+                    "fields", "path", "text_offset", "text_limit", "child_offset", "child_limit",
+                    "next_offset", "read_complete", "query_complete", "input_result_id", "input_revision",
+                    "page_may_have_more", "recovery_reason", "delivery", "source_total",
+                    "snapshot_only", "imported_from",
+                    "view",
                 ) if key in metadata},
                 "receipt": "Earlier result retained in the runtime result store; inspect it again if needed.",
             }, ensure_ascii=False)
         elif (isinstance(value, dict) and value.get("status") in {"ready", "already_completed"}
-              and isinstance(value.get("result_id"), str) and value.get("result_id")):
+              and isinstance(value.get("result_id"), str) and value.get("result_id")
+              and canonical_operation_name(operation).split(".", 1)[0] == "result"):
             message["content"] = json.dumps({
                 "status": value["status"],
                 "result_id": value["result_id"],
                 "revision": value.get("revision", 1),
                 "source_coverage": value.get("source_coverage"),
+                "snapshot_only": value.get("snapshot_only"),
+                "imported_from": value.get("imported_from"),
+                "view": value.get("view"),
                 "next_action": value.get("next_action") or {
                     "tool": "result.read",
-                    "arguments": {"result_id": value["result_id"], "revision": value.get("revision", 1)},
+                    "arguments": {"result_id": value["result_id"], "revision": value.get("revision", 1),
+                                  **{key: value[key] for key in ("offset", "limit", "fields", "path",
+                                      "text_offset", "text_limit", "child_offset", "child_limit", "view") if key in value}},
                     "message": "Read the saved records if needed.",
                 },
                 "receipt": "Earlier saved result; inspect it again if needed.",
             }, ensure_ascii=False)
+    return projected
+
+
+def _compact_text_tool_results(content: str) -> str:
+    """Bound older textual tool-result blocks without hiding their status."""
+    import re
+
+    pattern = re.compile(r"(?s)(```tool_result\s*)(\{.*?\})(\s*```)" )
+
+    def compact(match: re.Match[str]) -> str:
+        try:
+            value = json.loads(match.group(2))
+        except (TypeError, ValueError):
+            return match.group(0)
+        if not isinstance(value, dict):
+            return match.group(0)
+        nested = value.get("result")
+        if isinstance(nested, str):
+            try:
+                nested_value = json.loads(nested)
+            except (TypeError, ValueError):
+                nested_value = None
+        else:
+            nested_value = nested
+        tool_name = str(value.get("tool") or "")
+        canonical_tool = canonical_operation_name(tool_name).split(".", 1)[0]
+        recoverable_envelope = isinstance(nested_value, dict) and isinstance(nested_value.get("_runtime_result"), dict)
+        if (not isinstance(nested_value, dict) or not nested_value.get("result_id")
+                or (canonical_tool != "result" and not recoverable_envelope)):
+            # Direct and unrecoverable evidence must remain available.
+            return match.group(0)
+        receipt: dict[str, Any] = {}
+        for key in ("tool", "operation", "success", "status", "error_code", "evidence_call_id",
+                    "result_id", "revision", "recoverability", "omitted_ids", "coverage"):
+            if key in value:
+                receipt[key] = value[key]
+        for key in ("status", "result_id", "revision", "source_coverage", "next_action",
+                    "read_complete", "page_may_have_more", "query_complete", "omitted_ids",
+                    "snapshot_only", "imported_from", "view"):
+            if key in nested_value:
+                receipt[key] = nested_value[key]
+        metadata = value.get("_runtime_result")
+        if isinstance(metadata, dict):
+            receipt["_runtime_result"] = {key: metadata[key] for key in (
+                "result_id", "revision", "inline_complete", "source_complete") if key in metadata}
+        if not receipt:
+            return match.group(0)
+        receipt["receipt"] = "Earlier tool result body omitted from model context; identifiers and explicit omissions retained."
+        return match.group(1) + json.dumps(receipt, ensure_ascii=False) + match.group(3)
+
+    return pattern.sub(compact, content)
+
+
+def bound_document_memory_request(
+    request: dict[str, Any], *, context_window_tokens: int, reserve_output_tokens: int = 1024,
+) -> dict[str, Any]:
+    """Trim passage projection until the exact next request fits its input budget.
+
+    The full owner-local memory stays in runtime state. The request gets explicit
+    coverage and omitted passage identities, never fabricated replacement text.
+    """
+    from app.adapters.impl.llm_context import inspect_context
+
+    projected = deepcopy(request)
+    messages = projected.get("messages") or []
+    target = next((message for message in messages if isinstance(message.get("content"), str)
+                   and message["content"].startswith("[Document memory for this task]")), None)
+    if target is None:
+        return projected
+    content = target["content"]
+    decoder = json.JSONDecoder()
+    memory = None
+    suffix_start = -1
+    # Production prompts have a prose preamble, followed by the serialized
+    # document_memory list. Find the trailing JSON object/array without assuming
+    # that it starts immediately after the heading.
+    for position in (i + 1 for i, char in enumerate(content) if char == "\n"):
+        try:
+            value, end = decoder.raw_decode(content, position)
+        except (ValueError, TypeError):
+            continue
+        if content[end:].strip() == "" and isinstance(value, (dict, list)):
+            memory, suffix_start = value, position
+            break
+    if memory is None:
+        return projected
+    prompt_prefix = content[:suffix_start]
+    containers = memory if isinstance(memory, list) else [memory]
+    groups: list[dict[str, Any]] = []
+    for container in containers:
+        if isinstance(container, dict) and isinstance(container.get("groups"), list):
+            groups.extend(group for group in container["groups"] if isinstance(group, dict))
+    if not groups:
+        return projected
+    omitted: list[str] = []
+
+    def identity(item: dict[str, Any], group_index: int, item_index: int) -> str:
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        for key in ("passage_id", "chunk_id", "section_id", "document_id", "artifact_id", "source_id"):
+            value = item.get(key) or metadata.get(key)
+            if value:
+                return str(value)
+        return hashlib.sha256(json.dumps(item, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
+
+    def render() -> None:
+        projection = {"included_passages": sum(len(group.get("items") or []) for group in groups),
+                      "omitted_passage_count": len(omitted), "omitted_passage_ids": omitted}
+        for container in containers:
+            if isinstance(container, dict) and isinstance(container.get("groups"), list):
+                container["projection_coverage"] = projection
+        target["content"] = prompt_prefix + "\n" + json.dumps(memory, ensure_ascii=False, default=str)
+
+    render()
+    def fits() -> bool:
+        try:
+            allocation = inspect_context(projected, context_window_tokens)
+            return allocation.max_output_tokens >= max(
+                allocation.minimum_output_tokens, reserve_output_tokens)
+        except Exception:
+            return False
+
+    while not fits():
+        candidates = [(group_index, item_index, item) for group_index, group in enumerate(groups)
+                      for item_index, item in enumerate(group.get("items") or [])]
+        if not candidates:
+            break
+        # Keep the newest passage from every scope when possible; evict oldest
+        # remaining passages first, preserving source IDs for explicit coverage.
+        group_index, item_index, item = candidates[0]
+        group = groups[group_index]
+        omitted.append(identity(item, group_index, item_index))
+        group["items"].pop(item_index)
+        render()
+    # If even metadata exceeds budget, omit passages from the wire and retain a
+    # compact coverage receipt. No passage is synthesized.
+    if not fits():
+        for container in containers:
+            if not isinstance(container, dict) or not isinstance(container.get("groups"), list):
+                continue
+            compact_groups = []
+            for group_index, group in enumerate(container["groups"]):
+                if not isinstance(group, dict):
+                    continue
+                compact_group = {key: group[key] for key in ("scope_slug", "status", "success", "count") if key in group}
+                for item_index, item in enumerate(group.get("items") or []):
+                    passage_id = identity(item, group_index, item_index)
+                    if passage_id not in omitted:
+                        omitted.append(passage_id)
+                compact_group["items"] = []
+                compact_groups.append(compact_group)
+            container["groups"] = compact_groups
+        # Drop preamble prose only when even the metadata receipt plus the
+        # actual request's tool/schema overhead misses the required reserve.
+        prompt_prefix = "[Document memory for this task]"
+        render()
+    if not fits():
+        compact_memory = [{"type": "document_memory", "projection_coverage": {
+            "included_passages": 0, "omitted_passage_count": len(omitted),
+            "omitted_passage_ids": omitted,
+        }}]
+        target["content"] = prompt_prefix + "\n" + json.dumps(compact_memory, ensure_ascii=False)
     return projected
 
 
@@ -211,6 +388,8 @@ def runtime_result_metadata(content: str) -> dict[str, Any]:
             "revision": value.get("revision", 1),
             "inline_complete": "records" in value,
             "source_complete": coverage.get("complete") if isinstance(coverage, dict) else None,
+            "snapshot_only": value.get("snapshot_only"),
+            "imported_from": value.get("imported_from"),
         }
     return {}
 

@@ -20,6 +20,7 @@ _MODEL_META_FIELDS = {
     "source", "total", "has_next", "complete", "source_tool", "start_offset",
     "coverage_incomplete", "continuation_error", "searched_types", "successful_types", "errors",
     "truncated", "columns", "input_revisions",
+    "snapshot_only", "imported_from", "source_operation",
 }
 
 
@@ -37,6 +38,10 @@ def _bounded_model_meta(meta: dict[str, Any]) -> dict[str, Any]:
         elif isinstance(value, dict) and key == "input_revisions":
             result[key] = {str(name)[:64]: revision for name, revision in list(value.items())[:20]
                            if isinstance(revision, int)}
+        elif isinstance(value, dict) and key == "imported_from":
+            result[key] = {name: value[name] for name in (
+                "source_run_id", "source_result_id", "source_revision", "source_operation",
+                "source_created_at", "source_expires_at") if name in value}
         elif value is None or isinstance(value, (bool, int, float)):
             result[key] = value
     return result
@@ -53,19 +58,81 @@ def normalized_page(payload: Any, source_tool: str, arguments: dict[str, Any]) -
         raise ToolResultStoreError(f"Source result protocol is invalid: {exc}") from exc
 
 
+def _json_pointer(value: Any, pointer: str) -> Any:
+    if pointer == "":
+        return value
+    if not pointer.startswith("/"):
+        raise ToolResultStoreError("path must be an RFC 6901 JSON Pointer")
+    current = value
+    for raw_segment in pointer[1:].split("/"):
+        segment = raw_segment.replace("~1", "/").replace("~0", "~")
+        if isinstance(current, dict) and segment in current:
+            current = current[segment]
+        elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
+            current = current[int(segment)]
+        else:
+            raise ToolResultStoreError(f"JSON Pointer path not found: {pointer}")
+    return current
+
+
+def _describe_children(value: Any, pointer: str, *, offset: int, limit: int) -> dict[str, Any]:
+    def child_value(item: Any) -> dict[str, Any]:
+        descriptor = {"type": _json_kind(item)}
+        if not isinstance(item, (dict, list, str)) or (isinstance(item, str) and len(item) <= 120):
+            descriptor["value"] = item
+        elif isinstance(item, str):
+            descriptor["text_length"] = len(item)
+        return descriptor
+    if isinstance(value, dict):
+        keys = sorted(value)
+        selected = keys[offset:offset + limit]
+        children = [{"key": key, "path": f"{pointer}/{key.replace('~', '~0').replace('/', '~1')}",
+                     **child_value(value[key])} for key in selected]
+        count = len(keys)
+    elif isinstance(value, list):
+        selected = list(range(offset, min(len(value), offset + limit)))
+        children = [{"index": index, "path": f"{pointer}/{index}", **child_value(value[index])}
+                    for index in selected]
+        count = len(value)
+    else:
+        return {"value": value}
+    next_offset = offset + len(children)
+    return {"children": children, "child_offset": offset, "child_limit": limit,
+            "child_count": count, "next_child_offset": next_offset if next_offset < count else None,
+            "children_complete": next_offset >= count}
+
+
+def _json_kind(value: Any) -> str:
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "unknown"
+
+
 class ResultWorkspace:
     async def save_source(self, *, payload: Any, source_tool: str, arguments: dict[str, Any], **scope: Any) -> tuple[dict[str, Any], dict[str, Any]]:
         page = normalized_page(payload, source_tool, arguments)
+        from app.runtime.redactor import RuntimeRedactor
+        safe_value = RuntimeRedactor().redact(page.value)
         meta = page.meta.model_dump()
         meta.update(source_tool=source_tool, start_offset=arguments.get("offset", arguments.get("start_at", 0)))
         page_bytes = len(_json_dumps_exact({"payload": payload, "meta": meta}, ensure_ascii=False, default=str).encode("utf-8"))
         if page_bytes > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
             raise ToolResultStoreError("Source page and metadata exceed the configured storage limit")
-        descriptor = await ToolResultStore().save(payload=page.value, arguments=arguments,
-            dataset_meta=meta, source_complete=page.meta.complete is True,
-            source_page={"page_key": page_key(arguments), "payload": payload, "meta": meta,
-                         "value": page.value, "source_tool": source_tool, "arguments": arguments}, **scope)
-        return descriptor, {"value": page.value, "meta": {key: value for key, value in meta.items() if key != "next_arguments"}}
+        descriptor = await ToolResultStore().save(payload=safe_value, arguments=arguments,
+            dataset_meta=meta, source_complete=page.meta.complete,
+            source_page={"page_key": page_key(arguments), "payload": {"value": safe_value, "meta": meta}, "meta": meta,
+                         "value": safe_value, "source_tool": source_tool, "arguments": arguments}, **scope)
+        return descriptor, {"value": safe_value, "meta": {key: value for key, value in meta.items() if key != "next_arguments"}}
 
     async def state(self, *, result_id: str, run_id: str, tenant_id: UUID, user_id: UUID) -> dict[str, Any]:
         try:
@@ -109,13 +176,20 @@ class ResultWorkspace:
         return state
 
     async def read(self, *, offset: int = 0, limit: int = 20, fields: list[str] | None = None,
+                   path: str | None = None, text_offset: int = 0, text_limit: int | None = None,
+                   child_offset: int = 0, child_limit: int = 100,
+                   view: str = "auto",
                    revision: int | None = None, context_budget_tokens: int | None = None,
                    context_model: str | None = None, **scope: Any) -> dict[str, Any]:
         state = await self.state(**scope)
         if revision is not None and state["revision"] != revision:
             raise ToolResultStoreError("Dataset revision changed; describe it and restart reading")
-        if offset < 0 or not 1 <= limit <= get_settings().TOOL_RESULTS_READ_MAX_ROWS:
+        if offset < 0 or text_offset < 0 or child_offset < 0 or view not in {"auto", "value", "children"} or not 1 <= child_limit <= 200 or not 1 <= limit <= get_settings().TOOL_RESULTS_READ_MAX_ROWS:
             raise ToolResultStoreError("Invalid read offset or limit")
+        if path is not None and limit != 1:
+            raise ToolResultStoreError("JSON Pointer reads use limit=1 so text/child cursors refer to one row")
+        if path is not None and text_limit is not None and text_limit > 12000:
+            raise ToolResultStoreError("JSON Pointer text_limit cannot exceed 12000")
         from app.services.tool_result_store import _get_path
         from app.services.result_sql_projection import sql_columns
         columns = sql_columns(state["observed_schema"])
@@ -136,11 +210,20 @@ class ResultWorkspace:
                 WHERE result_id=CAST(:result_id AS uuid) AND run_id=:run_id AND ordinal>=:offset
                 ORDER BY ordinal LIMIT :limit"""), {**scope, "offset": offset, "limit": limit})).mappings().all()
         values = []
+        effective_text_limit = text_limit
         budget = max(32, min(get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS,
                              get_settings().TOOL_RESULTS_CONTEXT_TOKENS * 3 - 1000, 3000))
+        effective_view = "value" if path is None else view
         for record in records:
             value = record["data"]
-            if fields:
+            if path is not None:
+                value = _json_pointer(value, path)
+                if isinstance(value, str):
+                    effective_text_limit = text_limit or min(12000, get_settings().TOOL_RESULTS_QUERY_CONTEXT_CHARS)
+                    value = value[text_offset:text_offset + effective_text_limit]
+                elif isinstance(value, (dict, list)) and view == "children":
+                    value = _describe_children(value, path, offset=child_offset, limit=child_limit)
+            elif fields:
                 value = {field: _get_path(value, field_paths[field]) for field in fields}
             candidate_values = values + [value]
             rendered_candidate = json.dumps({
@@ -155,14 +238,83 @@ class ResultWorkspace:
                 ]}) > context_budget_tokens
             else:
                 exceeds = len(json.dumps(candidate_values, ensure_ascii=False, default=str).encode()) > budget
+            if exceeds and path is not None and view == "auto" and isinstance(value, (dict, list)):
+                value = _describe_children(_json_pointer(record["data"], path), path,
+                                           offset=child_offset, limit=child_limit)
+                effective_view = "children"
+                candidate_values = values + [value]
+                rendered_candidate = json.dumps({"result_id": scope["result_id"],
+                    "revision": state["revision"], "value": candidate_values,
+                    "returned_count": len(candidate_values), "loaded_items": state["row_count"],
+                    "source_complete": state["source_complete"]}, ensure_ascii=False,
+                    default=str, separators=(",", ":"))
+                if context_budget_tokens is not None:
+                    from app.adapters.impl.llm_context import estimate_request_tokens
+                    exceeds = estimate_request_tokens({"model": context_model, "messages": [
+                        {"role": "tool", "content": rendered_candidate},
+                    ]}) > context_budget_tokens
+                else:
+                    exceeds = len(json.dumps(candidate_values, ensure_ascii=False, default=str).encode()) > budget
+            if exceeds and path is not None and isinstance(value, str) and len(value) > 1:
+                while exceeds and len(value) > 1:
+                    value = value[:max(1, len(value) // 2)]
+                    candidate_values = values + [value]
+                    rendered_candidate = json.dumps({"result_id": scope["result_id"],
+                        "revision": state["revision"], "value": candidate_values,
+                        "returned_count": len(candidate_values), "loaded_items": state["row_count"],
+                        "source_complete": state["source_complete"]}, ensure_ascii=False,
+                        default=str, separators=(",", ":"))
+                    if context_budget_tokens is not None:
+                        from app.adapters.impl.llm_context import estimate_request_tokens
+                        exceeds = estimate_request_tokens({"model": context_model, "messages": [
+                            {"role": "tool", "content": rendered_candidate},
+                        ]}) > context_budget_tokens
+                    else:
+                        exceeds = len(json.dumps(candidate_values, ensure_ascii=False, default=str).encode()) > budget
+            elif exceeds and path is not None and isinstance(value, dict) and isinstance(value.get("children"), list):
+                while exceeds and len(value["children"]) > 1:
+                    value["children"] = value["children"][:max(1, len(value["children"]) // 2)]
+                    value["next_child_offset"] = child_offset + len(value["children"])
+                    value["children_complete"] = False
+                    candidate_values = values + [value]
+                    rendered_candidate = json.dumps({"result_id": scope["result_id"],
+                        "revision": state["revision"], "value": candidate_values,
+                        "returned_count": len(candidate_values), "loaded_items": state["row_count"],
+                        "source_complete": state["source_complete"]}, ensure_ascii=False,
+                        default=str, separators=(",", ":"))
+                    if context_budget_tokens is not None:
+                        from app.adapters.impl.llm_context import estimate_request_tokens
+                        exceeds = estimate_request_tokens({"model": context_model, "messages": [
+                            {"role": "tool", "content": rendered_candidate},
+                        ]}) > context_budget_tokens
+                    else:
+                        exceeds = len(json.dumps(candidate_values, ensure_ascii=False, default=str).encode()) > budget
             if exceeds:
                 break
             values.append(value)
         next_offset = offset + len(values)
         unread = next_offset < state["row_count"]
+        next_text_offset = None
+        next_child_offset = None
+        if values and isinstance(values[0], str) and path is not None:
+            source_text = _json_pointer(records[0]["data"], path)
+            if text_offset + len(values[0]) < len(source_text):
+                next_text_offset = text_offset + len(values[0])
+        if values and isinstance(values[0], dict):
+            next_child_offset = values[0].get("next_child_offset")
+        nested_unread = next_text_offset is not None or next_child_offset is not None
         return {"result_id": scope["result_id"], "revision": state["revision"], "value": values,
                 "returned_count": len(values), "loaded_items": state["row_count"],
-                "source_complete": state["source_complete"], "read_complete": not unread,
+                "source_complete": state["source_complete"], "read_complete": not unread and not nested_unread,
+                "offset": offset, "limit": limit,
+                "fields": fields, "path": path,
+                "text_offset": text_offset, "text_limit": effective_text_limit,
+                "applied_text_limit": len(values[0]) if values and isinstance(values[0], str) and path is not None else None,
+                "child_offset": child_offset, "child_limit": child_limit,
+                "next_text_offset": next_text_offset,
+                "next_child_offset": next_child_offset, "view": effective_view,
+                "snapshot_only": bool((state["dataset_meta"] or {}).get("snapshot_only")),
+                "imported_from": (state["dataset_meta"] or {}).get("imported_from"),
                 # Keep the applied projection in the receipt so a model can
                 # continue paging with the same field set. `fields=None`
                 # means the caller requested the complete row shape.
@@ -213,12 +365,17 @@ class ResultWorkspace:
             expected_revisions={scope["result_id"]: state["revision"]},
             **{key: value for key, value in scope.items() if key != "result_id"})
         output.update(operation=kind, input_result_id=scope["result_id"], offset=offset, limit=limit,
-                      input_revision=state["revision"], page_may_have_more=output["row_count"] == limit)
+                      input_revision=state["revision"], page_may_have_more=output["row_count"] == limit,
+                      query_complete=not bool(output.get("truncated")),
+                      **({"columns": columns} if columns is not None else {}),
+                      **({"q": q} if q else {}))
         return output
 
     async def append_page(self, *, payload: Any, source_tool: str, arguments: dict[str, Any],
                           expected_revision: int, call_id: str, **scope: Any) -> dict[str, Any]:
         page = normalized_page(payload, source_tool, arguments)
+        from app.runtime.redactor import RuntimeRedactor
+        safe_value = RuntimeRedactor().redact(page.value)
         params = {**scope, "key": page_key(arguments)}
         async with get_tool_results_engine().begin() as connection:
             row = (await connection.execute(text("""SELECT payload, dataset_meta, row_count, revision
@@ -234,18 +391,24 @@ class ResultWorkspace:
                 raise ToolResultStoreError("Dataset changed while fetching; retry continuation")
             if row["dataset_meta"].get("next_arguments") != arguments:
                 raise ToolResultStoreError("Page does not match the saved continuation")
-            combined = row["payload"] + page.value
+            combined = row["payload"] + safe_value
             serialized = _json_dumps_exact(combined, ensure_ascii=False, default=str)
             if len(serialized.encode()) > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
                 raise ToolResultStoreError("Dataset storage budget reached; saved pages remain available")
             schema, sample, schema_complete, sample_complete = _profile_rows(combined)
             meta = {**row["dataset_meta"], **page.meta.model_dump()}
-            meta["coverage_incomplete"] = bool(row["dataset_meta"].get("coverage_incomplete") or meta.get("coverage_incomplete"))
+            if row["dataset_meta"].get("source") == "collection":
+                # Older collection.search versions incorrectly equated an
+                # expected next page with missing coverage.
+                meta["coverage_incomplete"] = bool(getattr(page.meta, "coverage_incomplete", False))
+            else:
+                meta["coverage_incomplete"] = bool(row["dataset_meta"].get("coverage_incomplete") or meta.get("coverage_incomplete"))
             if page.meta.total is None:
                 meta["total"] = row["dataset_meta"].get("total")
             if page.meta.next_arguments == arguments:
                 raise ToolResultStoreError("Source continuation did not advance")
-            raw_page = _json_dumps_exact({"payload": payload, "meta": page.meta.model_dump()}, default=str)
+            raw_page = _json_dumps_exact({"payload": {"value": safe_value, "meta": page.meta.model_dump()},
+                                          "meta": page.meta.model_dump()}, default=str)
             if len(raw_page.encode("utf-8")) > get_settings().TOOL_RESULTS_MAX_PAYLOAD_BYTES:
                 raise ToolResultStoreError("Source page and metadata exceed the configured storage limit")
             next_arguments = meta.get("next_arguments")
@@ -261,6 +424,8 @@ class ResultWorkspace:
             complete = (page.meta.has_next is False and row["dataset_meta"].get("start_offset", 0) == 0
                         and not meta["coverage_incomplete"]
                         and (meta["total"] is None or len(combined) >= meta["total"]))
+            if page.meta.has_next is None or row["dataset_meta"].get("complete") is None:
+                complete = None
             meta["complete"] = complete
             from app.services.result_sql_projection import sql_columns, inspect_table
             meta["table_schema"] = sql_columns(schema)
@@ -268,12 +433,12 @@ class ResultWorkspace:
                 (result_id,page_key,call_id,payload,meta) VALUES
                 (CAST(:result_id AS uuid),:key,:call_id,CAST(:raw AS jsonb),CAST(:meta AS jsonb))"""),
                 {**params, "call_id": call_id, "raw": raw_page, "meta": _json_dumps_exact(meta, default=str)})
-            for start in range(0, len(page.value), 1000):
+            for start in range(0, len(safe_value), 1000):
                 await connection.execute(text("""INSERT INTO runtime_tool_result_rows
                     (result_id,run_id,ordinal,data) VALUES (CAST(:result_id AS uuid),:run_id,:ordinal,CAST(:data AS jsonb))"""),
                     [{"result_id": scope["result_id"], "run_id": scope["run_id"],
                       "ordinal": row["row_count"] + index, "data": _json_dumps_exact(value, default=str)}
-                     for index, value in enumerate(page.value[start:start+1000], start=start)])
+                     for index, value in enumerate(safe_value[start:start+1000], start=start)])
             await connection.execute(text("""UPDATE runtime_tool_payloads SET payload=CAST(:payload AS jsonb),
                 payload_sha256=:sha, dataset_meta=CAST(:meta AS jsonb), row_count=:count,
                 source_total=:total, source_complete=:complete, revision=revision+1,

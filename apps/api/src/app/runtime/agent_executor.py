@@ -16,6 +16,7 @@ Design:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from copy import deepcopy
 import json
@@ -62,6 +63,9 @@ from app.runtime.turn_state import RuntimeTurnState
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, InteractionRequired
 
 logger = get_logger(__name__)
+
+TASK_RESULT_INLINE_LIMIT_CHARS = 8_000
+TASK_CONTEXT_INLINE_LIMIT_CHARS = 8_000
 
 
 def _agent_access_inventory(sub_request: Any) -> list[dict[str, Any]]:
@@ -630,6 +634,8 @@ class AgentExecutor:
                         result_inline_complete=runtime_event.data.get("result_inline_complete"),
                         result_source_complete=runtime_event.data.get("result_source_complete"),
                         result_delivery=runtime_event.data.get("result_delivery", "stored"),
+                        result_observation=(dict(runtime_event.data["result_observation"])
+                            if isinstance(runtime_event.data.get("result_observation"), dict) else None),
                         sources=[
                             dict(source)
                             for source in (runtime_event.data.get("sources") or [])
@@ -724,11 +730,16 @@ class AgentExecutor:
         # untracked failure point after all tool execution has completed.
         raw_summary = final_content
         if not success:
+            partial_verified = self._verified_task_result(
+                task=task, ledger_entries=task_ledger_entries(),
+                sources=sub_sources, verified_artifacts=artifacts,
+            )
             ctx.extra["agent_execution_failure"] = {
                 "code": final_error_code or "agent_failed",
                 "message": final_error or "Task execution failed",
                 "retryable": bool(final_retryable),
                 "retry_after_ms": final_retry_after_ms,
+                "details": {"runtime_observed_partial": partial_verified},
             }
         else:
             try:
@@ -743,6 +754,10 @@ class AgentExecutor:
                     "details": {
                         "retry_scope": "terminal_contract",
                         "validation_stage": "agent_terminal_response",
+                        "runtime_observed_partial": self._verified_task_result(
+                            task=task, ledger_entries=task_ledger_entries(),
+                            sources=sub_sources, verified_artifacts=artifacts,
+                        ),
                     },
                 }
             else:
@@ -751,6 +766,10 @@ class AgentExecutor:
                     ledger_entries=task_ledger_entries(),
                     sources=sub_sources,
                     verified_artifacts=artifacts,
+                )
+                await self._persist_large_task_result_reference(
+                    verified=verified, task=task, declaration=execution, ctx=ctx,
+                    execution_id=lifecycle_agent_execution_id,
                 )
                 ctx.extra["agent_execution_result"] = execution
                 ctx.extra["agent_execution_verified"] = verified
@@ -995,6 +1014,41 @@ class AgentExecutor:
         return TaskExecutionReceipt(declaration=execution, verified=verified if isinstance(verified, dict) else {})
 
     @staticmethod
+    async def _persist_large_task_result_reference(
+        *, verified: Dict[str, Any], task: TaskRequest,
+        declaration: TaskCompletionDeclaration, ctx: ToolContext,
+        execution_id: str | None,
+    ) -> None:
+        payload = {"structured_response": declaration.structured_response}
+        serialized = json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str)
+        if len(serialized) <= TASK_RESULT_INLINE_LIMIT_CHARS:
+            return
+        run_id = str(ctx.extra.get("runtime_root_run_id") or "")
+        try:
+            saved = await ToolResultStore().save(
+                run_id=run_id, call_id=f"task-result:{task.task_id}:{hashlib.sha256(serialized.encode()).hexdigest()}",
+                operation="runtime.task.result", tenant_id=UUID(str(ctx.tenant_id)),
+                user_id=UUID(str(ctx.user_id)), task_id=task.task_id,
+                agent_execution_id=execution_id, payload=payload,
+            )
+            result_id = str(saved["result_id"])
+            reader_arguments = {"result_id": result_id, "revision": int(saved.get("revision") or 1),
+                                "path": "/structured_response", "offset": 0, "limit": 1,
+                                "text_offset": 0, "text_limit": 12000}
+            verified["task_result_ref"] = {
+                "status": "available", "result_id": result_id,
+                "revision": reader_arguments["revision"], "path": "/structured_response",
+                "reader": "result.read", "reader_arguments": reader_arguments,
+                "next_action": {"tool": "result.read", "arguments": reader_arguments},
+            }
+        except Exception as exc:
+            logger.warning("Could not persist oversized task result reference: %s", exc)
+            verified["task_result_ref"] = {
+                "status": "unavailable", "reason": "result_store_unavailable",
+                "message": "The full task result is retained in the canonical task result but could not be added to the planner result catalog.",
+            }
+
+    @staticmethod
     def _verified_task_result(
         *, task: TaskRequest, ledger_entries: List[Any], sources: List[Dict[str, Any]],
         verified_artifacts: Optional[List[Dict[str, Any]]] = None,
@@ -1003,9 +1057,18 @@ class AgentExecutor:
         receipts: List[Dict[str, Any]] = []
         evidence: Dict[str, Any] = {}
         artifacts: List[Dict[str, Any]] = []
+        limitations: List[Dict[str, Any]] = []
         fresh_retrieval = False
         for entry in ledger_entries:
             if getattr(entry, "status", None) != "succeeded" or not getattr(entry, "success", False):
+                data = getattr(entry, "result_data", None)
+                error = data.get("error") if isinstance(data, dict) and isinstance(data.get("error"), dict) else {}
+                code = str((data.get("error_code") if isinstance(data, dict) else None)
+                           or error.get("code") or (data.get("code") if isinstance(data, dict) else ""))
+                if code == "result_revision_conflict":
+                    limitations.append({"code": code, "message": "A saved result changed after the observed revision; the requested page was not mixed with the new revision.",
+                                        "result_id": getattr(entry, "stored_result_id", None),
+                                        "observation": getattr(entry, "result_observation", None)})
                 continue
             operation = str(getattr(entry, "operation", "") or "")
             normalized = operation.removeprefix("instance.").split(".", 1)[-1] if operation.startswith("instance.") else operation
@@ -1023,6 +1086,7 @@ class AgentExecutor:
                 "result_id": getattr(entry, "stored_result_id", None),
                 "inline_complete": getattr(entry, "result_inline_complete", None),
                 "source_complete": getattr(entry, "result_source_complete", None),
+                "result_observation": getattr(entry, "result_observation", None),
             }
             result_data = getattr(entry, "result_data", None)
             if normalized == "result.analyze" and isinstance(result_data, dict):
@@ -1045,6 +1109,7 @@ class AgentExecutor:
             "evidence": evidence,
             "artifacts": artifacts,
             "sources": [dict(item) for item in sources if isinstance(item, dict)],
+            "limitations": limitations,
         }
 
     # ---------------------------------------------------------------- helpers --
@@ -1084,19 +1149,29 @@ class AgentExecutor:
             return task
         updates = {}
         root_id = str(ctx.extra.get("runtime_root_run_id") or "")
+        configured_budget = ctx.extra.get("task_input_inline_budget_chars")
+        try:
+            inline_budget = max(1, int(configured_budget)) if configured_budget is not None else TASK_CONTEXT_INLINE_LIMIT_CHARS
+        except (TypeError, ValueError):
+            inline_budget = TASK_CONTEXT_INLINE_LIMIT_CHARS
         for field in ("inputs", "dependency_outputs"):
             value = getattr(task, field)
-            if root_id and len(json.dumps(value, ensure_ascii=False, default=str)) > 8000:
+            serialized = json.dumps(value, ensure_ascii=False, default=str)
+            if root_id and len(serialized) > inline_budget:
                 saved = await ToolResultStore().save(
                     run_id=root_id, call_id=f"context:{task.task_id}:{execution_id}:{field}",
                     operation="runtime.task.context", tenant_id=ctx.tenant_id, user_id=ctx.user_id,
                     task_id=task.task_id, agent_execution_id=execution_id,
-                    payload=RuntimeRedactor().redact(value),
+                    payload={"value": RuntimeRedactor().redact(value)},
                 )
                 updates[field] = {"saved_context": {
-                    "result_id": saved["result_id"], "sql_ref": saved["sql_ref"],
+                    "result_id": saved["result_id"], "path": "/value",
                     "inline_complete": False,
-                    "instruction": "Read full task context with result.analyze SQL.",
+                    "reader": "result.read",
+                    "reader_arguments": {"result_id": saved["result_id"], "path": "/value",
+                                         "offset": 0, "limit": 1, "text_offset": 0,
+                                         "text_limit": 12000},
+                    "instruction": "Recover this exact context with result.read using reader_arguments; do not infer omitted fields.",
                 }}
         return task.model_copy(update=updates) if updates else task
 
@@ -1142,12 +1217,15 @@ class AgentExecutor:
             )
         if task.inputs:
             parts.append("[Task inputs]\n" + json.dumps(task.inputs, ensure_ascii=False, default=str))
+        if task.dependency_bindings:
+            parts.append("[Binding provenance]\n" + json.dumps(
+                [item.model_dump(mode="json") for item in task.dependency_bindings],
+                ensure_ascii=False, separators=(",", ":")))
         if parts:
             parts.append(f"[Task]\n{query}")
             final_query = "\n\n".join(parts)
         else:
             final_query = str(query)
-
         if task.dependency_outputs:
             dependency_lines = ["[Dependency outputs]"]
             for task_id, output in task.dependency_outputs.items():
@@ -1369,6 +1447,7 @@ class AgentExecutor:
                 "instructions": task.instructions,
                 "inputs": task.inputs,
                 "dependency_outputs": task.dependency_outputs,
+                "dependency_bindings": [item.model_dump(mode="json") for item in task.dependency_bindings],
             },
             prompt={"system_prompt": sub_request.prompt} if sub_request.prompt else None,
             rbac=deepcopy(collection_filter_audit) if isinstance(collection_filter_audit, dict) else None,

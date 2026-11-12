@@ -41,7 +41,7 @@ function projectAgentExecutor(
 
 describe('projectTraceStages memory components', () => {
   it('links complete tool rows from the next LLM request only for the same owner and call', () => {
-    const payload = JSON.stringify({ rows: [{ name: 'verified' }], _runtime_result: { delivery: 'inline', inline_complete: true } });
+    const payload = JSON.stringify({ status: 'ready', result_id: 'result-1', revision: 2, records: [{ name: 'verified' }], source_coverage: { complete: true } });
     const state = replayRuntimeJournal([
       event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iteration-1' }),
       event(2, 'step_start', { entity_type: 'step', entity_id: 'step-1', parent_entity_type: 'planner_iteration', parent_entity_id: 'iteration-1' }),
@@ -55,6 +55,57 @@ describe('projectTraceStages memory components', () => {
     expect(target?.kind === 'call' && target.call.responseView?.toolResult).toMatchObject({
       inlineDataAvailable: true, inlineData: [{ name: 'verified' }],
     });
+  });
+
+  it.each([[], 0, false, null, 'value'])('preserves model receipt records value %j, including empty/falsy values', (records) => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iter-a' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-a', parent_entity_type: 'planner_iteration', parent_entity_id: 'iter-a' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-a', parent_entity_type: 'step', parent_entity_id: 'step-a' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'call-a', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-a', call_id: 'call-a', tool: 'result.read' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'call-a', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-a', call_id: 'call-a', success: true, result_delivery: 'stored', result_id: 'result-a', result_inline_complete: false, data: { result_id: 'result-a', payload_type: 'array', row_count: 1 } }),
+      event(6, 'status', { stage: 'tool_result_batch_projected', entity_type: 'agent_execution', entity_id: 'agent-a', parent_entity_type: 'step', parent_entity_id: 'step-a', call_ids: ['call-a'], inline_complete: [true] }),
+      event(7, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-a', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-a', messages: [{ role: 'tool', tool_call_id: 'call-a', content: JSON.stringify({ status: 'ready', result_id: 'result-a', revision: 1, records }) }] }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'tool_call:call-a');
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult).toMatchObject({
+      inlineComplete: true, inlineDataAvailable: true, inlineData: records,
+    });
+  });
+
+  it('reads text protocol tool_result blocks and lets final batch coverage downgrade preliminary inline metadata', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iter-text' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-text', parent_entity_type: 'planner_iteration', parent_entity_id: 'iter-text' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-text', parent_entity_type: 'step', parent_entity_id: 'step-text' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'call-text', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-text', call_id: 'call-text', tool: 'search' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'call-text', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-text', call_id: 'call-text', success: true, result_inline_complete: true, data: [{ name: 'preview' }] }),
+      event(6, 'status', { stage: 'tool_result_batch_projected', entity_type: 'agent_execution', entity_id: 'agent-text', parent_entity_type: 'step', parent_entity_id: 'step-text', call_ids: ['other', 'call-text'], inline_complete: [true, false], omitted_call_ids: ['call-text'], direct_recoveries: { 'call-text': { result_id: 'recovered', revision: 3, reason: 'batch_context_budget' } } }),
+      event(7, 'llm_request', { entity_type: 'llm_call', entity_id: 'llm-text', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-text', messages: [{ role: 'user', content: 'prior result\n```tool_result\n{"call_id":"call-text","result":{"status":"ready","result_id":"r","revision":1,"records":[{"id":1}],"warnings":["partial"]}}\n```' }] }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'tool_call:call-text');
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult).toMatchObject({
+      inlineComplete: false, preparedInlineComplete: false,
+      inlineDataAvailable: true, inlineData: [{ id: 1 }],
+      inlineDataContext: { status: 'ready', revision: 1, warnings: ['partial'] },
+      directRecovery: { resultId: 'recovered', revision: 3 },
+    });
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult?.data).toBeUndefined();
+  });
+
+  it('does not claim model delivery from execution result or a batch without a later matching request', () => {
+    const state = replayRuntimeJournal([
+      event(1, 'planner_iteration_start', { entity_type: 'planner_iteration', entity_id: 'iter-lone' }),
+      event(2, 'step_start', { entity_type: 'step', entity_id: 'step-lone', parent_entity_type: 'planner_iteration', parent_entity_id: 'iter-lone' }),
+      event(3, 'agent_start', { entity_type: 'agent_execution', entity_id: 'agent-lone', parent_entity_type: 'step', parent_entity_id: 'step-lone' }),
+      event(4, 'tool_call', { entity_type: 'tool_call', entity_id: 'call-lone', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-lone', call_id: 'call-lone', tool: 'search' }),
+      event(5, 'tool_result', { entity_type: 'tool_call', entity_id: 'call-lone', parent_entity_type: 'agent_execution', parent_entity_id: 'agent-lone', call_id: 'call-lone', success: true, result_inline_complete: true, data: [{ id: 1 }] }),
+      event(6, 'status', { stage: 'tool_result_batch_projected', entity_type: 'agent_execution', entity_id: 'agent-lone', parent_entity_type: 'step', parent_entity_id: 'step-lone', call_ids: ['call-lone'], inline_complete: [true] }),
+    ]);
+    const target = resolveTraceInspectionTarget(state, 'tool_call:call-lone');
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult).toMatchObject({ preparedInlineComplete: true });
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult?.inlineComplete).toBeUndefined();
+    expect(target?.kind === 'call' && target.call.responseView?.toolResult?.inlineDataAvailable).toBeUndefined();
   });
 
   it('does not interpret a stored pointer or sample as a complete model response', () => {

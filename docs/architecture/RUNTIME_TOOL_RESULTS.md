@@ -129,6 +129,16 @@ commit in one transaction; a page-storage failure leaves no partial dataset.
 Execution/task IDs are normalized to strings for their VARCHAR storage columns,
 including native workspace SQL calls whose context contains a UUID execution ID.
 
+Migration `tool_results_0005` makes `source_complete` nullable: `true` and
+`false` are known coverage states and `NULL` means the source contract did not
+establish coverage. A bounded read page does not change source coverage. Source
+continuation metadata is extracted before redaction, so redacting a response
+cannot discard the runtime's continuation arguments. For aggregate/find pages,
+the response carries the pinned input revision and page metadata; callers must
+restart if the input revision changes. `query_complete` reports whether the SQL
+statement executed successfully, while `page_may_have_more` describes output
+pagination independently of upstream source coverage.
+
 A dataset can contain zero or 50,000 records; cardinality does not change the
 storage model. Byte limits remain explicit. All records/pages inherit parent
 TTL through cascading deletion. Current workspace access requires matching run,
@@ -166,7 +176,7 @@ compatible and use the same SQL storage engine.
   column-name search terms, without filtering records. Keys retain spelling and case; SQL quoting is needed
   for punctuation or reserved words. Invalid PostgreSQL identifiers (empty, NUL,
   longer than 63 UTF-8 bytes) fail explicitly rather than being silently renamed.
-* `result.read(result_id, fields?, offset?, limit?, revision?)` reads a bounded
+* `result.read(result_id, fields?, offset?, limit?, revision?, path?, view?, text_offset?, text_limit?, child_offset?, child_limit?)` reads a bounded
   portion of saved records. It returns `next_offset`, `read_complete` and
   `source_complete` separately. A record that cannot fit is explicitly marked
   `record_too_large`; the agent can select fewer fields or request SQL analysis.
@@ -176,6 +186,13 @@ compatible and use the same SQL storage engine.
   its complete object; nested paths use SQL JSON operators instead.
   Unknown field names fail explicitly instead of manufacturing null values;
   null and missing values in a known heterogeneous field remain null.
+  `path` is a bounded JSON Pointer into a saved record. `view=auto` returns the
+  selected subtree when it fits and falls back to a child listing for an
+  oversized object/array; `value` requests the subtree and `children` requests
+  a child listing directly. Text values can be paged by character offset and
+  child listings by their own offset. The response identifies the effective
+  view and reports child/text coverage separately from record and source
+  coverage.
 * `result.load(result_id, mode=next|remaining, max_pages?)` calls the same resolved
   read-only source operation with persisted continuation arguments. It rechecks
   availability, argument validation and credential resolution through the normal
@@ -201,11 +218,13 @@ compatible and use the same SQL storage engine.
   including nested JSONB, for literal case-insensitive text. The search term is a
   bound parameter, so SQL syntax and wildcard characters remain literal text.
   Both wrappers use the SQL engine, persist their output as a new result and
-  report upstream completeness separately. Neither implicitly loads source pages.
+report upstream completeness separately. Their page responses preserve the
+input revision and cursor information. Neither implicitly loads source pages.
 
 SQL has a configured statement timeout, row limit (default 100,000), and byte
 limit. Oversized SQL output fails explicitly; full successful output is stored.
-`query_complete` describes execution, not upstream coverage. Analyzer delegation
+`query_complete` describes SQL statement execution, not upstream coverage or
+whether more output pages exist. Analyzer delegation
 continues through agent needs and planner decisions, not automatic runtime task
 creation.
 
@@ -285,9 +304,10 @@ returns the typed context-window error. The final `llm_request` snapshot is
 authoritative for the exact presentation the model received; the linked
 `tool_result_batch_projected` status reports final per-call inline coverage,
 while `tool_result` remains the execution result/event. Direct results are
-delivered whole when they fit; if they do not, the model receives an explicit
-`context_budget_exceeded` limitation. Runtime does not silently clip direct JSON
-or move an oversized direct result into Result Store.
+normally not stored and are delivered whole when they fit. On actual overflow
+or batch downgrade, runtime can store a recovery snapshot and return an explicit
+`result.read` receipt; it does not silently clip the result or rerun its source.
+Raw file-controlled bodies are excluded from this recovery persistence.
 
 The same budget is passed to `result.describe`, `result.read`, and
 `result.analyze` projections. These readers return bounded pages and preserve

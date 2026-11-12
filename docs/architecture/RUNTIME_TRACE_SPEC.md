@@ -124,6 +124,13 @@ fields mean unknown, and numeric zero is a present value. In particular,
 contains the complete result. Stored-result events commonly carry only a
 bounded descriptor; full data remains in Result Store.
 
+For agent tool exchanges, the inspector correlates a tool event with the actual
+subsequent model request and its result receipts, including native and text
+calls, batch projection and late recovery receipts. It distinguishes prepared
+projection from content delivered in the outbound request. The request snapshot
+is authoritative for delivered content; missing coverage remains unknown rather
+than being inferred as false or complete.
+
 Root-role `memory.search` calls are direct children of the preflight orchestrator
 or planner iteration. Their `tool_call` is admitted before execution and their
 `tool_result` closes the same call on success, failure or cancellation, with

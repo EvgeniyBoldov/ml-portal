@@ -20,6 +20,7 @@ class RuntimeErrorCode(str, Enum):
     AGENT_NON_RETRYABLE_OPERATION_FAILURE = "agent_non_retryable_operation_failure"
     AGENT_NO_SUCCESSFUL_OPERATION_RESULT = "agent_no_successful_operation_result"
     AGENT_RUNTIME_EXCEPTION = "agent_runtime_exception"
+    CHECKPOINT_INVALID = "checkpoint_invalid"
     AGENT_PRECHECK_FAILED = "agent_precheck_failed"
     AGENT_UNAVAILABLE = "agent_unavailable"
     AGENT_NO_OPERATIONS = "agent_no_operations"

@@ -48,6 +48,23 @@ def test_agent_receives_task_inputs_and_terminal_contract_once() -> None:
     assert "structured_response" in system_prompt
 
 
+def test_agent_user_message_contains_dependency_binding_provenance_with_the_bound_value() -> None:
+    request = TaskRequest(
+        task_id="consumer", executor="research", intent="compare", instructions="Use the bound value.",
+        inputs={"selected": {"count": 0}},
+        dependency_bindings=[NeedBinding(
+            need_task_id="consumer", need_ref="need:selected", producer_task_id="producer",
+            output_key="summary", consumer_task_id="consumer", consumer_input_key="selected",
+        )],
+    )
+
+    message = AgentExecutor._build_sub_messages([], request, "compare")[-1]["content"]
+
+    assert '"count": 0' in message
+    assert '"producer_task_id":"producer"' in message
+    assert '"output_key":"summary"' in message
+
+
 def test_partial_artifact_is_runtime_verified_before_synthesis() -> None:
     request = _task(expected_outputs=[{
         "key": "file", "description": "Generated file", "fulfillment": "artifact",
@@ -141,6 +158,28 @@ def test_compile_ignores_resolution_for_task_created_in_same_iteration() -> None
     )
 
     assert compiled.resolutions == []
+
+
+def test_compile_validates_partial_output_keys_against_canonical_result_snapshot() -> None:
+    proposal = IterationProposal.model_validate({
+        "terminal": "synthesis", "tasks": [], "resolutions": [{
+            "task_id": "partial", "action": "accept_partial",
+            "output_keys": ["rows"], "reason": "Rows are usable.",
+        }],
+        "synthesis_brief": {"user_question": "goal", "planned_work": "inspect",
+            "purpose": "answer", "answer_requirements": "summarize"},
+    })
+    snapshot = {"tasks": {"partial": {"status": "failed", "result": {
+        "outputs": {"rows": [1]}, "structured_response": {"rows": [1]},
+    }}}}
+    compact_prompt_ledger = {"tasks": [{"task_id": "partial", "status": "failed",
+        "result": {"structured_response": {"rows": [1]}}}], "needs": [], "bindings": [], "resolutions": []}
+
+    compiled = GraphOrchestrator._compile(
+        proposal, [], compact_prompt_ledger, canonical_snapshot=snapshot,
+    )
+
+    assert compiled.resolutions[0].output_keys == ["rows"]
 
 
 def test_data_agent_tasks_are_forced_to_require_fresh_retrieval() -> None:

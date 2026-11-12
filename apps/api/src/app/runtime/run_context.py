@@ -37,6 +37,9 @@ class RunContext(BaseModel):
     chat_snapshot: dict[str, Any] = Field(default_factory=dict)
     recent_dialogue: list[dict[str, Any]] = Field(default_factory=list)
     task_brief: dict[str, Any] = Field(default_factory=dict)
+    # Authorized, content-free inventory of snapshots from earlier turns.
+    # Defaults keep persisted RunContext snapshots backward compatible.
+    prior_result_inventory: dict[str, Any] = Field(default_factory=dict)
     evidence: list[RunEvidence] = Field(default_factory=list)
     available_artifact_ids: list[str] = Field(default_factory=list)
     artifact_descriptions: dict[str, str] = Field(default_factory=dict)

@@ -21,6 +21,7 @@ from app.models.chat_artifact_reference import ChatArtifactReference
 from app.models.chat_turn import ChatTurn
 from app.models.chat_context_head import ChatContextHead
 from app.models.chat_memory import ChatMemoryItem
+from app.models.runtime_plan import RuntimePlan, RuntimePlanIteration, RuntimePlanTask
 from app.models.base import Base
 from app.models.runtime_context import ChatArtifactRepresentation
 from app.runtime.run_context import RunContext
@@ -44,7 +45,8 @@ async def database(monkeypatch):
                 await connection.exec_driver_sql(f"CREATE TABLE {name}(id uuid PRIMARY KEY)")
             await connection.exec_driver_sql("CREATE TYPE chat_role_enum AS ENUM ('system','user','assistant','tool')")
             tables = [model.__table__ for model in (Chats, ChatMessages, ChatTurn, ChatAttachment,
-                      ChatArtifactReference, ChatContextHead, ChatMemoryItem)]
+                      ChatArtifactReference, ChatContextHead, ChatMemoryItem, RuntimePlan,
+                      RuntimePlanIteration, RuntimePlanTask)]
             await connection.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
             await connection.exec_driver_sql("""CREATE TABLE system_llm_roles(role_type text, is_active boolean,
                 identity text, mission text, rules text, safety text, output_requirements text,
@@ -170,6 +172,106 @@ async def test_context_and_assistant_are_visible_together_after_commit(database)
         assert snapshot.artifacts[0].artifact_id == artifact.artifact_id
         assert snapshot.recent_anchor.assistant_outcome == "Created file"
         assert (await reader.execute(select(ChatMessages.id))).first() is not None
+
+
+@pytest.mark.asyncio
+async def test_verified_result_ref_roundtrips_chat_context_into_next_planner_and_task(database, monkeypatch):
+    """Persist only verified receipt metadata, then reauthorize before reuse."""
+    from uuid import UUID
+    from app.runtime.context_outcome import RuntimeOutcomeProjector
+    from app.runtime.input_builders import PlannerInputBuilder
+    from app.runtime.orchestrator_contracts import PlannerContext, PlanRequest, TaskRequest
+    from app.runtime.turn_state import RuntimeTurnState
+    from app.runtime.agent_executor import AgentExecutor
+    from app.services import runtime_result_reuse_service
+    from app.services.chat_context_reducer import ChatContextReducer
+    from app.services.chat_context_service import ChatContextService
+    from app.runtime.datastore_context import load_prior_result_inventory
+
+    owner, chat = await seed(database)
+    run_id, turn_id = uuid4(), uuid4()
+    plan_id, iteration_id = uuid4(), uuid4()
+    from app.runtime.entity_ids import runtime_task_id
+    task_entity_id = runtime_task_id(str(plan_id), "task-1")
+    result_id = "verified-result-1"
+    async with database() as session:
+        session.add(ChatTurn(id=turn_id, chat_id=UUID(chat), user_id=UUID(owner), runtime_run_id=run_id))
+        session.add_all([
+            RuntimePlan(id=plan_id, tenant_id=uuid4(), chat_id=UUID(chat), root_run_id=run_id,
+                        goal="analyze", status="active"),
+            RuntimePlanIteration(id=iteration_id, plan_id=plan_id, sequence=1, terminal="planner",
+                                 proposal={}, status="active", checkpoint_status="idle"),
+            RuntimePlanTask(id=uuid4(), plan_id=plan_id, iteration_id=iteration_id, task_id="task-1",
+                            planned_order=1, intent="inspect", instructions="inspect", executor="analyst",
+                            status="completed"),
+        ])
+        await session.flush()
+        state = RuntimeTurnState(run_id=run_id, chat_id=UUID(chat), user_id=UUID(owner), goal="analyze",
+                                 current_user_query="analyze this", task_results=[{
+            "plan_id": str(plan_id), "task_entity_id": task_entity_id, "outcome": "completed",
+            "description": "Observed a bounded result page.",
+            "verified": {"receipts": [{
+                "success": True, "result_id": result_id, "operation": "result.read",
+                "source_complete": False,
+                "result_observation": {"result_id": result_id, "revision": 3, "offset": 10,
+                                       "limit": 5, "read_complete": False, "next_offset": 15},
+            }]},
+        }])
+        projection = RuntimeOutcomeProjector.project(runtime_state=state, chat_id=chat,
+            chat_turn_id=str(turn_id), terminal_state="completed")
+        applied = await ChatContextService(session, None, None).apply_outcome(
+            projection=projection, expected_revision=0, branch_id=None, owner_id=owner,
+            tenant_id=str(uuid4()), reducer=ChatContextReducer(),
+        )
+        await session.commit()
+        assert applied.applied_count > 0
+
+    tenant_id = str(uuid4())
+    async with database() as session:
+        snapshot = await ChatContextService(session, None, None).load_snapshot(
+            chat_id=chat, owner_id=owner, tenant_id=tenant_id,
+        )
+        assert len(snapshot.task_result_refs) == 1
+        persisted = snapshot.task_result_refs[0]
+        assert persisted.source_run_id == str(run_id)
+        assert persisted.plan_id == str(plan_id)
+        assert persisted.result_refs[0].result_id == result_id
+        assert persisted.result_refs[0].observation.next_offset == 15
+
+        class FakeReuseService:
+            def __init__(self, _session):
+                pass
+
+            async def authorize_source_runs(self, **kwargs):
+                assert kwargs["chat_id"] == chat and kwargs["owner_id"] == owner
+                return [str(run_id)]
+
+            async def list_prior_snapshots(self, **kwargs):
+                assert kwargs["tenant_id"] == UUID(tenant_id)
+                assert kwargs["user_id"] == UUID(owner)
+                return {"status": "ready", "items": [{
+                    "result_id": result_id, "operation": "result.read", "revision": 3,
+                    "row_count": 5, "source_total": 100, "source_complete": False,
+                    "importable": True,
+                }], "total": 1, "catalog_complete": True}
+
+        monkeypatch.setattr(runtime_result_reuse_service, "RuntimeResultReuseService", FakeReuseService)
+        inventory = await load_prior_result_inventory(session=session,
+            chat_snapshot=snapshot.model_dump(mode="json"), chat_id=chat, owner_id=owner,
+            branch_id=None, tenant_id=UUID(tenant_id), user_id=UUID(owner))
+
+    planner_request = PlanRequest(context=PlannerContext(goal="sort previous results", trigger="followup",
+        execution_ledger={}, prior_result_inventory=inventory))
+    planner_input = PlannerInputBuilder().build_graph_request(planner_request)
+    assert planner_input["prior_result_inventory"]["items"][0]["result_id"] == result_id
+    assert planner_input["prior_result_inventory"]["items"][0]["import"]["tool"] == "result.import"
+    task = TaskRequest(task_id="followup", executor="analyst", intent="sort saved results",
+        instructions="Import and sort this prior result.", inputs={"dataset": {
+            "source_run_id": str(run_id), "result_id": result_id, "revision": 3,
+        }})
+    task_message = AgentExecutor._build_sub_messages([], task, "sort saved results")[-1]["content"]
+    assert result_id in task_message and str(run_id) in task_message
+    assert "payload" not in planner_input["prior_result_inventory"]["items"][0]
 
 
 @pytest.mark.asyncio

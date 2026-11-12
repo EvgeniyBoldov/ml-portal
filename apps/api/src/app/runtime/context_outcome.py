@@ -111,16 +111,53 @@ class RuntimeOutcomeProjector:
             outcome = str(item.get("outcome") or "")
             plan_id = str(item.get("plan_id") or "").strip()
             task_entity_id = str(item.get("task_entity_id") or item.get("task_id") or "").strip()
-            if outcome not in {"completed", "unfulfillable"} or not plan_id or not task_entity_id:
+            if outcome not in {"completed", "unfulfillable", "blocked", "failed"} or not plan_id or not task_entity_id:
                 continue
             artifact_ids = [
                 str(artifact["artifact_id"])
                 for artifact in _verified_artifacts(item)
             ]
+            verified = item.get("verified") if isinstance(item.get("verified"), dict) else {}
+            refs: list[dict[str, Any]] = []
+            for receipt in verified.get("receipts") or []:
+                if not isinstance(receipt, dict) or receipt.get("success") is not True or not receipt.get("result_id"):
+                    continue
+                observation = receipt.get("result_observation") if isinstance(receipt.get("result_observation"), dict) else None
+                analysis = receipt.get("analysis") if isinstance(receipt.get("analysis"), dict) else {}
+                refs.append({
+                    "result_id": str(receipt["result_id"]),
+                    "operation": str(receipt.get("operation") or "observed"),
+                    "revision": (observation.get("revision") if observation and isinstance(observation.get("revision"), int)
+                                 else analysis.get("revision") if isinstance(analysis.get("revision"), int) else None),
+                    "row_count": analysis.get("row_count") if isinstance(analysis.get("row_count"), int) else None,
+                    "source_total": analysis.get("source_total") if isinstance(analysis.get("source_total"), int) else None,
+                    "source_complete": receipt.get("source_complete") if isinstance(receipt.get("source_complete"), bool) else None,
+                    "source_run_id": str(runtime_state.run_id),
+                    **({"observation": observation} if observation is not None else {}),
+                })
+            task_result_ref = verified.get("task_result_ref")
+            if isinstance(task_result_ref, dict) and task_result_ref.get("status") == "available" and task_result_ref.get("result_id"):
+                refs.append({
+                    "result_id": str(task_result_ref["result_id"]),
+                    "operation": "runtime.task.result",
+                    "revision": task_result_ref.get("revision") if isinstance(task_result_ref.get("revision"), int) else None,
+                    "source_run_id": str(runtime_state.run_id),
+                })
+            bounded_refs: list[dict[str, Any]] = []
+            for ref in refs:
+                try:
+                    from app.services.chat_context_contracts import TaskResultDatasetRefPayload
+                    bounded_refs.append(TaskResultDatasetRefPayload.model_validate(ref).model_dump(mode="json"))
+                except Exception:
+                    # Invalid or oversized observations are not a reason to
+                    # fail mandatory turn finalization; signal lost coverage.
+                    continue
             task_result_refs.append({
                 "plan_id": plan_id, "task_entity_id": task_entity_id, "outcome": outcome,
                 "safe_summary": str(redactor.redact(item.get("description") or ""))[:600], "artifact_ids": artifact_ids[:10],
                 "source_run_id": str(runtime_state.run_id),
+                "result_refs": bounded_refs[:20],
+                "result_refs_truncated": len(refs) > len(bounded_refs[:20]),
             })
         merged_artifacts: dict[str, dict[str, Any]] = {}
         for artifact in artifacts:

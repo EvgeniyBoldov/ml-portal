@@ -170,9 +170,9 @@ export function ToolResponse({ call, sessionId, runId }: { call: TraceCall; sess
   const recorded = result.data && typeof result.data === 'object' && !Array.isArray(result.data) ? result.data as Record<string, unknown> : undefined;
   const inlineKey = recorded && ['rows', 'value', 'data'].find(key => Object.prototype.hasOwnProperty.call(recorded, key));
   const hasEventInline = result.delivery === 'stored' && !result.storedDescriptor && (Array.isArray(result.data) || Boolean(inlineKey));
-  const hasInlineData = result.inlineComplete === true && (result.inlineDataAvailable === true || hasEventInline);
+  const hasInlineData = result.inlineDataAvailable === true || (result.inlineComplete === true && hasEventInline);
   const hasStoredCard = !hasInlineData && result.delivery === 'stored' && Boolean(result.resultId && sessionId && runId);
-  const hasData = hasInlineData || (result.data !== undefined && result.data !== null && !hasStoredCard);
+  const hasData = hasInlineData || result.directRecovery !== undefined || (result.data !== undefined && result.data !== null && !hasStoredCard);
   const visibleResult = hasInlineData ? { ...result, data: result.inlineDataAvailable ? result.inlineData : inlineKey && recorded ? recorded[inlineKey] : result.data, storedDescriptor: false } : result;
   return <InspectorStack><InspectorFieldGroup>
     <InspectorFieldRow label="Статус"><InspectorStatus label={result.success === false ? 'Не выполнено' : result.success === true ? 'Выполнено' : 'Результат не подтверждён'} tone={result.success === false ? 'danger' : result.success === true ? 'success' : 'warn'} /></InspectorFieldRow>

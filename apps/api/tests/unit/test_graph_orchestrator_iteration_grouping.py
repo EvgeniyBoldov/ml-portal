@@ -49,6 +49,92 @@ class Synthesizer:
         yield RuntimeEvent.final("answer", sources=[], run_id=str(run_id), attachments=[])
 
 
+@pytest.mark.asyncio
+async def test_agent_runtime_failure_persists_observed_receipts_into_partial_synthesis(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.agents.context import ToolContext
+    from app.runtime.agent_executor import AgentExecutor
+    from app.runtime.memory.tool_ledger import ToolLedger
+    from app.runtime.events import RuntimeEvent
+    from app.runtime.orchestrator_contracts import ResolutionAction
+    from app.runtime.synthesis_context import SynthesisContextBuilder
+
+    class ReplanAfterFailure:
+        calls = 0
+
+        async def plan(self, *, request, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return IterationProposal(tasks=[PlannedTask(
+                    task_id="work", executor="research", intent="inspect", instructions="inspect",
+                )], terminal=TerminalKind.SYNTHESIS, synthesis_brief=SynthesisBrief(
+                    user_question="goal", planned_work="inspect", purpose="answer", answer_requirements="short"))
+            return IterationProposal(tasks=[], terminal=TerminalKind.SYNTHESIS,
+                resolutions=[TaskResolution(task_id="work", action=ResolutionAction.REPORT_UNRESOLVED,
+                    reason="Agent final generation failed after the source call.")],
+                synthesis_brief=SynthesisBrief(user_question="goal", planned_work="inspect",
+                    purpose="answer", answer_requirements="short"))
+
+    class ObservedState(State):
+        execution_limitations = []
+        tool_ledger = ToolLedger()
+
+    state = ObservedState()
+    entry = state.tool_ledger.register_call(operation="result.read", call_id="read-1",
+        arguments={"result_id": "source-1"}, iteration=0, agent_slug="research", phase_id="work")
+    state.tool_ledger.register_result(call_id="read-1", success=True, data={"records": [{"v": 1}]},
+        result_id="source-1", result_observation={"result_id": "source-1", "revision": 2,
+            "offset": 10, "limit": 1, "read_complete": False, "next_offset": 11})
+    entry.sources = [{"source_id": "doc", "chunk_id": "chunk-7", "text": "observed passage"}]
+
+    class RuntimeFailingExecutor:
+        async def execute_attempt(self, *, request, runtime_state, **kwargs):
+            agent_executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
+            user_id, tenant_id = uuid4(), uuid4()
+            ctx = ToolContext(user_id=user_id, tenant_id=tenant_id, extra={})
+
+            async def fail_after_tool(*, task, ctx, runtime_state, **_kwargs):
+                verified = AgentExecutor._verified_task_result(task=task,
+                    ledger_entries=runtime_state.tool_ledger.entries,
+                    sources=entry.sources, verified_artifacts=[{"artifact_id": "created-file", "file_name": "report.pdf"}])
+                ctx.extra["agent_execution_failure"] = {"code": "llm_failed", "message": "final answer generation failed",
+                    "retryable": False, "details": {"runtime_observed_partial": verified}}
+                yield RuntimeEvent.error("final answer generation failed", retryable=False)
+
+            agent_executor.execute = fail_after_tool
+            return await agent_executor.execute_attempt(request=request, runtime_state=runtime_state,
+                messages=[], ctx=ctx, user_id=user_id, tenant_id=tenant_id)
+
+    class CaptureSynthesizer:
+        context = None
+
+        async def stream(self, *, synthesis_context, runtime_state, run_id, **kwargs):
+            self.context = synthesis_context
+            runtime_state.final_answer = "partial answer"
+            yield RuntimeEvent.final("partial answer", sources=synthesis_context["sources"],
+                run_id=str(run_id), attachments=synthesis_context["artifacts"])
+
+    store = AsyncMemoryStore()
+    synthesizer = CaptureSynthesizer()
+    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([], "available")))
+    events = [event async for event in GraphOrchestrator(store=store, planner=ReplanAfterFailure(),
+        executor=RuntimeFailingExecutor(), synthesizer=synthesizer).run(
+            plan_id=store.plan["id"], goal="goal", available_agents=[{"slug": "research"}],
+            planner_kwargs={"runtime_state": state})]
+    snapshot = store.inner.get(store.plan["id"])
+    failed = snapshot["tasks"]["work"]["result"]
+    assert snapshot["tasks"]["work"]["status"] == "failed"
+    assert failed["verified"]["receipts"][0]["result_id"] == "source-1"
+    assert failed["verified"]["artifacts"][0]["artifact_id"] == "created-file"
+    assert synthesizer.context is not None
+    assert synthesizer.context["artifacts"][0]["artifact_id"] == "created-file"
+    assert synthesizer.context["sources"][0]["source_id"] == "doc"
+    assert synthesizer.context["completed_task_reports"][0]["verified_result_refs"][0]["result_id"] == "source-1"
+    assert synthesizer.context["limitations"][0]["reason_code"] == "llm_failed"
+    assert events[-1]["status"] == "completed", events[-1]
+
+
 def test_unresolved_continuation_closes_its_original_task() -> None:
     latest = GraphOrchestrator._latest_resolutions([
         {"task_id": "original", "action": "continue_with_tasks", "replacement_task_ids": ["retry"]},

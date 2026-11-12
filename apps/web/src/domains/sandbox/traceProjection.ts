@@ -96,7 +96,12 @@ export interface TraceToolResult {
   receivedCount?: number;
   inlineDataAvailable?: boolean;
   inlineData?: unknown;
+  inlineDataContext?: unknown;
   queryComplete?: boolean;
+  readComplete?: boolean;
+  pageMayHaveMore?: boolean;
+  preparedInlineComplete?: boolean;
+  directRecovery?: { resultId?: string; revision?: number; reason?: string; recoverability?: string };
   failure?: ReturnType<typeof toolResult>['failure'];
 }
 
@@ -1283,6 +1288,7 @@ function toolResultSummary(success: boolean | undefined, data: unknown, returned
 }
 
 function responseViewFor(
+  state: SandboxTraceState,
   kind: TraceCallKind,
   response: RuntimeJournalEvent | undefined,
   linkedToolCalls: RuntimeJournalEvent[],
@@ -1298,21 +1304,41 @@ function responseViewFor(
   const toolResultView = kind === 'tool'
     ? (() => {
       const result = toolResult(payload);
+      const batch = finalToolBatchProjection(state, response);
+      const recovery = batch?.recoveries[asString(payload.call_id) || asString(response.entity_id)];
+      const directRecovery = recovery && Object.keys(recovery).length > 0
+        ? recovery
+        : asRecord(payload.direct_recovery) ?? (result.recoveryReason ? {
+          result_id: result.resultId,
+          revision: result.revision,
+          reason: result.recoveryReason,
+        } : undefined);
       return {
         success: result.success,
         message: result.message,
-        data: sanitizeDisplay(result.data),
-        summary: toolResultSummary(result.success, result.data, result.returnedCount, result.sourceTotal, result.storedDescriptor),
+        data: directRecovery ? undefined : sanitizeDisplay(result.data),
+        summary: directRecovery
+          ? 'Результат сохранён отдельно; его можно прочитать повторным действием.'
+          : toolResultSummary(result.success, result.data, result.returnedCount, result.sourceTotal, result.storedDescriptor),
         truncated: result.truncated,
-        resultId: result.resultId,
-        delivery: result.delivery,
-        storedDescriptor: result.storedDescriptor,
-        inlineComplete: result.inlineComplete,
+        resultId: typeof directRecovery?.result_id === 'string' ? directRecovery.result_id : result.resultId,
+        delivery: directRecovery && typeof directRecovery.result_id === 'string' ? 'stored' : result.delivery,
+        storedDescriptor: directRecovery && typeof directRecovery.result_id === 'string' ? true : result.storedDescriptor,
+        inlineComplete: undefined,
+        preparedInlineComplete: batch?.coverage[asString(payload.call_id) || asString(response.entity_id)] ?? result.inlineComplete,
         sourceComplete: result.sourceComplete,
         sourceTotal: result.sourceTotal,
         returnedCount: result.returnedCount,
         receivedCount: result.receivedCount,
         queryComplete: result.queryComplete,
+        readComplete: result.readComplete,
+        pageMayHaveMore: result.pageMayHaveMore,
+        directRecovery: directRecovery ? {
+          ...(typeof directRecovery.result_id === 'string' ? { resultId: directRecovery.result_id } : {}),
+          ...(typeof directRecovery.revision === 'number' ? { revision: directRecovery.revision } : {}),
+          ...(typeof directRecovery.reason === 'string' ? { reason: directRecovery.reason } : {}),
+          ...(typeof directRecovery.recoverability === 'string' ? { recoverability: directRecovery.recoverability } : {}),
+        } : undefined,
         failure: result.failure,
       };
     })()
@@ -1335,13 +1361,45 @@ function responseViewFor(
   };
 }
 
+function finalToolBatchProjection(
+  state: SandboxTraceState,
+  response: RuntimeJournalEvent,
+): { coverage: Record<string, boolean>; recoveries: Record<string, Record<string, unknown>> } | undefined {
+  const owner = response.parent_entity_id ?? response.payload.parent_entity_id;
+  const ownerType = response.parent_entity_type ?? response.payload.parent_entity_type;
+  if (!owner || !ownerType) return undefined;
+  const callId = asString(response.payload.call_id) || asString(response.entity_id);
+  const event = [...state.eventIdsBySequence]
+    .map((id) => state.eventsById[id])
+    .filter((item): item is RuntimeJournalEvent => Boolean(item))
+    .reverse()
+    .find((item) => item.sequence > response.sequence
+      && item.event_type === 'status'
+      && item.payload.stage === 'tool_result_batch_projected'
+      && (((item.entity_id ?? item.payload.entity_id) === owner
+          && (item.entity_type ?? item.payload.entity_type) === ownerType)
+        || ((item.parent_entity_id ?? item.payload.parent_entity_id) === owner
+          && (item.parent_entity_type ?? item.payload.parent_entity_type) === ownerType))
+      && Array.isArray(item.payload.call_ids)
+      && (item.payload.call_ids as unknown[]).includes(callId));
+  if (!event) return undefined;
+  const callIds = event.payload.call_ids as unknown[];
+  const position = callIds.indexOf(callId);
+  const inline = Array.isArray(event.payload.inline_complete) ? event.payload.inline_complete[position] : undefined;
+  const recoveries = asRecord(event.payload.direct_recoveries) ?? {};
+  return {
+    coverage: typeof inline === 'boolean' ? { [callId]: inline } : {},
+    recoveries: { [callId]: asRecord(recoveries[callId]) ?? {} },
+  };
+}
+
 /** Find the complete tool reply recorded in a later request from the same owner. */
-function recordedInlineToolData(state: SandboxTraceState, response: RuntimeJournalEvent): { found: boolean; data?: unknown } {
-  if (toolResult(response.payload).inlineComplete !== true) return { found: false };
+function recordedInlineToolData(state: SandboxTraceState, response: RuntimeJournalEvent): { found: boolean; complete?: boolean; data?: unknown; context?: unknown } {
   const callId = asString(response.payload.call_id) || asString(response.entity_id);
   const owner = response.parent_entity_id ?? response.payload.parent_entity_id;
   const ownerType = response.parent_entity_type ?? response.payload.parent_entity_type;
   if (!callId || !owner || !ownerType) return { found: false };
+  const batch = finalToolBatchProjection(state, response);
   for (const id of state.eventIdsBySequence) {
     const event = state.eventsById[id];
     if (!event || event.sequence <= response.sequence || event.event_type !== 'llm_request'
@@ -1350,13 +1408,42 @@ function recordedInlineToolData(state: SandboxTraceState, response: RuntimeJourn
     const messages = Array.isArray(event.payload.messages) ? event.payload.messages : [];
     for (const value of messages) {
       const message = asRecord(value);
-      if (!message || message.role !== 'tool' || message.tool_call_id !== callId) continue;
-      const parsed = parseCallContent(message.content);
-      const content = asRecord(parsed.data);
-      const meta = asRecord(content?._runtime_result);
-      if (!content || meta?.inline_complete !== true || meta.delivery !== 'inline') continue;
-      for (const key of ['rows', 'data', 'value']) {
-        if (Object.prototype.hasOwnProperty.call(content, key)) return { found: true, data: sanitizeDisplay(content[key]) };
+      if (!message) continue;
+      const candidates: unknown[] = [];
+      if (message.role === 'tool' && message.tool_call_id === callId) candidates.push(message.content);
+      if (message.role === 'user' && typeof message.content === 'string') {
+        const matches = message.content.matchAll(/```tool_result\s*\n([\s\S]*?)\n```/g);
+        for (const match of matches) candidates.push(match[1]);
+      }
+      for (const candidate of candidates) {
+        const parsed = parseCallContent(candidate);
+        const outer = asRecord(parsed.data);
+        const embeddedCallId = asString(outer?.call_id) || asString(outer?.evidence_call_id);
+        if (message.role === 'user' && embeddedCallId !== callId) continue;
+        const rawResult = outer?.result;
+        const resultParsed = typeof rawResult === 'string' ? parseCallContent(rawResult) : undefined;
+        const content = asRecord(resultParsed?.data) ?? asRecord(rawResult) ?? outer;
+        if (!content) continue;
+        if ((content.status === 'ready' || content.status === 'already_completed')
+          && Object.prototype.hasOwnProperty.call(content, 'records')) {
+          return {
+            found: true,
+            complete: batch?.coverage[callId] ?? true,
+            data: sanitizeDisplay(content.records),
+            context: sanitizeDisplay(Object.fromEntries(Object.entries(content).filter(([key]) => key !== 'records'))),
+          };
+        }
+        const meta = asRecord(content._runtime_result);
+        if (meta?.inline_complete === true && meta.delivery === 'inline') {
+          for (const key of ['rows', 'data', 'value']) {
+            if (Object.prototype.hasOwnProperty.call(content, key)) {
+              return { found: true, complete: batch?.coverage[callId] ?? true, data: sanitizeDisplay(content[key]) };
+            }
+          }
+        }
+        if (batch && Object.prototype.hasOwnProperty.call(batch.coverage, callId)) {
+          return { found: true, complete: batch.coverage[callId], data: undefined };
+        }
       }
     }
   }
@@ -1474,12 +1561,14 @@ function callFor(state: SandboxTraceState, entity: TraceEntity): TraceCall | nul
     tokensTotal: presentation.tokensTotal,
   };
   call.requestView = requestViewFor(call.kind, request.payload);
-  call.responseView = responseViewFor(call.kind, response, linkedToolCalls);
+  call.responseView = responseViewFor(state, call.kind, response, linkedToolCalls);
   if (isTool && response && call.responseView?.toolResult) {
     const inline = recordedInlineToolData(state, response);
     if (inline.found) {
-      call.responseView.toolResult.inlineDataAvailable = true;
+      call.responseView.toolResult.inlineComplete = inline.complete;
+      call.responseView.toolResult.inlineDataAvailable = inline.data !== undefined;
       call.responseView.toolResult.inlineData = inline.data;
+      call.responseView.toolResult.inlineDataContext = inline.context;
     }
   }
   call.errorView = presentation.error;

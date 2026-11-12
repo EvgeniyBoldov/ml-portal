@@ -343,6 +343,7 @@ def parse_native_tool_calls(
         raise NativeToolCallProtocolError("native tool_calls must be an array")
 
     tool_calls: List[ToolCall] = []
+    seen_tool_call_ids: set[str] = set()
     for item in raw_tool_calls:
         if not isinstance(item, dict):
             raise NativeToolCallProtocolError("native tool call must be an object")
@@ -355,6 +356,9 @@ def parse_native_tool_calls(
         tool_call_id = str(item.get("id") or "").strip()
         if not tool_call_id:
             raise NativeToolCallProtocolError("native tool call is missing id")
+        if tool_call_id in seen_tool_call_ids:
+            raise NativeToolCallProtocolError("native tool call ids must be unique")
+        seen_tool_call_ids.add(tool_call_id)
         raw_args = fn.get("arguments") or {}
         if isinstance(raw_args, str):
             try:

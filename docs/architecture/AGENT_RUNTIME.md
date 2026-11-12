@@ -69,7 +69,13 @@ The endpoint validates access and returns HTTP 202 with `{"id":"<uuid>"}` after
 the request is persisted. A Celery dispatcher starts queued work; permissions and
 agent configuration are checked again at execution. A lost worker is retried
 after a lease (`SHADOW_INVOCATION_LEASE_SECONDS`, default one hour); execution
-may therefore happen more than once.
+may therefore happen more than once. The `Idempotency-Key` header is optional.
+When present, it is scoped to the authenticated user and effective tenant: the
+same key and request replay the durable invocation ID, while reuse with a
+different request returns HTTP 409. Omitting the key creates a new invocation.
+Migration `0212` adds the durable key/fingerprint fields. Idempotency prevents
+duplicate enqueue for the same key; worker execution remains at-least-once if a
+worker is genuinely lost after performing work and before recording completion.
 
 `GET /api/v1/agents/shadow/results` requires Bearer authentication and returns
 only the caller's completed or failed tasks that have not been acknowledged.
@@ -83,6 +89,8 @@ idempotent and rejects unfinished tasks. Until acknowledged a result may be
 returned repeatedly, including to concurrent consumers. Records remain in the
 database after acknowledgement. The worker and Celery beat must be running;
 beat retries publication of queued or expired-lease work after broker failures.
+GET is non-consuming; acknowledgement is the explicit, idempotent delivery
+state transition.
 
 The route resolves the user's current active default tenant membership from the
 existing membership resolver. The user's identity/scopes and existing effective
@@ -873,12 +881,43 @@ default. Runtime captures a value-free schema from the
 first successful raw tool result for admin inspection, without retaining a
 sample payload in the primary database. The admin can inspect the schema and
 switch the tool to Store; discovery refresh leaves this operator setting intact.
-Direct results are included whole if they fit the dynamically allocated input
-budget for the next model request. Oversized direct results return an explicit
-limitation for retry with narrower arguments instead of being clipped or
-silently stored. See [Runtime Tool Results](RUNTIME_TOOL_RESULTS.md) for the
-allocation and workspace reader contracts. Direct delivery also survives
+Direct results are normally delivered without Result Store persistence and are
+included whole if they fit the dynamically allocated input budget. When a Direct
+result cannot fit, or a batch projection must downgrade its presentation,
+runtime stores a recovery snapshot and returns an explicit `result.read` receipt;
+the model can recover the saved value without rerunning the source. This path
+does not persist raw file-controlled bodies. See [Runtime Tool Results](RUNTIME_TOOL_RESULTS.md)
+for allocation and workspace reader contracts. Direct delivery also survives
 duplicate-call reuse.
+
+Each successful observation is recorded as one runtime-owned
+`ResultObservation`: result identity/revision, record offset, selected fields or
+path, effective view, text/child cursor, and coverage. Task receipts and
+`result.read` recovery instructions refer to that exact observation; model
+supplied references do not become authorized merely by being present. Large
+structured task results and task inputs/dependencies use task-scoped Result
+Store references with explicit reader arguments when inline context is too
+large. Omission manifests identify the owning task and whether its saved result
+is recoverable; omitted values are not inferred from a compact planner prompt.
+
+This recovery path never reruns the source operation. The full journal and
+checkpoint transcript are distinct from the exact outbound model request, whose
+snapshot records what was actually delivered.
+
+Execution receipts and write guards are scoped to the root run and logical task,
+so resumed attempts retain successful writes and observed results. A dispatched
+write with unknown outcome fails closed; safe reads may retry. Successful writes
+remain duplicate guards through read-after-write cache invalidation. Native and
+text tool-call IDs share one uniqueness check. A paused execution preserves its
+receipts and pending native batch; file-derived request bodies are scrubbed from
+the checkpoint and require fresh authorization before dispatch. A malformed
+guard checkpoint is rejected before another operation is sent.
+
+`result.read` accepts a bounded JSON Pointer `path` and `view=auto|value|children`.
+`auto` returns a selected object/array if it fits, otherwise a paged child
+description; string values support text chunks and child listings have their
+own cursor. Responses retain the result revision and expose view coverage.
+These operations read saved snapshots and do not rerun their source.
 
 Tool calls without an explicit per-tool timeout use the remaining agent wall-time
 budget; there is no hidden 30-second default. Explicit policy/limit timeouts are

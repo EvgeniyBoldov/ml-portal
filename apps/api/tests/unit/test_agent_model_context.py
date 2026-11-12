@@ -8,7 +8,8 @@ from app.agents.runtime.model_context import (
 
 def test_model_projection_compacts_old_tool_receipts_but_keeps_current_native_pair():
     messages = [
-        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function"}]},
+        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+            "function": {"name": "result.read", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "old", "content": json.dumps({
             "_runtime_result": {"result_id": "r1", "revision": 2, "schema": {"huge": "x"}},
             "receipt": "x" * 2000, "data": {"rows": [1, 2]},
@@ -172,7 +173,8 @@ def test_batch_reallocation_uses_leftover_for_bounded_partial_candidate():
 def test_projection_never_drops_unrecoverable_direct_evidence():
     direct = json.dumps({"facts": "important direct evidence " * 200})
     messages = [
-        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function"}]},
+        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+            "function": {"name": "result.read", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "old", "content": direct},
         {"role": "assistant", "tool_calls": [{"id": "new", "type": "function"}]},
     ]
@@ -184,7 +186,8 @@ def test_projection_compacts_confirmed_saved_result_receipt_without_repeating_sc
                         "records": [{"private": "payload"} for _ in range(100)],
                         "schema": {"repeated": "schema"}})
     messages = [
-        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function"}]},
+        {"role": "assistant", "tool_calls": [{"id": "old", "type": "function",
+            "function": {"name": "result.read", "arguments": "{}"}}]},
         {"role": "tool", "tool_call_id": "old", "content": saved},
         {"role": "assistant", "tool_calls": [{"id": "new", "type": "function"}]},
     ]
@@ -193,7 +196,7 @@ def test_projection_compacts_confirmed_saved_result_receipt_without_repeating_sc
     assert "records" not in compacted and "schema" not in compacted
 
 
-def test_projection_keeps_older_read_facts_even_when_they_reference_a_saved_result():
+def test_projection_compacts_older_read_facts_even_when_they_reference_a_saved_result():
     receipt = json.dumps({"status": "ready", "result_id": "r-1", "revision": 4,
                           "records": [{"fact": "keep"} for _ in range(100)]})
     messages = [
@@ -203,7 +206,9 @@ def test_projection_keeps_older_read_facts_even_when_they_reference_a_saved_resu
         {"role": "assistant", "tool_calls": [{"id": "new", "type": "function",
             "function": {"name": "api.search", "arguments": "{}"}}]},
     ]
-    assert project_model_messages(messages)[1]["content"] == receipt
+    projected = json.loads(project_model_messages(messages)[1]["content"])
+    assert projected["result_id"] == "r-1" and projected["revision"] == 4
+    assert "records" not in projected
 
 
 def test_result_metadata_reads_compact_delivery_and_preserves_explicit_false():

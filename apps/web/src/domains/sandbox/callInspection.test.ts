@@ -55,6 +55,14 @@ describe('call inspection projection', () => {
       .toMatchObject({ resultId: 'opaque', delivery: 'stored', inlineComplete: false, sourceComplete: true, returnedCount: 0, sourceTotal: 14 });
   });
 
+  it('reads nullable result observation coverage without confusing source, page and query coverage', () => {
+    expect(toolResult({ result_observation: {
+      result_id: 'result-1', revision: 2, delivery: 'stored', source_complete: null,
+      read_complete: false, page_may_have_more: true, query_complete: true,
+    } })).toMatchObject({ resultId: 'result-1', delivery: 'stored', readComplete: false, pageMayHaveMore: true, queryComplete: true });
+    expect(toolResult({ result_observation: { source_complete: null } }).sourceComplete).toBeUndefined();
+  });
+
   it('preserves ordinary result objects and unwraps only recognized result pages or runtime descriptors', () => {
     const domain = { data: 'domain payload', other: 'must remain' };
     expect(toolResult({ success: true, data: domain }).data).toEqual(domain);

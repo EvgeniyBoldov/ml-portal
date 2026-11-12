@@ -88,6 +88,21 @@ class RecentAnchorPayload(_Payload):
     terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "failed"]
 
 
+from app.agents.runtime.result_context import ResultObservation as ResultObservationPayload
+
+
+class TaskResultDatasetRefPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    result_id: str = Field(min_length=1, max_length=255)
+    operation: str = Field(min_length=1, max_length=512)
+    revision: int | None = Field(default=None, ge=1)
+    row_count: int | None = Field(default=None, ge=0)
+    source_total: int | None = Field(default=None, ge=0)
+    source_complete: bool | None = None
+    source_run_id: str | None = Field(default=None, max_length=255)
+    observation: ResultObservationPayload | None = None
+
+
 class TaskResultPayload(_Payload):
     plan_id: str = Field(min_length=1, max_length=255)
     task_entity_id: str = Field(min_length=1, max_length=255)
@@ -95,6 +110,8 @@ class TaskResultPayload(_Payload):
     safe_summary: str = Field(default="", max_length=600)
     artifact_ids: list[str] = Field(default_factory=list, max_length=10)
     source_run_id: str = Field(default="", max_length=255)
+    result_refs: list[TaskResultDatasetRefPayload] = Field(default_factory=list, max_length=20)
+    result_refs_truncated: bool = False
 
 
 _PAYLOAD_MODELS: dict[str, type[_Payload]] = {

@@ -12,7 +12,7 @@ from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.core.config import get_settings
 from app.services.result_workspace import ResultWorkspace
-from app.services.tool_result_store import ToolResultStore, ToolResultStoreError
+from app.services.tool_result_store import ResultSnapshotUnavailable, ToolResultStore, ToolResultStoreError
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,26 @@ class ReadArgs(DescribeArgs):
     limit: int = Field(default=20, ge=1, le=100)
     fields: list[str] = Field(default_factory=list, description="Exact top-level sql_columns names from result.describe. Nested values remain JSONB. Omit to read whole records.")
     revision: int | None = Field(default=None, ge=1)
+    path: str | None = Field(default=None, max_length=1024, description="Optional JSON Pointer to a nested value, for example /structured_response/report.")
+    text_offset: int = Field(default=0, ge=0)
+    text_limit: int | None = Field(default=None, ge=1, le=12000)
+    child_offset: int = Field(default=0, ge=0)
+    child_limit: int = Field(default=100, ge=1, le=200)
+    view: str = Field(default="auto", pattern="^(auto|value|children)$")
+
+
+class HistoryArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_run_id: str = Field(min_length=1, max_length=64)
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=30, ge=1, le=50)
+
+
+class ImportArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_run_id: str = Field(min_length=1, max_length=64)
+    result_id: str = Field(min_length=1, max_length=64)
+    revision: int = Field(ge=1)
 
 
 class LoadArgs(DescribeArgs):
@@ -65,6 +85,8 @@ class FindArgs(DescribeArgs):
 
 
 WORKSPACE_TOOLS = {
+    "result.history": (HistoryArgs, "List metadata-only saved snapshots from a completed run in this chat. Pages are bounded; this does not read dataset contents. These are historical snapshots, not current external state."),
+    "result.import": (ImportArgs, "Copy one exact revision of an authorized prior-run snapshot into this run without rerunning its source. Imported snapshots are historical and snapshot-only; they do not satisfy fresh retrieval."),
     "result.describe": (SchemaArgs, "Read the actual SQL column schema of a saved dataset, revision and source state. Use exact sql_columns names in result.sql or result.read. Continue with next_schema_offset or query to find a field."),
     "result.read": (ReadArgs, "Read a bounded page of saved records. This does not fetch from the source. Use next_offset and revision to continue; select fields for large records."),
     "result.load": (LoadArgs, "Fetch the next source page or remaining pages within a budget into the same dataset. Rechecks source operation permissions; does not read records into context."),
@@ -78,7 +100,7 @@ def with_workspace_operations(operations: list[ResolvedOperation]) -> list[Resol
     result = list(operations)
     known = {operation.operation_slug for operation in result}
     for name, (model, description) in WORKSPACE_TOOLS.items():
-        if not operations and name not in {"result.describe", "result.read"}:
+        if not operations and name not in {"result.describe", "result.read", "result.history", "result.import"}:
             continue
         if name in known:
             continue
@@ -105,6 +127,39 @@ async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,
     scope = {"run_id": run_id, "tenant_id": ctx.tenant_id, "user_id": ctx.user_id}
     workspace = ResultWorkspace()
     try:
+        if call.tool_name in {"result.history", "result.import"}:
+            deps = ctx.get_runtime_deps()
+            if deps.session_factory is None:
+                return ToolResult.fail("Prior result access is unavailable", workspace_view=True,
+                                       error_code="result_snapshot_unavailable")
+            from app.services.runtime_result_reuse_service import RuntimeResultReuseService
+            chat_id = str(ctx.extra.get("runtime_chat_id") or ctx.chat_id or "")
+            branch_id = ctx.extra.get("runtime_branch_id")
+            if not chat_id or not ctx.user_id:
+                return ToolResult.fail("Prior result access is unavailable", workspace_view=True,
+                                       error_code="result_snapshot_unavailable")
+            async with deps.session_factory() as session:
+                reuse = RuntimeResultReuseService(session)
+                common = {"current_chat_id": chat_id, "owner_id": str(ctx.user_id),
+                          "branch_id": str(branch_id) if branch_id else None,
+                          "tenant_id": ctx.tenant_id, "user_id": ctx.user_id}
+                if call.tool_name == "result.history":
+                    data = await reuse.list_prior_snapshots(source_run_id=args["source_run_id"],
+                        current_run_id=run_id, offset=args["offset"], limit=args["limit"], **common)
+                    return ToolResult.ok(data, workspace_view=True)
+                imported = await reuse.import_snapshot(source_run_id=args["source_run_id"],
+                    result_id=args["result_id"], revision=args["revision"],
+                    current_run_id=run_id, task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+                    agent_execution_id=str(ctx.extra.get("run_id") or "") or None, **common)
+                descriptor = {key: imported.get(key) for key in (
+                    "result_id", "revision", "row_count", "source_total", "source_complete",
+                    "snapshot_only", "imported_from", "expires_at", "sql_ref")}
+                return ToolResult.ok({"status": "already_imported" if imported.get("already_imported") else "imported",
+                    **descriptor, "next_action": {"tool": "result.read", "arguments": {
+                        "result_id": imported["result_id"], "revision": imported["revision"],
+                        "offset": 0, "limit": 20, "view": "auto"},
+                        "message": "Read this historical snapshot; it is not fresh external state."}},
+                    stored_result=descriptor, workspace_view=True)
         if call.tool_name == "result.sql":
             data = await ToolResultStore().execute_sql(sql=args["sql"], call_id=call.id,
                 task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
@@ -143,6 +198,10 @@ async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,
                 while pages < max_pages:
                     state = await workspace.state(**scope)
                     meta = state["dataset_meta"]
+                    if meta.get("snapshot_only"):
+                        return {**await workspace.describe(**scope), "pages_loaded": pages,
+                            "load_error": "Imported snapshot is historical and cannot fetch source pages; run a fresh source query explicitly.",
+                            "snapshot_only": True}
                     next_arguments = meta.get("next_arguments")
                     if not next_arguments:
                         if meta.get("has_next"):
@@ -179,8 +238,7 @@ async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,
                                 data={"error": str(result.error or "Source page request failed")})
                         error = result.error
                         break
-                    from app.runtime.redactor import RuntimeRedactor
-                    appended = await workspace.append_page(payload=RuntimeRedactor().redact(result.data), source_tool=meta["source_tool"],
+                    appended = await workspace.append_page(payload=result.data, source_tool=meta["source_tool"],
                         arguments=next_arguments, expected_revision=state["revision"], call_id=page_call.id, **scope)
                     if not appended.get("appended"):
                         if ledger is not None and hasattr(ledger, "register_result"):
@@ -202,6 +260,10 @@ async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,
                 data = {**await workspace.describe(**scope), "load_error": str(exc) or "Loading time budget reached"}
         return ToolResult.ok(data, workspace_view=True)
     except ToolResultStoreError as exc:
+        if isinstance(exc, ResultSnapshotUnavailable):
+            return ToolResult.ok({"status": "unavailable", "reason": exc.reason,
+                "message": "The prior snapshot is unavailable, expired, changed, or not importable. Choose another saved snapshot or run a fresh source query explicitly."},
+                workspace_view=True)
         return ToolResult.fail(str(exc), workspace_view=True)
     except (SQLAlchemyError, TimeoutError) as exc:
         logger.exception("Runtime result workspace storage failure operation=%s", call.tool_name)

@@ -1,4 +1,7 @@
+import hashlib
+import json
 from uuid import UUID
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import ConflictError, NotFoundError
 from app.core.logging import get_logger
@@ -18,12 +21,35 @@ class ShadowInvocationService:
         self.repo = ShadowInvocationRepository(session)
 
     async def enqueue(self, payload: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID,
-                      scopes: list[str], request_id: str) -> UUID:
+                      scopes: list[str], request_id: str,
+                      idempotency_key: str | None = None) -> UUID:
+        normalized_key = idempotency_key.strip() if idempotency_key is not None else None
+        if normalized_key is not None and (not normalized_key or len(normalized_key) > 255):
+            raise ValueError("Idempotency-Key must be nonblank and at most 255 characters")
         await self.agent_service.validate(payload, user_id=user_id, tenant_id=tenant_id)
+        fingerprint = self._request_fingerprint(payload) if normalized_key is not None else None
+        if normalized_key is not None:
+            existing = await self.repo.by_idempotency_key(user_id=user_id, tenant_id=tenant_id,
+                                                           idempotency_key=normalized_key)
+            if existing is not None:
+                self._validate_replay(existing, fingerprint)
+                return existing.id
         row = ShadowInvocation(user_id=user_id, tenant_id=tenant_id, agent=payload.agent,
-                               data=payload.data, scopes=scopes, request_id=request_id, status="queued")
-        await self.repo.add(row)
-        await self.session.commit()
+                               data=payload.data, scopes=scopes, request_id=request_id, status="queued",
+                               idempotency_key=normalized_key, request_fingerprint=fingerprint)
+        try:
+            await self.repo.add(row)
+            await self.session.commit()
+        except IntegrityError:
+            await self.session.rollback()
+            if normalized_key is None:
+                raise
+            existing = await self.repo.by_idempotency_key(user_id=user_id, tenant_id=tenant_id,
+                                                           idempotency_key=normalized_key)
+            if existing is None:
+                raise
+            self._validate_replay(existing, fingerprint)
+            return existing.id
         # The row is the durable source of truth; periodic dispatch repairs a
         # broker failure between commit and publication.
         try:
@@ -34,22 +60,38 @@ class ShadowInvocationService:
         return row.id
 
     @staticmethod
+    def _request_fingerprint(payload: ShadowAgentRequest) -> str:
+        normalized = json.dumps({"agent": payload.agent, "data": payload.data},
+                                ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _validate_replay(existing: ShadowInvocation, fingerprint: str | None) -> None:
+        if existing.request_fingerprint != fingerprint:
+            raise ConflictError("Idempotency-Key was already used for a different request")
+
+    @staticmethod
     def _response(row: ShadowInvocation) -> ShadowAgentTask:
         return ShadowAgentTask(id=row.id, agent=row.agent, status=row.status,
                                result=row.result, error=row.error, created_at=row.created_at,
                                delivered_at=row.delivered_at)
 
-    async def list_ready(self, user_id: UUID) -> list[ShadowAgentTask]:
-        return [self._response(row) for row in await self.repo.ready(user_id)]
+    async def list_ready(self, user_id: UUID, *, tenant_id: UUID | None = None,
+                         tenant_ids: list[UUID] | None = None) -> list[ShadowAgentTask]:
+        return [self._response(row) for row in await self.repo.ready(
+            user_id, tenant_id=tenant_id, tenant_ids=tenant_ids)]
 
-    async def get(self, invocation_id: UUID, user_id: UUID) -> ShadowAgentTask:
-        row = await self.repo.get_owned(invocation_id, user_id)
+    async def get(self, invocation_id: UUID, user_id: UUID, *, tenant_id: UUID | None = None,
+                  tenant_ids: list[UUID] | None = None) -> ShadowAgentTask:
+        row = await self.repo.get_owned(invocation_id, user_id, tenant_id=tenant_id, tenant_ids=tenant_ids)
         if row is None:
             raise NotFoundError("Shadow invocation")
         return self._response(row)
 
-    async def acknowledge(self, invocation_id: UUID, user_id: UUID) -> None:
-        row = await self.repo.get_owned(invocation_id, user_id, lock=True)
+    async def acknowledge(self, invocation_id: UUID, user_id: UUID, *, tenant_id: UUID | None = None,
+                          tenant_ids: list[UUID] | None = None) -> None:
+        row = await self.repo.get_owned(invocation_id, user_id, tenant_id=tenant_id,
+                                        tenant_ids=tenant_ids, lock=True)
         if row is None:
             raise NotFoundError("Shadow invocation")
         if row.status not in {"completed", "failed"}:

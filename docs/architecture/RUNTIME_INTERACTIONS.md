@@ -77,6 +77,11 @@ does not restart the earlier tool loop. An interrupted native tool batch is
 stored as completed results plus the not-yet-executed pending operation, without
 orphaned native tool-call messages.
 
+Execution receipts and write guards survive the checkpoint. File-derived raw
+request bodies are scrubbed and are not replayed as authorization: the operation
+must be freshly authorized before dispatch. A malformed persisted write-guard
+checkpoint fails before another operation is sent.
+
 ## Persistence and transport
 
 Plan and task interactions use `runtime_pauses.payload`. Task status is

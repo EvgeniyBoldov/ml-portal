@@ -43,6 +43,19 @@ describe('ToolDataViewer', () => {
     expect(screen.getByRole('button', { name: 'Открыть доступный результат' })).toBeInTheDocument();
   });
 
+  it('shows recovery guidance instead of an oversized direct tool body', () => {
+    const recoveryResult: TraceToolResult = {
+      data: undefined,
+      summary: 'Результат сохранён отдельно',
+      truncated: false,
+      directRecovery: { resultId: 'result-1', revision: 2, reason: 'batch_context_budget' },
+    };
+    render(<ToolDataViewer result={recoveryResult} />);
+    expect(screen.getByText('Прочитайте сохранённый результат через действие result.read.')).toBeInTheDocument();
+    expect(screen.getByText('result-1')).toBeInTheDocument();
+    expect(screen.queryByText('Открыть доступный результат')).not.toBeInTheDocument();
+  });
+
   it('does not describe an unknown empty outcome as a completed operation', () => {
     const result: TraceToolResult = {
       data: undefined,

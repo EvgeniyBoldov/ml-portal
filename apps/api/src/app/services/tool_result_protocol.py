@@ -149,7 +149,7 @@ def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) 
                           if has_next else None)
         return ResultPage(value=payload["rows"], meta=ResultMeta(source="collection", total=total,
             has_next=has_next, next_arguments=next_arguments,
-            complete=complete, coverage_incomplete=has_next is True))
+            complete=complete))
     # Generic adapters preserve unknown objects, scalars and null as records.
     # Their pagination state is unknown until they publish explicit metadata.
     return ResultPage(value=payload if isinstance(payload, list) else [payload],

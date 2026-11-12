@@ -139,3 +139,134 @@ async def load_result_catalog(*, ctx: Any, run_id: str) -> tuple[list[dict[str, 
     except Exception:
         logger.exception("Could not load datastore result metadata for run_id=%s", run_id)
         return [], "unavailable"
+
+
+async def load_prior_result_inventory(
+    *, session: Any, chat_snapshot: dict[str, Any], chat_id: str, owner_id: str,
+    branch_id: str | None, tenant_id: Any, user_id: Any,
+    max_source_runs: int | None = None, max_items: int | None = None,
+) -> dict[str, Any]:
+    """Reauthorize chat-persisted source runs and load bounded metadata only.
+
+    Snapshot IDs in chat context are hints, never permissions. The service
+    checks chat/branch ownership and Result Store user/tenant/TTL before
+    returning any importable metadata. No dataset payload is loaded here.
+    """
+    from app.core.config import get_settings
+    settings = get_settings()
+    max_source_runs = max_source_runs or settings.CHAT_CONTEXT_PRIOR_RESULT_RUN_LIMIT
+    max_items = max_items or settings.CHAT_CONTEXT_PRIOR_RESULT_LIMIT
+    task_refs = chat_snapshot.get("task_result_refs") if isinstance(chat_snapshot, dict) else []
+    selected_by_run: dict[str, list[str]] = {}
+    parent_runs: list[str] = []
+    for task_ref in task_refs or []:
+        if not isinstance(task_ref, dict):
+            continue
+        parent_source = str(task_ref.get("source_run_id") or "").strip()
+        if parent_source and parent_source not in parent_runs:
+            parent_runs.append(parent_source)
+        refs = task_ref.get("result_refs") if isinstance(task_ref.get("result_refs"), list) else []
+        for ref in refs:
+            source = str((ref.get("source_run_id") if isinstance(ref, dict) else None) or parent_source).strip()
+            if not source:
+                continue
+            selected = selected_by_run.setdefault(source, [])
+            result_id = str(ref.get("result_id") or "").strip() if isinstance(ref, dict) else ""
+            if result_id and result_id not in selected:
+                selected.append(result_id)
+    requested_runs_all = list(dict.fromkeys([*parent_runs, *selected_by_run.keys()]))
+    requested_runs = requested_runs_all[:max_source_runs]
+    omitted_by_limit = max(0, len(requested_runs_all) - len(requested_runs))
+    base = {"status": "empty", "items": [], "source_runs": [], "coverage": "complete",
+            "omitted_source_runs": omitted_by_limit, "omitted_items": 0}
+    if not requested_runs:
+        return base
+    from app.services.runtime_result_reuse_service import RuntimeResultReuseService
+    service = RuntimeResultReuseService(session)
+    try:
+        authorized = set(await service.authorize_source_runs(
+            run_ids=requested_runs, chat_id=chat_id, owner_id=owner_id, branch_id=branch_id,
+        ))
+    except Exception:
+        logger.exception("Could not authorize prior result source runs")
+        return {**base, "status": "unavailable", "coverage": "unavailable",
+                "omitted_source_runs": len(requested_runs)}
+
+    source_runs: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    unavailable_runs = len(requested_runs) - len(authorized)
+    omitted_items = 0
+    for source_run_id in requested_runs:
+        if source_run_id not in authorized:
+            continue
+        selected_ids = selected_by_run.get(source_run_id, [])
+        if not selected_ids:
+            source_runs.append({"source_run_id": source_run_id, "status": "history_available",
+                "snapshot_label": "prior turn snapshots", "history": {"tool": "result.history",
+                    "arguments": {"source_run_id": source_run_id, "offset": 0, "limit": max_items}}})
+            continue
+        if len(items) >= max_items:
+            omitted_items += 1
+            continue
+        try:
+            page = await service.list_prior_snapshots(
+                source_run_id=source_run_id, current_chat_id=chat_id, owner_id=owner_id,
+                branch_id=branch_id, tenant_id=tenant_id, user_id=user_id,
+                offset=0, limit=min(50, max_items - len(items)),
+                selected_result_ids=selected_ids[:50],
+            )
+        except Exception:
+            logger.exception("Could not load prior result metadata for source_run_id=%s", source_run_id)
+            source_runs.append({"source_run_id": source_run_id, "status": "unavailable",
+                                "history": {"tool": "result.history", "arguments": {
+                                    "source_run_id": source_run_id, "offset": 0, "limit": max_items}}})
+            unavailable_runs += 1
+            continue
+        run_items = page.get("items") if isinstance(page.get("items"), list) else []
+        remaining = max_items - len(items)
+        kept: list[dict[str, Any]] = []
+        for raw_item in run_items[:remaining]:
+            if not isinstance(raw_item, dict):
+                continue
+            item = {key: raw_item[key] for key in (
+                "result_id", "operation", "producer", "row_count", "payload_type", "revision",
+                "source_complete", "source_total", "created_at", "expires_at", "snapshot_only",
+                "imported_from", "importable", "unavailable_reason",
+            ) if key in raw_item}
+            item["result_id"] = str(item.get("result_id") or "")[:255]
+            item["operation"] = str(item.get("operation") or "unknown")[:512]
+            item["source_run_id"] = source_run_id
+            item["snapshot_only"] = True
+            item["fresh_retrieval"] = False
+            revision = item.get("revision")
+            if item.get("importable") is True and isinstance(revision, int):
+                item["import"] = {"tool": "result.import", "arguments": {
+                    "source_run_id": source_run_id, "result_id": item["result_id"], "revision": revision,
+                }}
+            kept.append(item)
+        omitted_items += max(0, len(run_items) - len(kept))
+        for item in kept:
+            items.append(item)
+        source_runs.append({
+            "source_run_id": source_run_id,
+            "status": str(page.get("status") or "unavailable"),
+            "snapshot_label": "prior turn result snapshot",
+            "history": {"tool": "result.history", "arguments": {
+                "source_run_id": source_run_id,
+                # The history tool pages the whole source-run catalog; its
+                # cursor is distinct from selected-result-ID paging above.
+                "offset": 0, "limit": max_items,
+            }},
+            "catalog_complete": bool(page.get("catalog_complete")),
+            "next_offset": page.get("next_offset"),
+        })
+        omitted_items += max(0, len(selected_by_run.get(source_run_id, [])) - len(run_items))
+    status = ("available" if any(item.get("importable") is True for item in items)
+              else "unavailable" if items or unavailable_runs else "history_available" if source_runs else "empty")
+    truncated_refs = any(bool(ref.get("result_refs_truncated")) for ref in task_refs if isinstance(ref, dict))
+    truncated_refs = truncated_refs or any(len(ids) > 50 for ids in selected_by_run.values())
+    unavailable_items = any(item.get("importable") is False for item in items)
+    coverage = "partial" if unavailable_runs or unavailable_items or omitted_items or omitted_by_limit or truncated_refs else "complete"
+    return {"status": status, "items": items, "source_runs": source_runs,
+            "coverage": coverage, "omitted_source_runs": unavailable_runs + omitted_by_limit,
+            "omitted_items": omitted_items}

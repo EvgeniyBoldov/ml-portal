@@ -583,7 +583,9 @@ class DirectOperationExecutor:
 
         structured = payload.get("structuredContent")
         if "structuredContent" in payload:
-            return ToolResult.ok(structured)
+            content = payload.get("content") or []
+            extras = _meaningful_mcp_content(content, structured)
+            return ToolResult.ok(structured, **({"mcp_content": safe_diagnostic(extras, secrets=secrets)} if extras else {}))
 
         content = payload.get("content") or []
         text = _extract_mcp_text_content(content)
@@ -1120,6 +1122,44 @@ def _extract_mcp_text_content(content: List[Dict[str, Any]]) -> str:
         if isinstance(text, str) and text:
             texts.append(text)
     return "\n".join(texts)
+
+
+def _meaningful_mcp_content(content: Any, structured: Any) -> dict[str, Any]:
+    """Retain bounded MCP annotations/resources with an explicit loss receipt."""
+    if not isinstance(content, list):
+        return {"items": [], "original_count": 0, "omitted_count": 0, "truncated": False,
+                "duplicate_count": 0, "warning_summaries": [], "warnings_omitted": 0}
+    canonical = None
+    try:
+        canonical = json.dumps(structured, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        pass
+    extras: list[dict[str, Any]] = []
+    warning_summaries: list[str] = []
+    warning_count = 0
+    duplicate_count = 0
+    for item in content:
+        if not isinstance(item, dict):
+            continue
+        text_value = item.get("text")
+        if isinstance(text_value, str) and re.search(r"(?i)\b(warning|error|failed|failure|truncated|omitted)\b", text_value):
+            warning_count += 1
+            if len(warning_summaries) < 20:
+                warning_summaries.append(text_value[:1000])
+        if isinstance(text_value, str) and canonical is not None:
+            try:
+                if json.dumps(json.loads(text_value), ensure_ascii=False, sort_keys=True, separators=(",", ":")) == canonical:
+                    duplicate_count += 1
+                    continue
+            except (ValueError, TypeError):
+                pass
+        extras.append(item)
+    selected = extras[:50]
+    omitted = max(0, len(extras) - len(selected))
+    return {"items": selected, "original_count": len(content), "omitted_count": omitted,
+            "duplicate_count": duplicate_count, "truncated": omitted > 0,
+            "warning_summaries": warning_summaries,
+            "warnings_omitted": max(0, warning_count - len(warning_summaries))}
 
 
 def _extract_mcp_error_message(content: List[Dict[str, Any]]) -> Optional[str]:

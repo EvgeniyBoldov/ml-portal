@@ -45,17 +45,12 @@ class TaskAttemptResultReducer:
                 matching = []
                 for item in attachments:
                     key = str(item.get("output_key") or item.get("key") or "").casefold()
-                    filename = str(item.get("file_name") or item.get("filename") or "").casefold()
-                    filename_key = "".join(char for char in filename.rsplit(".", 1)[0] if char.isalnum())
-                    expected_key = "".join(char for char in spec.key.casefold() if char.isalnum())
-                    extension = filename.rsplit(".", 1)[-1] if "." in filename else ""
-                    expected_bases = {expected_key}
-                    if extension and expected_key.endswith(extension):
-                        expected_bases.add(expected_key[:-len(extension)])
-                    if key == spec.key.casefold() or (filename_key and filename_key in expected_bases):
+                    if key == spec.key.casefold():
                         matching.append(item)
-                states[spec.key] = {"status": "fulfilled" if matching else "missing", "fulfillment": "artifact",
-                                    **({"artifact_ids": [str(item["artifact_id"]) for item in matching]} if matching else {})}
+                state = "fulfilled" if matching else ("unbound" if attachments else "missing")
+                states[spec.key] = {"status": state, "fulfillment": "artifact",
+                                    **({"artifact_ids": [str(item["artifact_id"]) for item in matching]} if matching else {}),
+                                    **({"available_artifact_count": len(attachments)} if state == "unbound" else {})}
         outcome = {AgentExecutionCompletion.FULFILLED: TaskOutcome.COMPLETED,
                    AgentExecutionCompletion.NEEDS: TaskOutcome.NEEDS_DEPENDENCY,
                    AgentExecutionCompletion.UNFULFILLABLE: TaskOutcome.UNFULFILLABLE}[declaration.completion_claim]

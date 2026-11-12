@@ -80,6 +80,9 @@ class SynthesisContextBuilder:
             excluded = latest_resolutions.get(task_id, {}).get("action") == ResolutionAction.EXCLUDE_FROM_SCOPE.value
             if result and not excluded:
                 verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
+                for item in verified.get("limitations") or []:
+                    if isinstance(item, dict):
+                        limitations.append({"task_id": task_id, **self._redact(item)})
                 references = self._verified_result_references(verified)
                 expected_outputs = [
                     {"key": item.get("key"), "required": bool(item.get("required", True)),
@@ -117,7 +120,7 @@ class SynthesisContextBuilder:
                 if not isinstance(item, dict) or item.get("type") not in {"document_memory", "memory_recall", "planner_memory_result"}:
                     continue
                 memory_context.append(project_memory_context(item, allowed_scope))
-        context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "memory_context": self._redact(memory_context), "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "source_id")}
+        context = {"user_question": plan.get("goal"), "synthesis_brief": self._redact(iteration["synthesis_brief"]), "plan_outline": [{"sequence": item.get("sequence"), "terminal": item.get("terminal")} for item in plan.get("iterations", [])], "resolution_decisions": self._redact([{key: item.get(key) for key in ("task_id", "action", "output_keys", "reason")} for item in resolutions if item.get("action") != ResolutionAction.CONTINUE_WITH_TASKS.value]), "completed_task_reports": reports, "limitations": limitations, "memory_context": self._redact(memory_context), "artifacts": deliverable_artifacts, "sources": self._dedupe(sources, "evidence_id")}
         context["scope_context"] = self._redact(plan.get("scope_context") or {})
         context["execution_context"] = memory_execution_context(
             list((plan.get("scope_context") or {}).get("keys") or []), revision=int((plan.get("scope_context") or {}).get("revision") or 0),
@@ -267,11 +270,24 @@ class SynthesisContextBuilder:
             if not isinstance(receipt, dict) or receipt.get("success") is not True or not receipt.get("result_id"):
                 continue
             analysis = receipt.get("analysis") if isinstance(receipt.get("analysis"), dict) else {}
+            observation = receipt.get("result_observation") if isinstance(receipt.get("result_observation"), dict) else {}
             references.append({
                 "result_id": str(receipt["result_id"]),
                 "operation": str(receipt.get("operation") or "unknown"),
-                **({"revision": analysis["revision"]} if isinstance(analysis.get("revision"), int) else {}),
+                **({"observation": deepcopy(observation)} if observation else {}),
+                **({"revision": observation["revision"]} if isinstance(observation.get("revision"), int)
+                   else ({"revision": analysis["revision"]} if isinstance(analysis.get("revision"), int) else {})),
                 **({"source_complete": receipt["source_complete"]} if isinstance(receipt.get("source_complete"), bool) else {}),
+            })
+        task_result_ref = verified.get("task_result_ref")
+        if isinstance(task_result_ref, dict) and task_result_ref.get("status") == "available" and task_result_ref.get("result_id"):
+            references.append({
+                "result_id": str(task_result_ref["result_id"]),
+                "operation": "runtime.task.result",
+                "revision": task_result_ref.get("revision"),
+                "path": task_result_ref.get("path"),
+                "reader": task_result_ref.get("reader"),
+                "reader_arguments": deepcopy(task_result_ref.get("reader_arguments") or {}),
             })
         return references
 
@@ -313,8 +329,16 @@ class SynthesisContextBuilder:
             for key in ("chunk_id", "page", "score", "representation_id", "start", "end"):
                 if item.get(key) is not None:
                     source[key] = item[key]
+            identity_parts = [str(source.get(key) or "") for key in
+                              ("source_id", "chunk_id", "page", "start", "end", "representation_id")]
+            if not any(identity_parts[1:]) and item.get("text"):
+                identity_parts.append(hashlib.sha256(str(item["text"]).encode("utf-8")).hexdigest())
+            source["evidence_id"] = ":".join(identity_parts)
             if item.get("text"):
-                source["excerpt"] = self._redact(str(item["text"])[:500])
+                text = str(item["text"])
+                source["excerpt"] = self._redact(text[:500])
+                source["excerpt_truncated"] = len(text) > 500
+                source["excerpt_length"] = len(text)
             if item.get("url"):
                 source["url"] = item["url"]
             projected.append(self._redact(source))

@@ -186,6 +186,7 @@ class RuntimeTurnState(BaseModel):
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
         result_delivery: Literal["stored", "direct"] = "stored",
+        result_observation: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.tool_ledger.register_result(
             call_id=call_id,
@@ -196,6 +197,7 @@ class RuntimeTurnState(BaseModel):
             result_inline_complete=result_inline_complete,
             result_source_complete=result_source_complete,
             result_delivery=result_delivery,
+            result_observation=result_observation,
         )
 
     def consume_task_tool_call(self, task_id: str) -> None:

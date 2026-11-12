@@ -181,10 +181,14 @@ class OperationExecutionFacade:
                         iteration=int(ctx.extra.get("runtime_iteration") or 0),
                         agent_slug=str(ctx.extra.get("agent_slug") or "") or None,
                         phase_id=None,
+                        operation_side_effects=operation.side_effects,
+                        risk_level=operation.risk_level,
                     )
             ledger.set_call_target(call_id=operation_call.id, target_identity=target_identity,
                                    arguments=operation_call.arguments,
-                                   execution_id=execution_id)
+                                   execution_id=execution_id,
+                                   operation_side_effects=operation.side_effects,
+                                   risk_level=operation.risk_level)
 
         previous_identity = ctx.extra.get("runtime_tool_target_identity")
         previous_active_id = ctx.extra.get("runtime_active_tool_call_id")
@@ -220,6 +224,7 @@ class OperationExecutionFacade:
         )
 
         try:
+            dispatched = False
             logger.info(f"Executing tool: {operation_call.tool_name}")
             executor = ctx.get_runtime_deps().operation_executor
             if not executor:
@@ -250,6 +255,7 @@ class OperationExecutionFacade:
             if timeout_s is not None:
                 ctx.extra["runtime_operation_timeout_s"] = timeout_s
             try:
+                dispatched = True
                 if timeout_s is not None:
                     result = await asyncio.wait_for(
                         executor.execute(operation_call, ctx), timeout=timeout_s,
@@ -285,21 +291,33 @@ class OperationExecutionFacade:
                         f"{warning_count} warnings/errors",
                     )
 
+            if not result.success and dispatched and operation.side_effects:
+                failure = result.metadata.get("mcp_failure")
+                category = failure.get("category") if isinstance(failure, dict) else None
+                kind = failure.get("kind") if isinstance(failure, dict) else None
+                error_code = result.metadata.get("error_code")
+                if (error_code in {RuntimeErrorCode.OPERATION_TIMEOUT.value,
+                                   RuntimeErrorCode.OPERATION_EXECUTION_FAILED.value,
+                                   "transport_error", "tool_outcome_unknown"}
+                        or category in {"availability", "unknown"}
+                        or kind in {"transport", "http", "protocol"}):
+                    result.metadata.update(outcome_unknown=True, error_code="tool_outcome_unknown", retryable=False)
             return result, sources
 
         except asyncio.TimeoutError:
             logger.error(
                 f"Tool {operation_call.tool_name} timed out after {timeout_s}s",
             )
+            outcome_unknown = bool(dispatched and operation.side_effects)
             err = OperationExecutionError(
                 code=RuntimeErrorCode.OPERATION_TIMEOUT,
                 message=f"Execution timed out after {timeout_s} seconds",
-                retryable=True,
+                retryable=not outcome_unknown,
             )
             return ToolResult.fail(
                 err.message,
                 **build_error_metadata(
-                    error_code=err.code.value,
+                    error_code="tool_outcome_unknown" if outcome_unknown else err.code.value,
                     retryable=err.retryable,
                     user_message=err.message,
                     operator_message=err.message,
@@ -308,6 +326,7 @@ class OperationExecutionFacade:
                         context={"tool": operation_call.tool_name, "timeout_seconds": timeout_s},
                     ),
                 ),
+                **({"outcome_unknown": True} if outcome_unknown else {}),
             ), []
 
         except Exception as e:
@@ -315,15 +334,16 @@ class OperationExecutionFacade:
                 f"Tool {operation_call.tool_name} execution failed: {e}",
                 exc_info=True,
             )
+            outcome_unknown = bool(dispatched and operation.side_effects)
             err = OperationExecutionError(
                 code=RuntimeErrorCode.OPERATION_EXECUTION_FAILED,
                 message=str(e),
-                retryable=True,
+                retryable=not outcome_unknown,
             )
             return ToolResult.fail(
                 err.message,
                 **build_error_metadata(
-                    error_code=err.code.value,
+                    error_code="tool_outcome_unknown" if outcome_unknown else err.code.value,
                     retryable=err.retryable,
                     user_message=err.message,
                     operator_message=str(e),
@@ -333,6 +353,7 @@ class OperationExecutionFacade:
                         context={"tool": operation_call.tool_name},
                     ),
                 ),
+                **({"outcome_unknown": True} if outcome_unknown else {}),
             ), []
 
     async def _ensure_confirmation_if_required(
@@ -810,6 +831,9 @@ class OperationExecutionFacade:
                     revision=int(stored_result.get("revision") or 1),
                     source_coverage=SourceCoverage(complete=stored_result.get("source_complete"),
                         total=stored_result.get("source_total"), stored_count=stored_result.get("row_count", 0)),
+                    delivery="direct" if result.delivery == "direct" and result.metadata.get("direct_recovery") else None,
+                    recovery_reason=(str(result.metadata.get("direct_recovery", {}).get("reason"))
+                                     if isinstance(result.metadata.get("direct_recovery"), dict) else None),
                     next_action=ResultNextAction(arguments={"result_id": str(stored_result.get("result_id") or ""),
                         "revision": int(stored_result.get("revision") or 1), "offset": 0, "limit": 5},
                         message="Read a smaller page with result.read."),
@@ -835,18 +859,53 @@ class OperationExecutionFacade:
                     revision = int(output.get("revision") or 1)
                     values = output.get("value")
                     preserve_records = "value" in output and not output.get("record_too_large")
+                    nested_text_more = output.get("next_text_offset") is not None
+                    nested_children_more = output.get("next_child_offset") is not None
+                    row_more = output.get("next_offset") is not None
+                    nested_more = nested_text_more or nested_children_more
+                    next_read_args: Dict[str, Any] | None = None
+                    if nested_more or row_more:
+                        next_read_args = {
+                            "result_id": result_id,
+                            "revision": revision,
+                            "offset": output.get("offset", 0) if nested_more else output.get("next_offset"),
+                            "limit": 1 if output.get("path") is not None else 10,
+                            "view": output.get("view") or "auto",
+                        }
+                        if output.get("requested_fields") is not None:
+                            next_read_args["fields"] = output["requested_fields"]
+                        if output.get("path") is not None:
+                            next_read_args["path"] = output["path"]
+                            if output.get("text_limit") is not None:
+                                next_read_args["text_offset"] = output.get("next_text_offset", 0) if nested_text_more else 0
+                                next_read_args["text_limit"] = output.get("applied_text_limit") or output["text_limit"]
+                            if output.get("child_limit") is not None:
+                                next_read_args["child_offset"] = output.get("next_child_offset", 0) if nested_children_more else 0
+                                next_read_args["child_limit"] = (len(values[0].get("children", []))
+                                    if nested_children_more and values and isinstance(values[0], dict)
+                                    else output["child_limit"])
                     view = ModelResultView(
                         result_id=result_id, revision=revision,
                         source_coverage=SourceCoverage(complete=output.get("source_complete"),
                                          total=output.get("source_total"), stored_count=output.get("loaded_items", 0)),
                         records=values if not output.get("record_too_large") else None,
+                        offset=output.get("offset"), limit=output.get("limit"),
+                        fields=output.get("requested_fields"), read_complete=output.get("read_complete"),
+                        next_offset=output.get("next_offset"), path=output.get("path"),
+                        text_offset=output.get("text_offset"), text_limit=output.get("text_limit"),
+                        next_text_offset=output.get("next_text_offset"),
+                        child_offset=output.get("child_offset"), child_limit=output.get("child_limit"),
+                        next_child_offset=output.get("next_child_offset"),
+                        view=output.get("view"),
+                        snapshot_only=output.get("snapshot_only"),
+                        imported_from=output.get("imported_from"),
                         next_action=(ResultNextAction(arguments={"result_id": result_id,
-                            "revision": revision, "offset": 0, "limit": 5},
+                            "revision": revision, "offset": 0, "limit": 1,
+                            **({"path": output["path"], "text_limit": output.get("text_limit", 4000)}
+                               if output.get("path") is not None else {})},
                             message="Inspect available fields, then read a smaller projection.") if output.get("record_too_large") else
-                            ResultNextAction(arguments={"result_id": result_id, "revision": revision,
-                            "offset": output.get("next_offset"), "limit": 10,
-                            **({"fields": output["requested_fields"]} if "requested_fields" in output else {})},
-                            message="Continue reading the saved dataset.") if output.get("next_offset") is not None else None),
+                            ResultNextAction(arguments=next_read_args,
+                            message="Continue reading the saved dataset.") if next_read_args is not None else None),
                     )
                     if output.get("record_too_large"):
                         view.next_action = ResultNextAction(tool="result.describe", arguments={"result_id": result_id},
@@ -869,6 +928,26 @@ class OperationExecutionFacade:
                     if context_budget_tokens is not None:
                         return fits_budget(rendered_value)
                     return len(rendered_value.encode()) <= budget
+
+                if operation_slug == "result.history" and isinstance(output.get("items"), list):
+                    items = list(output["items"])
+                    original_count = len(items)
+                    while items and not workspace_fits({**output, "items": items}):
+                        items.pop()
+                    output["items"] = items
+                    output["returned_count"] = len(items)
+                    output["truncated"] = len(items) < original_count or output.get("next_offset") is not None
+                    if items and output["truncated"]:
+                        next_offset = int(output.get("offset", 0)) + len(items)
+                        output["next_offset"] = next_offset
+                        output["catalog_complete"] = False
+                        output["next_action"] = {"tool": "result.history", "arguments": {
+                            "source_run_id": output.get("source_run_id"), "offset": next_offset,
+                            "limit": min(int(output.get("limit", 30)), 50)},
+                            "message": "Continue the metadata-only snapshot catalog."}
+                    rendered_history = _json_dumps_exact(output, ensure_ascii=False, default=str)
+                    if _fits_result_budget(rendered_history):
+                        return rendered_history
 
                 schema = output.get("observed_schema")
                 if isinstance(schema, dict):
@@ -898,7 +977,9 @@ class OperationExecutionFacade:
             if stored_result:
                 records = None
                 payload = result.data
-                if not result.metadata.get("reused") and isinstance(payload, dict):
+                if operation_slug == "result.import":
+                    records = None
+                elif not result.metadata.get("reused") and isinstance(payload, dict):
                     if payload.get("query_result_stored") is True and isinstance(payload.get("rows"), list):
                         records = payload["rows"]
                     elif isinstance(payload.get("value"), list) and isinstance(payload.get("meta"), dict):
@@ -912,12 +993,21 @@ class OperationExecutionFacade:
                 if isinstance(records, list) and len(records) != stored_result.get("row_count"):
                     records = None
                 view = ModelResultView(
-                    status="already_completed" if result.metadata.get("reused") else "ready",
+                    status=("already_completed" if result.metadata.get("reused")
+                            or (isinstance(payload, dict) and payload.get("status") == "already_imported") else "ready"),
                     result_id=str(stored_result.get("result_id") or ""),
                     revision=int(stored_result.get("revision") or 1),
                     source_coverage=SourceCoverage(complete=stored_result.get("source_complete"),
                         total=stored_result.get("source_total"), stored_count=stored_result.get("row_count", 0)),
+                    snapshot_only=stored_result.get("snapshot_only"),
+                    imported_from=stored_result.get("imported_from"),
                     records=records if isinstance(records, list) else None,
+                    input_result_id=payload.get("input_result_id") if isinstance(payload, dict) else None,
+                    input_revision=payload.get("input_revision") if isinstance(payload, dict) else None,
+                    offset=payload.get("offset") if isinstance(payload, dict) else None,
+                    limit=payload.get("limit") if isinstance(payload, dict) else None,
+                    page_may_have_more=payload.get("page_may_have_more") if isinstance(payload, dict) else None,
+                    query_complete=payload.get("query_complete") if isinstance(payload, dict) else None,
                     next_action=None if isinstance(records, list) else ResultNextAction(
                         arguments={"result_id": str(stored_result.get("result_id") or ""),
                                    "revision": int(stored_result.get("revision") or 1),
@@ -925,6 +1015,23 @@ class OperationExecutionFacade:
                         message="Read saved records with result.read.",
                     ),
                 )
+                if operation_slug == "result.import" and isinstance(payload, dict):
+                    action = payload.get("next_action")
+                    if isinstance(action, dict) and isinstance(action.get("arguments"), dict):
+                        view.next_action = ResultNextAction(
+                            tool="result.read", arguments=action["arguments"],
+                            message=str(action.get("message") or "Read this imported historical snapshot."),
+                        )
+                if isinstance(payload, dict) and payload.get("operation") in {"aggregate", "find"}:
+                    more = payload.get("page_may_have_more")
+                    view.next_action = (ResultNextAction(
+                        tool=f"result.{payload['operation']}",
+                        arguments={**({"result_id": payload.get("input_result_id")} if payload.get("input_result_id") else {}),
+                                   **({"revision": payload.get("input_revision")} if payload.get("input_revision") is not None else {}),
+                                   "offset": int(payload.get("offset", 0)) + int(payload.get("limit", 0)),
+                                   **({key: payload[key] for key in ("limit", "columns", "q") if key in payload})},
+                        message="Continue the same query at the next offset; restart if input_revision is stale.",
+                    ) if more else None)
                 rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
                 if _fits_result_budget(rendered):
                     return rendered

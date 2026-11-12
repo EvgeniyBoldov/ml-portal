@@ -60,10 +60,12 @@ class ToolLedgerEntry(BaseModel):
     phase_id: Optional[str] = None
     target_identity: Optional[str] = None
     execution_id: Optional[str] = None
+    operation_side_effects: Optional[bool] = None
+    risk_level: Optional[str] = None
 
     duplicate_of_call_id: Optional[str] = None
 
-    status: str = "called"  # called | succeeded | failed
+    status: str = "called"  # called | succeeded | failed | outcome_unknown | superseded
     success: Optional[bool] = None
     result_fingerprint: Optional[str] = None
     result_preview: Optional[str] = None
@@ -73,6 +75,8 @@ class ToolLedgerEntry(BaseModel):
     result_inline_complete: Optional[bool] = None
     result_source_complete: Optional[bool] = None
     result_delivery: Literal["stored", "direct"] = "stored"
+    outcome_unknown: bool = False
+    result_observation: Optional[Dict[str, Any]] = None
     sources: List[Dict[str, Any]] = Field(default_factory=list)
     called_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: Optional[datetime] = None
@@ -95,6 +99,8 @@ class ToolLedger(BaseModel):
         agent_slug: Optional[str],
         phase_id: Optional[str],
         target_identity: Optional[str] = None,
+        operation_side_effects: Optional[bool] = None,
+        risk_level: Optional[str] = None,
     ) -> ToolLedgerEntry:
         args_fingerprint, args_preview = _fingerprint_and_preview(arguments)
         signature = f"{operation}:{target_identity or ''}:{args_fingerprint}"
@@ -110,6 +116,8 @@ class ToolLedger(BaseModel):
             agent_slug=agent_slug,
             phase_id=phase_id,
             target_identity=target_identity,
+            operation_side_effects=operation_side_effects,
+            risk_level=risk_level,
             duplicate_of_call_id=duplicate_of,
         )
         self.entries.append(entry)
@@ -126,6 +134,8 @@ class ToolLedger(BaseModel):
         result_inline_complete: Optional[bool] = None,
         result_source_complete: Optional[bool] = None,
         result_delivery: Literal["stored", "direct"] = "stored",
+        outcome_unknown: bool = False,
+        result_observation: Optional[Dict[str, Any]] = None,
     ) -> None:
         target = None
         for entry in reversed(self.entries):
@@ -138,7 +148,8 @@ class ToolLedger(BaseModel):
 
         result_fingerprint, result_preview = _fingerprint_and_preview(data)
         target.success = success
-        target.status = "succeeded" if success else "failed"
+        target.outcome_unknown = bool(outcome_unknown)
+        target.status = "outcome_unknown" if outcome_unknown else ("succeeded" if success else "failed")
         target.result_fingerprint = result_fingerprint
         target.result_preview = result_preview
         cached_data = _cacheable_result_data(data) if success else None
@@ -148,8 +159,15 @@ class ToolLedger(BaseModel):
         target.result_inline_complete = result_inline_complete
         target.result_source_complete = result_source_complete
         target.result_delivery = result_delivery
+        target.result_observation = dict(result_observation) if result_observation else None
         target.sources = [dict(source) for source in (sources or []) if isinstance(source, dict)]
         target.finished_at = datetime.now(timezone.utc)
+        if success and not _entry_is_read_only(target):
+            # A later mutation invalidates cached reads in this task. It does
+            # not remove successful write receipts, which remain duplicate guards.
+            for previous in self.entries:
+                if previous is not target and previous.status == "succeeded" and _entry_is_read_only(previous):
+                    previous.status = "superseded"
 
     def update_result_presentation(self, *, call_id: str, inline_complete: Optional[bool]) -> None:
         """Update only the final model-delivery completeness for an existing result."""
@@ -157,15 +175,36 @@ class ToolLedger(BaseModel):
         if target is not None:
             target.result_inline_complete = inline_complete
 
+    def update_direct_recovery(self, *, call_id: str, stored_result: Dict[str, Any],
+                               observation: Optional[Dict[str, Any]] = None) -> None:
+        """Attach overflow-only recovery to an already executed Direct call."""
+        target = next((entry for entry in reversed(self.entries) if entry.call_id == call_id), None)
+        if target is None:
+            return
+        target.stored_result_id = str(stored_result.get("result_id") or "") or None
+        target.result_inline_complete = False
+        target.result_source_complete = stored_result.get("source_complete")
+        if observation:
+            target.result_observation = dict(observation)
+        target.result_data = None
+        target.result_data_available = False
+        target.result_preview = None
+
     def set_call_target(self, *, call_id: str, target_identity: str,
                         arguments: Optional[Dict[str, Any]] = None,
-                        execution_id: Optional[str] = None) -> None:
+                        execution_id: Optional[str] = None,
+                        operation_side_effects: Optional[bool] = None,
+                        risk_level: Optional[str] = None) -> None:
         """Attach resolved target and effective arguments before execution."""
         target = next((entry for entry in reversed(self.entries) if entry.call_id == call_id), None)
         if target is not None:
             target.target_identity = target_identity
             if execution_id is not None:
                 target.execution_id = execution_id
+            if operation_side_effects is not None:
+                target.operation_side_effects = operation_side_effects
+            if risk_level is not None:
+                target.risk_level = risk_level
             if arguments is not None:
                 target.args_fingerprint, target.args_preview = _fingerprint_and_preview(arguments)
 
@@ -208,6 +247,8 @@ class ToolLedger(BaseModel):
                 continue
             if entry.status != "succeeded":
                 continue
+            if not _entry_is_read_only(entry):
+                continue
             finished = entry.finished_at or entry.called_at
             age_seconds = (now - finished).total_seconds()
             if max_age_seconds is not None and age_seconds > max_age_seconds:
@@ -225,7 +266,7 @@ class ToolLedger(BaseModel):
         for entry in reversed(self.entries):
             same_scope = (entry.execution_id == execution_id) if execution_id else (entry.phase_id == phase_id)
             if (entry.call_id != exclude_call_id and entry.signature == signature and same_scope
-                    and entry.status in {"called", "succeeded"}):
+                    and entry.status in {"called", "succeeded", "outcome_unknown"}):
                 return entry
         return None
 
@@ -256,3 +297,13 @@ def _cacheable_result_data(value: Any) -> Any:
     if len(_stable_json(value)) > MAX_RESULT_CACHE_CHARS:
         return None
     return value
+
+
+def _is_read_operation(operation: str) -> bool:
+    """Deprecated name-based helper; never use it for execution safety."""
+    canonical = canonical_operation_name(operation).lower()
+    return canonical in {"memory.search", "collection.doc_search", "collection.list_documents"}
+
+
+def _entry_is_read_only(entry: ToolLedgerEntry) -> bool:
+    return entry.operation_side_effects is False and (entry.risk_level or "").lower() == "safe"

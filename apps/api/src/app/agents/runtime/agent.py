@@ -98,6 +98,7 @@ from app.runtime.error_payloads import build_debug_payload
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.runtime.operation_errors import OperationResultEnvelope, RuntimeErrorCode
+from app.runtime.memory.tool_ledger import canonical_operation_name
 from portal_mcp_contract import MCPFailureCategory, public_user_message
 from app.runtime.redactor import RuntimeRedactor
 from app.agents.context import ToolResult
@@ -167,6 +168,126 @@ def _checkpoint_receipt(value: Any) -> dict[str, Any]:
     visit(value)
     receipt["_operation_completed"] = True
     return receipt
+
+
+def _is_file_tool_name(operation: str) -> bool:
+    name = str(operation or "").strip().lower()
+    if name.startswith("instance."):
+        parts = name.split(".", 2)
+        if len(parts) == 3:
+            name = parts[2]
+    return name == "file.read" or name.startswith("file.data.")
+
+
+def _is_read_operation_name(operation: str) -> bool:
+    name = str(operation or "").strip().lower()
+    if name.startswith("instance."):
+        parts = name.split(".", 2)
+        if len(parts) == 3:
+            name = parts[2]
+    return (name == "memory.search" or name in {"collection.doc_search", "collection.list_documents"}
+            or name.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup", ".describe")))
+
+
+def _duplicate_call_id(calls: list[Any], already_used: set[str]) -> Optional[str]:
+    seen = set(already_used)
+    for call in calls:
+        call_id = str(getattr(call, "id", "") or "")
+        if call_id and call_id in seen:
+            return call_id
+        if call_id:
+            seen.add(call_id)
+    return None
+
+
+def _redact_file_tool_result_blocks(content: str) -> str:
+    """Remove file-result bodies from all historical text-protocol batches."""
+    marker = "```tool_result"
+    cursor = 0
+    parts: list[str] = []
+    decoder = json.JSONDecoder()
+    while True:
+        start = content.find(marker, cursor)
+        if start < 0:
+            parts.append(content[cursor:])
+            break
+        parts.append(content[cursor:start])
+        body_start = start + len(marker)
+        while body_start < len(content) and content[body_start].isspace():
+            body_start += 1
+        try:
+            value, end = decoder.raw_decode(content, body_start)
+        except (ValueError, TypeError):
+            parts.append(content[start:])
+            break
+        block_end = content.find("```", end)
+        if block_end < 0:
+            parts.append(content[start:])
+            break
+        if isinstance(value, dict) and (
+            _is_file_tool_name(str(value.get("tool") or ""))
+        ):
+            value["result"] = "File content omitted at pause; resolve and authorize file access again before use."
+            parts.append(marker + "\n" + json.dumps(value, ensure_ascii=False, indent=2) + "\n```")
+        else:
+            parts.append(content[start:block_end + 3])
+        cursor = block_end + 3
+    return "".join(parts)
+
+
+def _tool_result_observation(result: Any, operation_name: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Build the stable observation receipt without copying result payloads."""
+    metadata = result.metadata if isinstance(result.metadata, dict) else {}
+    raw = metadata.get("result_observation")
+    if not isinstance(raw, dict):
+        # Only runtime-owned result descriptors can become verified refs. A
+        # provider's ordinary domain payload may happen to use these names.
+        runtime_view = metadata.get("workspace_view")
+        stored_result = metadata.get("stored_result")
+        recovery = metadata.get("direct_recovery")
+        is_result_reader = canonical_operation_name(operation_name or "") == "result.read"
+        if isinstance(runtime_view, dict):
+            data = runtime_view
+        elif isinstance(stored_result, dict):
+            data = stored_result
+        elif is_result_reader and isinstance(result.data, dict):
+            data = result.data
+        else:
+            data = {}
+        if isinstance(recovery, dict) and isinstance(stored_result, dict):
+            data = {**data, **recovery}
+        keys = {
+            "result_id", "revision", "offset", "limit", "fields", "read_complete", "next_offset",
+            "source_complete", "query_complete", "input_result_id", "input_revision", "page_may_have_more",
+            "path", "text_offset", "text_limit", "next_text_offset", "child_offset", "child_limit",
+            "next_child_offset", "recovery_reason", "delivery",
+            "row_count", "source_total",
+            "view",
+        }
+        raw = {key: data[key] for key in keys if key in data}
+    if not raw:
+        return None
+    try:
+        from app.agents.runtime.result_context import ResultObservation
+        return ResultObservation.from_mapping(raw).model_dump(mode="json", exclude_none=False)
+    except Exception:
+        logger.warning("Ignoring invalid result observation metadata", exc_info=True)
+        return None
+
+
+def _attach_mcp_content(result_text: str, content: Any) -> str:
+    """Keep nonduplicate MCP content blocks in the model-visible envelope."""
+    if not isinstance(content, (list, dict)) or not content:
+        return result_text
+    safe_content = RuntimeRedactor().redact(content)
+    try:
+        value = json.loads(result_text)
+    except (TypeError, ValueError):
+        value = {"result": result_text}
+    if not isinstance(value, dict):
+        value = {"result": value}
+    value["mcp_content"] = safe_content
+    return json.dumps(value, ensure_ascii=False, default=str)
 
 MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT = 2
 DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION = PLATFORM_REQUIRED_OPERATION_RETRY_INSTRUCTION
@@ -264,7 +385,8 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         from app.agents.runtime.result_workspace_tools import with_workspace_operations
-        available_operations = with_workspace_operations(exec_request.resolved_operations or [])
+        available_operations = (list(exec_request.resolved_operations or []) if ctx.extra.get("shadow_execution")
+                                else with_workspace_operations(exec_request.resolved_operations or []))
         deps = ctx.get_runtime_deps()
         deps.resolved_operations = list(available_operations or [])
         ctx.set_runtime_deps(deps)
@@ -325,10 +447,36 @@ class AgentToolRuntime(BaseRuntime):
             except (TypeError, ValueError):
                 logger.warning("Ignoring invalid lifecycle_agent_execution_id: %r", raw_run_id_override)
 
-        # Keep duplicate execution protection local even without an orchestrator.
+        # Guard scope survives a continuation attempt but remains task-local.
+        # The lifecycle execution id still identifies this concrete attempt.
         from app.runtime.memory.tool_ledger import ToolLedger
-        ctx.extra["runtime_execution_tool_ledger"] = ToolLedger()
-        ctx.extra["runtime_agent_execution_id"] = str(run_id_override or uuid4())
+        logical_task_id = str(ctx.extra.get("runtime_task_id") or "").strip()
+        if logical_task_id:
+            root_scope_id = str(ctx.extra.get("runtime_root_run_id") or ctx.extra.get("run_id") or "root-unknown")
+            guard_scope = f"{root_scope_id}:{logical_task_id}"
+        else:
+            guard_scope = str(run_id_override or uuid4())
+        ctx.extra["runtime_execution_guard_scope_id"] = guard_scope
+        resumed = ctx.extra.get("interaction_resume_checkpoint") or {}
+        has_execution_ledger = "execution_tool_ledger" in resumed
+        has_legacy_ledger = "tool_ledger" in resumed
+        previous_execution_ledger = (resumed.get("execution_tool_ledger") if has_execution_ledger
+                                     else resumed.get("tool_ledger"))
+        invalid_execution_ledger = False
+        try:
+            if has_execution_ledger or has_legacy_ledger:
+                if not isinstance(previous_execution_ledger, dict):
+                    raise ValueError("execution ledger checkpoint must be an object")
+                ctx.extra["runtime_execution_tool_ledger"] = ToolLedger.model_validate(previous_execution_ledger)
+            else:
+                ctx.extra["runtime_execution_tool_ledger"] = ToolLedger()
+        except Exception:
+            # Never fail open to an empty guard: a malformed checkpoint may be
+            # the only durable record that a write already happened.
+            invalid_execution_ledger = True
+            ctx.extra["runtime_execution_tool_ledger"] = ToolLedger()
+        ctx.extra["runtime_execution_ledger_invalid"] = invalid_execution_ledger
+        ctx.extra["runtime_agent_execution_id"] = guard_scope
 
         # Logging
         resolved_logging_level = await self.logging_resolver.resolve_logging_level(
@@ -374,6 +522,13 @@ class AgentToolRuntime(BaseRuntime):
             run_id_override=run_id_override,
         )
         await run_session.start()
+        if invalid_execution_ledger:
+            message = "Saved execution guard is invalid; this task cannot safely resume tool execution."
+            yield RuntimeEvent.error(message, recoverable=False,
+                error_code=RuntimeErrorCode.CHECKPOINT_INVALID, retryable=False,
+                user_message=message, operator_message=message, source="runtime")
+            await run_session.finish("failed", message)
+            return
         agent_event_ctx = {
             "agent_slug": agent.slug,
             "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
@@ -459,7 +614,6 @@ class AgentToolRuntime(BaseRuntime):
         loop_state = AgentLoopState(
             tool_calls_total=max(0, int(ctx.extra.get("runtime_task_tool_calls_used") or 0)),
         )
-        resumed = ctx.extra.get("interaction_resume_checkpoint") or {}
         if resumed.get("messages"):
             saved_messages = deepcopy([item for item in resumed["messages"] if item.get("role") != "system"])
             saved_messages = [item for item in saved_messages if not str(item.get("content", "")).startswith((
@@ -483,24 +637,36 @@ class AgentToolRuntime(BaseRuntime):
         def interaction_checkpoint() -> dict[str, Any]:
             ledger = ctx.extra.get("runtime_tool_ledger")
             receipts = ledger.model_dump(mode="json") if ledger is not None else {"entries": []}
+            execution_ledger = ctx.extra.get("runtime_execution_tool_ledger")
+            execution_receipts = (execution_ledger.model_dump(mode="json")
+                                  if execution_ledger is not None else {"entries": []})
             receipts["entries"] = [entry for entry in receipts["entries"] if entry.get("status") != "called"]
+            execution_receipts["entries"] = [entry for entry in execution_receipts["entries"]
+                                               if entry.get("status") != "called"]
             for entry in receipts["entries"]:
                 operation = str(entry.get("operation") or "").lower()
-                # Preserve only bounded receipts for side-effecting operations.
-                # Read results are re-fetched through the normal authorization
-                # path after resume.
-                read_operation = (entry.get("result_delivery") == "direct"
-                    or operation.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup"))
-                    or operation in {"collection.list_documents", "collection.doc_search"})
-                if read_operation or operation.startswith("file.data.") or operation == "memory.search":
+                if _is_file_tool_name(operation):
                     entry["result_data"] = None
                     entry["result_preview"] = None
                     entry["sources"] = []
-                else:
-                    entry["result_data"] = _checkpoint_receipt(entry.get("result_data"))
+            for entry in execution_receipts["entries"]:
+                operation = str(entry.get("operation") or "").lower()
+                if _is_file_tool_name(operation):
+                    entry["result_data"] = None
                     entry["result_preview"] = None
                     entry["sources"] = []
             safe_messages = []
+            file_call_ids: set[str] = set()
+            file_call_seen = any(_is_file_tool_name(str(item.get("tool") or ""))
+                                 for item in loop_state.tool_outputs if isinstance(item, dict))
+            for message in llm_messages:
+                if message.get("role") == "assistant":
+                    for call in message.get("tool_calls") or []:
+                        function = call.get("function") if isinstance(call, dict) else None
+                        name = str((function or {}).get("name") or "").lower() if isinstance(function, dict) else ""
+                        if _is_file_tool_name(name):
+                            file_call_ids.add(str(call.get("id") or ""))
+                            file_call_seen = True
             for item in llm_messages:
                 if item.get("role") == "system":
                     continue
@@ -508,34 +674,36 @@ class AgentToolRuntime(BaseRuntime):
                 # Tool output content may contain a file read whose access is
                 # revoked before resume. Preserve the call/result sequence so
                 # the agent knows not to repeat it, but never persist its body.
-                if message.get("role") == "tool":
-                    message["content"] = "Operation already executed before the pause; result content is omitted and must be re-read if still authorized."
-                elif message.get("role") == "assistant":
-                    message["content"] = ""
-                elif message.get("role") == "user" and str(message.get("content") or "").startswith("```tool_result"):
-                    message["content"] = "```tool_result\nPreviously executed operation result omitted; re-read only if still authorized.\n```"
-                for _, result_content in operation_results_for_context:
-                    if result_content and str(result_content) in str(message.get("content") or ""):
-                        message["content"] = "Previously executed operation result omitted; re-read only if still authorized."
-                        break
+                if message.get("role") == "tool" and str(message.get("tool_call_id") or "") in file_call_ids:
+                    message["content"] = "File content omitted at pause; resolve and authorize file access again before use."
+                elif message.get("role") == "user":
+                    message["content"] = _redact_file_tool_result_blocks(str(message.get("content") or ""))
+                elif message.get("role") == "assistant" and file_call_seen:
+                    # Assistant prose can quote or summarize file contents. Keep
+                    # native tool-call structures for pairing, redact only prose.
+                    message["content"] = None if message.get("tool_calls") else ""
                 safe_messages.append(message)
             safe_operations = []
             for item in loop_state.tool_outputs:
                 operation = str(item.get("tool") or "").lower()
-                is_read = (operation.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup"))
-                    or operation in {"collection.list_documents", "collection.doc_search"})
-                result_data = None if is_read else _checkpoint_receipt(item.get("data"))
+                is_file_read = operation == "file.read" or operation.startswith("file.data.")
+                result_data = None if is_file_read else deepcopy(item.get("data"))
+                if is_file_read:
+                    result_data = {"recoverability": "reauthorize_and_read_again",
+                                   "message": "File access must be resolved and authorized again before reuse."}
                 safe_operations.append({
                     "tool": item.get("tool"),
                     "success": bool(item.get("success")),
                     "data": result_data,
-                    "error": None if item.get("success") else "Operation failed before pause; inspect current state before retrying.",
+                    "error": item.get("error"),
                     "error_code": item.get("error_code"),
                     "retryable": item.get("retryable"),
+                    "outcome_unknown": item.get("outcome_unknown"),
                 })
             return {"messages": safe_messages, "tool_outputs": safe_operations,
                     "agent_version_id": str(exec_request.agent_version.id) if exec_request.agent_version is not None else None,
-                    "sources": [], "tool_ledger": receipts}
+                    "sources": [] if file_call_seen else deepcopy(loop_state.sources), "tool_ledger": receipts,
+                    "execution_tool_ledger": execution_receipts}
 
         loop_state.start_time = time.time()  # Start clock after all setup is complete
         max_steps_without_success = int(
@@ -674,13 +842,27 @@ class AgentToolRuntime(BaseRuntime):
                 # Non-streaming LLM call to let agent decide
                 llm_start = time.time()
                 raw_response_dict: Optional[Dict[str, Any]] = None
-                from app.agents.runtime.model_context import outbound_request_snapshot, project_model_messages
+                from app.agents.runtime.model_context import (
+                    bound_document_memory_request, outbound_request_snapshot, project_model_messages,
+                )
                 model_messages = project_model_messages(llm_messages)
                 tools_payload = build_tools_payload(available_operations) if native_tool_calling else None
                 outbound_snapshot = outbound_request_snapshot(
                     model=gen.model, messages=model_messages, tools=tools_payload,
                     tool_choice=("required" if loop_state.force_tool_choice else "auto") if tools_payload else None,
                     response_format=native_completion_format if not (native_tool_calling and tools_payload) else None,
+                )
+                from app.adapters.impl.llm_context import DEFAULT_CONTEXT_WINDOW
+                request_context_window = DEFAULT_CONTEXT_WINDOW
+                resolver = getattr(self.llm.raw_client, "_connection_resolver", None)
+                if resolver is not None:
+                    try:
+                        connection = await resolver.resolve(gen.model)
+                        request_context_window = int(connection.context_window_tokens or DEFAULT_CONTEXT_WINDOW)
+                    except Exception:
+                        logger.warning("Could not resolve context window for document-memory projection", exc_info=True)
+                outbound_snapshot = bound_document_memory_request(
+                    outbound_snapshot, context_window_tokens=request_context_window,
                 )
                 from app.adapters.impl.llm_context import estimate_request_tokens
                 yield RuntimeEvent.llm_request(
@@ -1032,6 +1214,28 @@ class AgentToolRuntime(BaseRuntime):
                 if parsed is None:
                     parsed = parse_llm_response(raw_response, strict=strict_protocol)
 
+                if parsed.has_tool_calls:
+                    prior_call_ids = {
+                        str(call.get("id"))
+                        for message in llm_messages if isinstance(message, dict)
+                        for call in (message.get("tool_calls") or [])
+                        if isinstance(call, dict) and call.get("id")
+                    }
+                    for ledger in (ctx.extra.get("runtime_execution_tool_ledger"),
+                                   ctx.extra.get("runtime_tool_ledger")):
+                        for entry in getattr(ledger, "entries", []) or []:
+                            if getattr(entry, "call_id", None):
+                                prior_call_ids.add(str(entry.call_id))
+                    collision = _duplicate_call_id(parsed.tool_calls, prior_call_ids)
+                    if collision is not None:
+                        message = f"Malformed tool call: duplicate id already used in this execution or batch: {collision}"
+                        yield RuntimeEvent.error(message, recoverable=False,
+                            error_code=RuntimeErrorCode.OPERATION_INVALID_ARGS, retryable=False,
+                            user_message="The model returned an invalid operation request.",
+                            operator_message=message, source="llm")
+                        await run_session.finish("failed", message)
+                        return
+
                 if not parsed.has_tool_calls:
                     try:
                         terminal_candidate = json.loads(parsed.text)
@@ -1224,7 +1428,7 @@ class AgentToolRuntime(BaseRuntime):
                 # across results without re-running the tool.
                 result_context_budget = batch_context_budget.result_tokens
                 result_context_model = batch_context_budget.model
-                for operation_call in parsed.tool_calls:
+                for operation_index, operation_call in enumerate(parsed.tool_calls):
                     # Log intent before executing each tool
                     await ctx.log_intent(
                         self._intent_message(
@@ -1260,10 +1464,79 @@ class AgentToolRuntime(BaseRuntime):
                         ),
                     ):
                         if ev.type == RuntimeEventType.CONFIRMATION_REQUIRED:
+                            # A confirmation can interrupt a native batch before
+                            # its normal allocation pass. Persist only successful
+                            # non-file Direct results that cannot fit the bounded
+                            # result slot, so the checkpoint has a safe reader.
+                            for batch_item in batch_result_contexts:
+                                direct_result = batch_item.get("result")
+                                if (not isinstance(direct_result, ToolResult) or not direct_result.success
+                                        or direct_result.delivery != "direct"
+                                        or batch_item.get("direct_recovery")
+                                        or _is_file_tool_name(str(batch_item["call"].tool_name))):
+                                    continue
+                                try:
+                                    from app.services.tool_result_store import ToolResultStore
+                                    rendered = self.tools.format_result_for_context(
+                                        deepcopy(direct_result), operation_slug=batch_item["call"].tool_name,
+                                        evidence_call_id=batch_item.get("call_id"),
+                                        context_budget_tokens=result_context_budget,
+                                        context_model=result_context_model,
+                                    )
+                                    try:
+                                        limited = json.loads(rendered)
+                                    except (TypeError, ValueError):
+                                        limited = None
+                                    if not (isinstance(limited, dict) and limited.get("status") == "unavailable"
+                                            and limited.get("reason") == "context_budget_exceeded"):
+                                        continue
+                                    if not ctx.extra.get("runtime_root_run_id"):
+                                        continue
+                                    recovered = await ToolResultStore().save(
+                                        run_id=str(ctx.extra["runtime_root_run_id"]),
+                                        call_id=str(batch_item.get("call_id") or batch_item["call"].id),
+                                        operation=batch_item["call"].tool_name, tenant_id=ctx.tenant_id,
+                                        user_id=ctx.user_id,
+                                        task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+                                        agent_execution_id=str(run_session.run_id or "") or None,
+                                        payload=RuntimeRedactor().redact(direct_result.data),
+                                        arguments=batch_item["call"].arguments, source_complete=None,
+                                        dataset_meta={"delivery": "direct", "recovery_reason": "confirmation_pause",
+                                                      "source_complete": None},
+                                    )
+                                    batch_item["stored_result"] = recovered
+                                    batch_item["direct_recovery"] = {
+                                        "result_id": str(recovered["result_id"]),
+                                        "revision": int(recovered.get("revision") or 1),
+                                        "reason": "confirmation_pause",
+                                    }
+                                    observation = {"result_id": str(recovered["result_id"]),
+                                        "revision": int(recovered.get("revision") or 1),
+                                        "delivery": "direct", "recovery_reason": "confirmation_pause",
+                                        "row_count": recovered.get("row_count"), "source_total": None}
+                                    for ledger in (ctx.extra.get("runtime_execution_tool_ledger"),
+                                                   getattr(ctx.extra.get("runtime_turn_state"), "tool_ledger", None)):
+                                        update = getattr(ledger, "update_direct_recovery", None)
+                                        if callable(update):
+                                            update(call_id=str(batch_item.get("call_id") or batch_item["call"].id),
+                                                   stored_result=recovered, observation=observation)
+                                    for prior_output in reversed(loop_state.tool_outputs):
+                                        if prior_output.get("call_id") == batch_item.get("call_id"):
+                                            prior_output["data"] = {"direct_recovery": batch_item["direct_recovery"]}
+                                            break
+                                except Exception:
+                                    logger.exception("direct_result_confirmation_recovery_failed call_id=%s",
+                                                     batch_item.get("call_id"))
                             checkpoint = interaction_checkpoint()
+                            checkpoint["pending_operations"] = [
+                                {"tool": pending.tool_name, "arguments": deepcopy(pending.arguments),
+                                 "call_id": pending.id}
+                                for pending in parsed.tool_calls[operation_index:]
+                            ]
                             checkpoint["messages"].append({"role": "user", "content": json.dumps({
                                 "completed_operations": checkpoint.get("tool_outputs") or [],
                                 "pending_operation": {"tool": operation_call.tool_name, "arguments": operation_call.arguments},
+                                "remaining_operations": checkpoint["pending_operations"],
                                 "instruction": "Earlier successful operations have already executed. This pending operation has not executed; user confirmation was requested.",
                             }, ensure_ascii=False, default=str)})
                             ev.data["checkpoint"] = checkpoint
@@ -1353,6 +1626,25 @@ class AgentToolRuntime(BaseRuntime):
                     def format_batch_item(item: Dict[str, Any], token_budget: int) -> str:
                         if item.get("fixed_text") is not None:
                             return str(item["fixed_text"])
+                        authorized_reread = item.get("authorized_reread")
+                        if isinstance(authorized_reread, dict):
+                            return json.dumps({
+                                "status": "unavailable", "reason": "file_access_must_be_revalidated",
+                                "operation": item["call"].tool_name,
+                                "arguments": authorized_reread["arguments"],
+                                "recoverability": "reauthorize_and_read_again",
+                            }, ensure_ascii=False)
+                        recovery = item.get("direct_recovery")
+                        if isinstance(recovery, dict):
+                            return json.dumps({
+                                "status": "ready", "result_id": recovery["result_id"],
+                                "revision": recovery.get("revision", 1),
+                                "recoverability": "direct_overflow_saved", "reason": recovery.get("reason"),
+                                "next_action": {"tool": "result.read", "arguments": {
+                                    "result_id": recovery["result_id"], "revision": recovery.get("revision", 1),
+                                    "offset": 0, "limit": 5,
+                                }, "message": "Read the bounded saved Direct result if more detail is needed."},
+                            }, ensure_ascii=False)
                         formatted = self.tools.format_result_for_context(
                             deepcopy(item["result"]), operation_slug=item["call"].tool_name,
                             evidence_call_id=item.get("evidence_call_id"),
@@ -1368,7 +1660,7 @@ class AgentToolRuntime(BaseRuntime):
                             if (isinstance(direct_view, dict) and direct_view.get("status") == "unavailable"
                                     and direct_view.get("reason") == "context_budget_exceeded"):
                                 return str(item.get("minimum_receipt") or formatted)
-                        return formatted
+                        return _attach_mcp_content(formatted, item["result"].metadata.get("mcp_content"))
 
                     raw_tool_calls = (((raw_response_dict or {}).get("choices") or [{}])[0]
                                       .get("message", {}).get("tool_calls") or [])
@@ -1412,7 +1704,86 @@ class AgentToolRuntime(BaseRuntime):
                         model_result_inline_complete, update_result_inline_coverage,
                     )
                     model_inline_complete: List[bool] = []
-                    for item, content in zip(batch_result_contexts, allocation.texts):
+                    direct_recoveries: Dict[str, Dict[str, Any]] = {}
+                    for item_index, (item, content) in enumerate(zip(batch_result_contexts, allocation.texts)):
+                        if (item["result"].success and item["result"].delivery == "direct"
+                                and not item.get("stored_result") and not item.get("direct_recovery")):
+                            initial_complete = model_result_inline_complete(
+                                content, stored_result=None, result_success=True,
+                                direct_truncated=bool(isinstance(item["result"].data, dict)
+                                                      and item["result"].data.get("truncated")),
+                            )
+                            if not initial_complete:
+                                if _is_file_tool_name(item["call"].tool_name):
+                                    item["authorized_reread"] = {
+                                        "arguments": deepcopy(item["call"].arguments),
+                                    }
+                                    recovery_text = format_batch_item(item, batch_context_budget.result_tokens)
+                                    allocation.texts[item_index] = recovery_text
+                                    operation_results_for_context[item_index] = (item["call"], recovery_text)
+                                    direct_recoveries[str(item.get("call_id") or item["call"].id)] = {
+                                        "reason": "file_access_must_be_revalidated",
+                                        "recoverability": "reauthorize_and_read_again",
+                                    }
+                                    model_inline_complete.append(False)
+                                    call_id = str(item.get("call_id") or item["call"].id)
+                                    ledgers = [ctx.extra.get("runtime_execution_tool_ledger")]
+                                    turn_state = ctx.extra.get("runtime_turn_state")
+                                    if turn_state is not None:
+                                        ledgers.append(getattr(turn_state, "tool_ledger", None))
+                                    seen_ledgers: set[int] = set()
+                                    for ledger in ledgers:
+                                        if ledger is not None and id(ledger) not in seen_ledgers:
+                                            seen_ledgers.add(id(ledger))
+                                            update_result_inline_coverage(ledger, call_id=call_id,
+                                                                          inline_complete=False)
+                                    continue
+                                try:
+                                    from app.services.tool_result_store import ToolResultStore
+                                    root_run = str(ctx.extra.get("runtime_root_run_id") or "").strip()
+                                    if not root_run:
+                                        raise RuntimeError("root runtime run id is unavailable")
+                                    operation_call = item["call"]
+                                    recovered = await ToolResultStore().save(
+                                        run_id=root_run, call_id=str(item.get("call_id") or operation_call.id),
+                                        operation=operation_call.tool_name, tenant_id=ctx.tenant_id,
+                                        user_id=ctx.user_id,
+                                        task_id=str(ctx.extra.get("runtime_task_id") or "") or None,
+                                        agent_execution_id=str(run_session.run_id or "") or None,
+                                        payload=RuntimeRedactor().redact(item["result"].data),
+                                        arguments=operation_call.arguments, source_complete=None,
+                                        dataset_meta={"delivery": "direct", "recovery_reason": "batch_context_budget",
+                                                      "source_complete": None},
+                                    )
+                                    item["stored_result"] = recovered
+                                    item["direct_recovery"] = {
+                                        "result_id": str(recovered["result_id"]),
+                                        "revision": int(recovered.get("revision") or 1),
+                                        "reason": "batch_context_budget",
+                                    }
+                                    item["result"].metadata["direct_recovery"] = dict(item["direct_recovery"])
+                                    direct_recoveries[str(item.get("call_id") or operation_call.id)] = dict(item["direct_recovery"])
+                                    recovery_text = format_batch_item(item, batch_context_budget.result_tokens)
+                                    allocation.texts[item_index] = recovery_text
+                                    operation_results_for_context[item_index] = (operation_call, recovery_text)
+                                    observation = {"result_id": str(recovered["result_id"]),
+                                                   "revision": int(recovered.get("revision") or 1),
+                                                   "source_complete": None, "page_may_have_more": None,
+                                                   "recovery_reason": "batch_context_budget",
+                                                   "delivery": "direct", "row_count": recovered.get("row_count"),
+                                                   "source_total": None}
+                                    ledgers = [ctx.extra.get("runtime_execution_tool_ledger")]
+                                    turn_state = ctx.extra.get("runtime_turn_state")
+                                    if turn_state is not None:
+                                        ledgers.append(getattr(turn_state, "tool_ledger", None))
+                                    for ledger in {id(value): value for value in ledgers if value is not None}.values():
+                                        update = getattr(ledger, "update_direct_recovery", None)
+                                        if callable(update):
+                                            update(call_id=str(item.get("call_id") or operation_call.id),
+                                                   stored_result=recovered, observation=observation)
+                                except Exception:
+                                    logger.exception("direct_result_overflow_recovery_failed call_id=%s",
+                                                     item.get("call_id"))
                         complete = model_result_inline_complete(
                             content, stored_result=item.get("stored_result"),
                             result_success=bool(item["result"].success),
@@ -1439,6 +1810,7 @@ class AgentToolRuntime(BaseRuntime):
                         call_ids=[str(item.get("call_id") or "") for item in batch_result_contexts],
                         inline_complete=model_inline_complete,
                         omitted_call_ids=allocation.omitted_call_ids,
+                        direct_recoveries=direct_recoveries,
                     )
                     await run_session.record_event("tool_result_batch_projected", allocation_event.data)
                     yield allocation_event
@@ -1828,7 +2200,7 @@ class AgentToolRuntime(BaseRuntime):
                 if resolved and (resolved.source == "mcp" or source_tool in {"collection_search", "collection.search"}):
                     from app.services.result_workspace import ResultWorkspace
                     stored_result, redacted_result_data = await ResultWorkspace().save_source(
-                        payload=redacted_result_data,
+                        payload=result.data,
                         source_tool=source_tool,
                         arguments=operation_call.arguments, **scope)
                 else:
@@ -1837,11 +2209,21 @@ class AgentToolRuntime(BaseRuntime):
                 stored_result["sql_available"] = any(op.operation_slug == "result.sql" for op in available_operations)
                 result.metadata["stored_result"] = stored_result
             except Exception:
-                # Do not retry an upstream operation: it may have had side effects.
+                # A storage failure happens after the source ran. Only calls
+                # whose execution may have changed external state need an
+                # outcome-unknown guard; safe reads remain retryable.
+                outcome_unknown = bool(resolved_operation and (
+                    resolved_operation.side_effects or not resolved_operation.idempotent
+                    or not _is_read_operation_name(operation_call.tool_name)
+                ))
                 result.success = False
                 result.data = None
-                result.error = "Tool result could not be stored; the operation will not be repeated automatically."
-                result.metadata.update({"error_code": "tool_result_store_failed", "retryable": False})
+                result.error = ("Tool result could not be stored; execution outcome must be verified before retry."
+                                if outcome_unknown else
+                                "Tool result could not be stored; retrying this read is safe.")
+                result.metadata.update({"error_code": "tool_result_store_failed",
+                                       "outcome_unknown": outcome_unknown,
+                                       "retryable": not outcome_unknown})
                 sources = []
 
         consumed_tool_call = not bool(result.metadata.get("reused"))
@@ -1864,6 +2246,7 @@ class AgentToolRuntime(BaseRuntime):
             context_budget_tokens=result_context_budget_tokens,
             context_model=result_context_model,
         )
+        result_text = _attach_mcp_content(result_text, result.metadata.get("mcp_content"))
         event_result_id = (
             stored_result.get("result_id") if isinstance(stored_result, dict)
             else result.data.get("source_result_id") if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
@@ -1899,6 +2282,8 @@ class AgentToolRuntime(BaseRuntime):
             "row_count": stored_result.get("row_count"),
             "inline_complete": event_inline_complete,
             "source_total": stored_result.get("source_total"),
+            "snapshot_only": stored_result.get("snapshot_only"),
+            "imported_from": stored_result.get("imported_from"),
             "source_complete": stored_result.get("source_complete"),
             "revision": stored_result.get("revision", 1),
             "has_more": (stored_result.get("dataset_meta") or {}).get("has_next"),
@@ -1911,6 +2296,8 @@ class AgentToolRuntime(BaseRuntime):
             if operation_call.tool_name == "result.analyze" and isinstance(result.data, dict)
             else result.data
         ))
+        if isinstance(result.metadata.get("mcp_content"), (list, dict)) and isinstance(safe_result_projection, dict):
+            safe_result_projection["mcp_content"] = RuntimeRedactor().redact(result.metadata["mcp_content"])
         if (result.success and operation_call.tool_name == "result.analyze"
                 and isinstance(result.data, dict) and isinstance(safe_result_projection, dict)):
             safe_result_projection.update({
@@ -1947,6 +2334,7 @@ class AgentToolRuntime(BaseRuntime):
                 sse_data = raw_str[:MAX_OPERATION_RESULT_PREVIEW_CHARS]
                 sse_truncated = True
         execution_ledger = ctx.extra.get("runtime_execution_tool_ledger")
+        result_observation = _tool_result_observation(result, operation_call.tool_name)
         if execution_ledger is not None:
             execution_ledger.register_result(
                 call_id=operation_call.id, success=result.success,
@@ -1955,6 +2343,8 @@ class AgentToolRuntime(BaseRuntime):
                 result_inline_complete=event_inline_complete,
                 result_source_complete=event_source_complete,
                 result_delivery=result.delivery,
+                outcome_unknown=bool(result.metadata.get("outcome_unknown")),
+                result_observation=result_observation,
             )
         operation_result_payload = RuntimeEvent.tool_result(
             tool=operation_call.tool_name,
@@ -1988,6 +2378,8 @@ class AgentToolRuntime(BaseRuntime):
             envelope=envelope.to_metadata(),
             truncated=sse_truncated if sse_truncated else None,
         )
+        operation_result_payload.data["result_observation"] = result_observation
+        operation_result_payload.data["outcome_unknown"] = bool(result.metadata.get("outcome_unknown"))
         yield operation_result_payload
         await run_session.record_event("tool_result", {
             "tool": operation_call.tool_name,
@@ -2012,6 +2404,8 @@ class AgentToolRuntime(BaseRuntime):
             "result_id": event_result_id,
             "result_inline_complete": event_inline_complete,
             "result_source_complete": event_source_complete,
+            "result_observation": result_observation,
+            "outcome_unknown": bool(result.metadata.get("outcome_unknown")),
             "result_row_count": result_row_count,
             "result_source_total": result_source_total,
             "truncated": sse_truncated if sse_truncated else None,
@@ -2035,10 +2429,12 @@ class AgentToolRuntime(BaseRuntime):
             yield RuntimeEvent.status("memory_context_used", **snapshot)
             await run_session.record_event("memory_context_used", snapshot)
         all_operation_outputs.append({
+            "call_id": operation_call.id,
             "tool": operation_call.tool_name, "success": result.success,
             "data": raw_output, "error": result.error,
             "error_code": raw_error_code,
             "retryable": result.metadata.get("retryable"),
+            "outcome_unknown": bool(result.metadata.get("outcome_unknown")),
             "reused": bool(result.metadata.get("reused")),
         })
         all_sources.extend(sources)

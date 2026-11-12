@@ -59,7 +59,29 @@ export function ToolDataViewer({ result }: { result: TraceToolResult }) {
   ) : null;
 
   let content;
-  if (presentation.kind === 'empty') {
+  if (result.directRecovery) {
+    content = (
+      <InspectorSection title="Результат сохранён отдельно">
+        <p className={styles.coverage}>
+          {result.directRecovery.recoverability === 'reauthorize_and_read_again'
+            ? 'Для чтения нужен новый вызов с повторной проверкой доступа.'
+            : 'Прочитайте сохранённый результат через действие result.read.'}
+        </p>
+        {result.directRecovery.resultId ? (
+          <InspectorFieldGroup>
+            <InspectorFieldRow label="Идентификатор результата">
+              <InspectorScalar value={result.directRecovery.resultId} />
+            </InspectorFieldRow>
+            {result.directRecovery.revision !== undefined ? (
+              <InspectorFieldRow label="Версия">
+                <InspectorScalar value={result.directRecovery.revision} />
+              </InspectorFieldRow>
+            ) : null}
+          </InspectorFieldGroup>
+        ) : null}
+      </InspectorSection>
+    );
+  } else if (presentation.kind === 'empty') {
     content = (
       <InspectorEmptyState
         message={
@@ -192,6 +214,14 @@ export function ToolDataViewer({ result }: { result: TraceToolResult }) {
   return (
     <div className={styles.root}>
       {content}
+      {result.inlineDataContext !== undefined ? (
+        <InspectorSection title="Покрытие и предупреждения модели">
+          <pre className={styles.fallback}>{toolDataValuePreview(result.inlineDataContext)}</pre>
+        </InspectorSection>
+      ) : null}
+      {result.inlineComplete === false && result.inlineDataAvailable ? (
+        <p className={styles.coverage}>Модель получила только представленный фрагмент результата.</p>
+      ) : null}
       {fullButton}
       <SmartViewerModal
         value={modalValue}

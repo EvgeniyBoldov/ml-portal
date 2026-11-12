@@ -437,6 +437,8 @@ class GraphOrchestrator:
             context=PlannerContext(goal=goal, trigger=trigger, execution_ledger=ledger,
                                    available_agents=available_agents, available_artifacts=current_artifacts,
                                    available_results=catalog, result_catalog_status=catalog_status,
+                                   prior_result_inventory=dict(getattr(getattr(runtime_state, "run_context", None),
+                                                                       "prior_result_inventory", {}) or {}),
                                    deleted_artifact_ids=list(deleted),
                                    memory_context=list(snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or []),
                                    task_brief=dict(getattr(getattr(runtime_state, "run_context", None), "task_brief", {})
@@ -460,44 +462,76 @@ class GraphOrchestrator:
             "depends_on", "replacement_task_ids", "output_keys",
         }
 
-        def compact(value: Any, *, depth: int = 0, key: str | None = None) -> Any:
+        def compact(value: Any, *, depth: int = 0, key: str | None = None,
+                    owner_task_id: str | None = None) -> Any:
             if isinstance(value, str):
-                return value if len(value) <= 1_024 else value[:1_024] + "…[truncated]"
+                return value if len(value) <= 1_024 else {
+                    "_omitted": True, "reason": "planner_context_budget",
+                    "omitted_characters": len(value), "recoverable_from_task_id": owner_task_id,
+                }
             if isinstance(value, list):
                 preserve_all = key in structural_lists
                 selected = value if preserve_all else value[:40]
-                items = [compact(item, depth=depth + 1) for item in selected]
+                items = [compact(item, depth=depth + 1, owner_task_id=owner_task_id) for item in selected]
                 if not preserve_all and len(value) > 40:
                     items.append({"_truncated_items": len(value) - 40})
                 return items
             if isinstance(value, dict):
                 if depth > 8:
-                    return {"_truncated": "nested value omitted"}
-                return {str(child_key): compact(item, depth=depth + 1, key=str(child_key))
-                        for child_key, item in list(value.items())[:80]}
+                    return {"_omitted": True, "reason": "depth_limit", "recoverable_from_task_id": owner_task_id}
+                pairs = list(value.items())
+                owner_task_id = str(value.get("task_id") or owner_task_id or "") or None
+                output = {str(child_key): compact(item, depth=depth + 1, key=str(child_key),
+                                                  owner_task_id=owner_task_id)
+                          for child_key, item in pairs[:80]}
+                if len(pairs) > 80:
+                    output["_omission_manifest"] = {
+                        "reason": "key_limit", "omitted_count": len(pairs) - 80,
+                        "omitted_key_sample": [str(child_key) for child_key, _ in pairs[80:90]],
+                        "recoverable_from_task_id": owner_task_id,
+                    }
+                return output
             return value
 
         def size(value: Dict[str, Any]) -> int:
             return len(json.dumps(value, ensure_ascii=False, default=str))
 
         bounded = compact(ledger)
+        for task in bounded.get("tasks", []):
+            if not isinstance(task, dict):
+                continue
+            result = task.get("result") if isinstance(task.get("result"), dict) else {}
+            rendered = json.dumps(result, ensure_ascii=False, default=str)
+            if '"_omitted": true' not in rendered:
+                continue
+            evidence = result.get("evidence") if isinstance(result.get("evidence"), dict) else {}
+            result_ref = evidence.get("task_result_ref") if isinstance(evidence.get("task_result_ref"), dict) else None
+            task["omission_manifest"] = {
+                "recoverable_task_id": task.get("task_id"),
+                "status": (result_ref or {}).get("status", "unavailable"),
+                **({"result_ref": result_ref} if result_ref else {}),
+            }
         if size(bounded) <= max_chars:
             return bounded
 
-        # Outputs and evidence payloads are available in the task journal. Keep
-        # compact status and failure information in the planner's context.
+        # Large values remain available from the task-specific result catalog;
+        # state exactly what was omitted so the planner cannot mistake a
+        # projection for the canonical result.
         for task in bounded.get("tasks", []):
             result = task.get("result") if isinstance(task, dict) else None
             if isinstance(result, dict):
                 for key in ("outputs", "structured_response", "attachments", "sources", "evidence", "receipts"):
                     if result.get(key):
-                        result[key] = {"_truncated": "details retained in task journal"}
+                        result[key] = {"_omitted": True, "reason": "planner_context_budget",
+                                       "recoverable_from_task": task.get("task_id")}
         if size(bounded) <= max_chars:
             return bounded
 
         # Preserve one compact record per task so resolutions remain complete.
         # Keep only result fields useful for recovery and final reporting.
         minimal_tasks = []
+        iteration_ids = {str(task.get("iteration_id") or "") for task in bounded.get("tasks", [])
+                         if isinstance(task, dict) and task.get("iteration_id")}
         for task in bounded.get("tasks", []):
             if not isinstance(task, dict):
                 continue
@@ -506,10 +540,18 @@ class GraphOrchestrator:
                 key: result[key] for key in ("reason_code", "answer", "limitation", "completion")
                 if result.get(key) is not None
             }
+            verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
+            if isinstance(verified.get("task_result_ref"), dict):
+                result_summary["task_result_ref"] = verified["task_result_ref"]
             minimal_tasks.append({
-                key: task[key] for key in ("task_id", "iteration_id", "status", "attempts", "intent", "executor")
+                key: task[key] for key in ("task_id", "status", "attempts", *( ("iteration_id",) if len(iteration_ids) > 1 else () ))
                 if key in task
-            } | ({"result": result_summary} if result_summary else {}))
+            } | ({"result": result_summary} if result_summary else {}) | {
+                "omission_manifest": {"omitted": ["intent", "executor", "inputs", "result_details", "evidence"],
+                                      "recoverable_task_id": task.get("task_id"),
+                                      **({"result_ref": result_summary["task_result_ref"]}
+                                         if "task_result_ref" in result_summary else {})}
+            })
         bounded = {
             "plan_status": bounded.get("plan_status"),
             "iterations": bounded.get("iterations", []),
@@ -520,7 +562,7 @@ class GraphOrchestrator:
         }
         if size(bounded) > max_chars:
             raise ValueError(
-                f"planner execution ledger structural state exceeds max_chars={max_chars}"
+                f"planner execution ledger structural state exceeds max_chars={max_chars} ({size(bounded)} chars)"
             )
         return bounded
 
@@ -534,7 +576,8 @@ class GraphOrchestrator:
             verified = result.get("verified") if isinstance(result.get("verified"), dict) else {}
             # Agent transcripts and internal telemetry are not planner context.
             # The planner receives only runtime-owned evidence metadata.
-            evidence = {key: verified.get(key) for key in ("receipts", "evidence", "fresh_retrieval") if key in verified}
+            evidence = {key: verified.get(key) for key in
+                        ("receipts", "evidence", "fresh_retrieval", "task_result_ref") if key in verified}
             tasks.append({"task_id": task_id, "iteration_id": task.get("iteration_id"), "intent": task.get("intent"),
                           "executor": task.get("executor"), "instructions": task.get("instructions"), "inputs": task.get("inputs", {}),
                           "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "expected_outputs": task.get("expected_outputs", []), "freshness_policy": task.get("freshness_policy"),
@@ -593,7 +636,8 @@ class GraphOrchestrator:
 
     @staticmethod
     def _compile(proposal: IterationProposal, available_agents: list[dict[str, Any]], ledger: Dict[str, Any],
-                 scope_context: dict[str, Any] | None = None) -> IterationProposal:
+                 scope_context: dict[str, Any] | None = None,
+                 canonical_snapshot: Dict[str, Any] | None = None) -> IterationProposal:
         agent_catalog = {str(item.get("slug") or ""): item for item in available_agents if isinstance(item, dict)}
         available = set(agent_catalog)
         unknown = sorted({task.executor for task in proposal.tasks if task.executor not in available})
@@ -645,6 +689,11 @@ class GraphOrchestrator:
             }))
         proposal = proposal.model_copy(update={"tasks": compiled_tasks})
         prior_tasks = {str(item.get("task_id")): item for item in ledger.get("tasks", [])}
+        if canonical_snapshot is not None:
+            prior_tasks = {
+                str(task_id): {**task, "result": task.get("result") or {}}
+                for task_id, task in dict(canonical_snapshot.get("tasks") or {}).items()
+            }
         need_items = {(str(item.get("task_id")), str(item.get("ref"))): item for item in ledger.get("needs", [])}
         proposed = {task.task_id: task for task in proposal.tasks}
         # Resolutions describe dispositions for tasks from the previous
@@ -677,7 +726,10 @@ class GraphOrchestrator:
             prior = prior_tasks.get(resolution.task_id)
             if prior is None or prior.get("status") == "completed":
                 raise PlanValidationError(f"resolution must target a prior incomplete task: {resolution.task_id}")
-            outputs = set((prior.get("result") or {}).get("outputs") or {})
+            prior_result = prior.get("result") or {}
+            canonical_outputs = prior_result.get("outputs") if isinstance(prior_result.get("outputs"), dict) else {}
+            structured = prior_result.get("structured_response")
+            outputs = set(canonical_outputs) | (set(structured) if isinstance(structured, dict) else set())
             if any(key not in outputs for key in resolution.output_keys):
                 raise PlanValidationError(f"resolution accepts an absent output on {resolution.task_id}")
         resolution_map = {item.task_id: item for item in proposal.resolutions}
@@ -773,8 +825,9 @@ class GraphOrchestrator:
             interaction_answers=answers,
             **planner_kwargs,
         )
+        canonical_snapshot = await self.store.snapshot(plan_id)
         proposal = self._compile(proposal, available_agents, request.context.execution_ledger,
-                                 request.context.scope_context)
+                                 request.context.scope_context, canonical_snapshot)
         if request.context.planner_search_results:
             await self.store.update_memory_context(plan_id, [*document_memory(request.context.memory_context),
                                                            *request.context.planner_search_results])
@@ -1284,8 +1337,30 @@ class GraphOrchestrator:
                         for entry in getattr(getattr(planner_kwargs.get("runtime_state"), "tool_ledger", None), "entries", [])
                     )
                     retryable = bool(exc.retryable and not completed_task_calls)
+                    runtime_state = planner_kwargs.get("runtime_state")
+                    task_entries = [entry for entry in getattr(getattr(runtime_state, "tool_ledger", None), "entries", [])
+                                    if entry.phase_id == task_id and entry.status == "succeeded"]
+                    observed_partial = {
+                        "receipts": [
+                            {key: value for key, value in {
+                                "success": True,
+                                "operation": entry.operation,
+                                "call_id": entry.call_id,
+                                "result_id": entry.stored_result_id,
+                                "result_observation": entry.result_observation,
+                                "result_inline_complete": entry.result_inline_complete,
+                                "result_source_complete": entry.result_source_complete,
+                            }.items() if value is not None}
+                            for entry in task_entries
+                        ],
+                        "sources": [source for entry in task_entries for source in entry.sources],
+                        "artifacts": [],
+                    }
+                    if isinstance(exc.details, dict) and isinstance(exc.details.get("runtime_observed_partial"), dict):
+                        observed_partial = exc.details["runtime_observed_partial"]
                     failure = TaskAttemptFailure(code=exc.code, message=str(exc), retryable=retryable,
                                                  details={**(exc.details or {}),
+                                                          **({"runtime_observed_partial": observed_partial} if task_entries else {}),
                                                           **({"retry_suppressed": "task_has_completed_tool_calls"}
                                                              if completed_task_calls else {})})
                     retry_after_ms = exc.details.get("retry_after_ms") if isinstance(exc.details, dict) else None

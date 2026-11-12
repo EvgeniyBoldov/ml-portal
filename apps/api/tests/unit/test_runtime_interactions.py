@@ -202,12 +202,19 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
     session = AsyncMock()
     session.execute.side_effect = [Result(turn), Result(None), Result(turn)]
     captured = {}
-    class Service:
+    async def start(**kwargs):
+        captured.update(kwargs)
+    class Subscriber:
         def __init__(self, **kwargs): pass
-        async def send_message_stream(self, **kwargs):
-            captured.update(kwargs)
-            yield {"type": "final", "message_id": str(uuid4()), "content": "done"}
-    monkeypatch.setattr(messages, "ChatStreamService", Service)
+        async def subscribe(self): pass
+        async def unsubscribe(self): pass
+        async def listen(self):
+            yield {"type": "done"}
+    monkeypatch.setattr(messages.chat_runtime_runner, "start", start)
+    monkeypatch.setattr(messages, "RuntimeTailSubscriber", Subscriber)
+    monkeypatch.setattr(messages, "get_redis", lambda: object())
+    monkeypatch.setattr(messages, "get_llm_client", lambda: object())
+    monkeypatch.setattr(messages, "get_session_factory", lambda: object())
     monkeypatch.setattr(messages, "resolve_chat_context", AsyncMock(return_value=ChatContext(
         chat_id=str(turn.chat_id), tenant_id=str(tenant_id), user_id=str(user_id),
     )))
@@ -215,13 +222,13 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
         action="answer", pause_id=interaction.id, response=value), session=session,
         current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]), _rl=None)
     assert [chunk async for chunk in response.body_iterator]
-    checkpoint = captured["continuation_meta"]["resume_checkpoint"]
+    checkpoint = captured["command"].continuation_meta["resume_checkpoint"]
     assert checkpoint["interaction_response"] == value
     assert checkpoint["interaction"]["requester"]["stage"] == "turn_preflight"
     # The turn remains durably paused until the SSE consumer starts; constructing
     # a StreamingResponse must not consume the only resumable checkpoint.
-    assert captured["resumed_turn_id"] == str(turn.id) and turn.status == "paused"
-    assert captured["persist_user_message"] is True
+    assert str(captured["command"].resumed_turn_id) == str(turn.id) and turn.status == "running"
+    assert captured["command"].persist_user_message is True
 
 
 @pytest.mark.asyncio
@@ -341,5 +348,5 @@ async def test_agent_loop_preserves_prior_tool_result_across_question_and_answer
     assert any(event.type is RuntimeEventType.FINAL for event in second)
     messages = runtime.llm.call.await_args.kwargs["messages"]
     assert "Альфа" in str(messages)
-    assert any("Previously executed operation result omitted" in str(item.get("content")) for item in messages)
+    assert any("observed result" in str(item.get("content")) for item in messages)
     assert "new unrelated input" not in str(messages)
