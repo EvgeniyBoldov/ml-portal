@@ -18,7 +18,7 @@ from app.services.tool_result_store import (
 
 _MODEL_META_FIELDS = {
     "source", "total", "has_next", "complete", "source_tool", "start_offset",
-    "coverage_incomplete", "continuation_error", "searched_types", "successful_types", "errors",
+    "coverage_incomplete", "missing_requested_fields", "continuation_error", "searched_types", "successful_types", "errors",
     "truncated", "columns", "input_revisions",
     "snapshot_only", "imported_from", "source_operation",
 }

@@ -143,6 +143,81 @@ def test_provider_detail_diagnostics_is_bounded_and_filtered():
     assert "secret" not in detail
 
 
+@pytest.mark.parametrize("surface", ["nested", "flat", "response"])
+def test_rejection_preserves_safe_reason_without_inventing_capability_failure(surface):
+    body = {"message": "Invalid json_schema: oneOf is forbidden", "code": "invalid_schema",
+            "param": "response_format.json_schema", "prompt": "private"}
+    error = RuntimeError("Bad request")
+    error.status_code = 400
+    if surface == "response":
+        import json
+        error.response = SimpleNamespace(text=json.dumps({"error": body}), headers={})
+    else:
+        error.body = {"error": body} if surface == "nested" else body
+    normalized = OpenAICompatibleLLM._normalize_error(error)
+    assert normalized.code is LLMErrorCode.INVALID_REQUEST
+    assert normalized.provider_message == body["message"]
+    assert normalized.provider_param == body["param"]
+    assert normalized.provider_code == "invalid_schema"
+    assert "private" not in str(normalized.diagnostics())
+    assert "oneOf" not in str(normalized)  # Public message stays safe.
+
+
+def test_provider_reason_redacts_credentials_and_request_echoes_before_bounding():
+    error = RuntimeError("Bad request")
+    error.status_code = 400
+    error.body = {"error": {"message": 'Invalid schema; Bearer abc123; key-value; private prompt',
+                            "param": "response_format"}}
+    normalized = OpenAICompatibleLLM._normalize_error(
+        error, secrets=("key-value", "private prompt"),
+    )
+    detail = str(normalized.diagnostics())
+    assert "Invalid schema" in detail
+    assert "abc123" not in detail
+    assert "key-value" not in detail
+    assert "private prompt" not in detail
+
+
+def test_http_status_takes_priority_over_words_in_provider_message():
+    error = RuntimeError("Invalid timeout parameter in json_schema")
+    error.status_code = 400
+    assert OpenAICompatibleLLM._normalize_error(error).code is LLMErrorCode.INVALID_REQUEST
+
+
+@pytest.mark.parametrize("status,message,expected", [
+    (503, "json_schema response_format is unsupported", LLMErrorCode.UPSTREAM),
+    (400, "response_format json_schema is not supported", LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED),
+    (400, "Invalid schema for tools: unsupported oneOf", LLMErrorCode.INVALID_REQUEST),
+    (400, "json_schema contains unsupported oneOf", LLMErrorCode.INVALID_REQUEST),
+    (401, "invalid timeout parameter", LLMErrorCode.AUTHENTICATION),
+])
+def test_provider_classification_follows_rejection_evidence(status, message, expected):
+    error = RuntimeError("Provider rejected the request")
+    error.status_code = status
+    error.body = {"message": message}
+    assert OpenAICompatibleLLM._normalize_error(error).code is expected
+
+
+def test_provider_reason_is_bounded_and_known_request_echoes_are_removed():
+    request = {"messages": [{"role": "user", "content": "private prompt"},
+                            {"role": "assistant", "tool_calls": [{"function": {"arguments": "private arguments"}}]}]}
+    secrets = OpenAICompatibleLLM._diagnostic_secrets(SimpleNamespace(api_key="private-key"), request)
+    error = RuntimeError("Bad request")
+    error.status_code = 400
+    error.response = SimpleNamespace(text="Rejected: private-key private prompt private arguments " + "x" * 3000)
+    normalized = OpenAICompatibleLLM._normalize_error(error, secrets=secrets)
+    assert normalized.provider_message.startswith("Rejected:")
+    assert "private" not in normalized.provider_message
+    assert len(normalized.provider_message) <= 2000
+
+
+def test_plain_text_provider_bound_is_preserved():
+    error = RuntimeError("Bad request")
+    error.status_code = 400
+    error.response = SimpleNamespace(text="max_tokens must be <= 128")
+    assert OpenAICompatibleLLM._normalize_error(error).provider_message == "max_tokens must be <= 128"
+
+
 @pytest.mark.asyncio
 async def test_connection_resolver_strips_model_selector(monkeypatch: pytest.MonkeyPatch):
 

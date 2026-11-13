@@ -63,3 +63,16 @@ def test_published_operation_snapshot_groups_collection_bindings() -> None:
     assert published[0]["canonical_name"] == "collection.template.search"
     assert published[0]["collection_slug"] is None
     assert published[0]["collection_slugs"] == ["atlant", "generic"]
+
+
+def test_jira_subtasks_are_requested_as_fields_not_include_sections():
+    from app.agents.runtime.tools import OperationExecutionFacade
+    from app.agents.runtime.prompt_contract import build_prompt_operation_description
+    operation = _operation().model_copy(update={"operation": "jira_get_issue"})
+    error = OperationExecutionFacade._validate_args(operation, {"include": "subtasks"})
+    assert error is not None
+    assert error.field_path == "$.include"
+    assert "parent = ISSUE_KEY" in error.message
+    description = build_prompt_operation_description(operation)
+    assert "not an include value" in description
+    assert "missing or null subtasks" in description

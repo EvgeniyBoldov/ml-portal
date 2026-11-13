@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, AsyncIterator, Mapping, Optional
 import httpx
+from portal_mcp_contract import safe_diagnostic
 from app.core.logging import get_logger
 from openai import AsyncOpenAI
 from app.core.config import get_settings
@@ -122,6 +123,7 @@ class OpenAICompatibleLLM:
         request_started = time.monotonic()
         request_model = model
         connector = "unknown"
+        connection = None
         try:
             normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
@@ -209,7 +211,7 @@ class OpenAICompatibleLLM:
             )
             raise
         except Exception as e:
-            normalized = self._normalize_error(e)
+            normalized = self._normalize_error(e, secrets=self._diagnostic_secrets(connection, request_params))
             duration_ms = int((time.monotonic() - request_started) * 1000)
             self._record_call(connector=connector, call_kind="chat", outcome="error", duration_ms=duration_ms,
                               error_code=normalized.code.value)
@@ -227,7 +229,7 @@ class OpenAICompatibleLLM:
                     normalized.status_code,
                     normalized.provider_code,
                     self._request_shape_for_diagnostics(request_params),
-                    self._provider_detail_for_diagnostics(e),
+                    normalized.diagnostics(),
                 )
             raise normalized from e
     
@@ -244,6 +246,7 @@ class OpenAICompatibleLLM:
         request_model = model
         connector = "unknown"
         usage: dict[str, Any] = {}
+        connection = None
         try:
             normalized_model = model.strip() if isinstance(model, str) else model
             # Prepare request parameters
@@ -309,7 +312,7 @@ class OpenAICompatibleLLM:
             )
             raise
         except Exception as e:
-            normalized = self._normalize_error(e)
+            normalized = self._normalize_error(e, secrets=self._diagnostic_secrets(connection, request_params))
             duration_ms = int((time.monotonic() - request_started) * 1000)
             self._record_call(connector=connector, call_kind="stream", outcome="error", duration_ms=duration_ms,
                               error_code=normalized.code.value)
@@ -317,6 +320,8 @@ class OpenAICompatibleLLM:
                 "LLM streaming request failed connector=%s model=%s error_code=%s status_code=%s elapsed_ms=%s",
                 connector, request_model, normalized.code.value, normalized.status_code, duration_ms,
             )
+            logger.warning("LLM streaming rejection diagnostics model=%s provider_detail=%s",
+                           request_model, normalized.diagnostics())
             raise normalized from e
 
     async def _create_completion(
@@ -423,15 +428,41 @@ class OpenAICompatibleLLM:
         return float(self.settings.LLM_TIMEOUT or 30.0)
 
     @staticmethod
-    def _normalize_error(exc: Exception) -> LLMProviderError:
+    def _diagnostic_secrets(connection: Any, request: Mapping[str, Any]) -> tuple[str, ...]:
+        """Remove known credentials and echoed message/tool content from reasons."""
+        values: set[str] = set()
+        api_key = getattr(connection, "api_key", None)
+        if api_key:
+            values.add(api_key)
+
+        def collect(value: Any) -> None:
+            if isinstance(value, str) and len(value) >= 4:
+                values.add(value)
+                values.add(json.dumps(value, ensure_ascii=False)[1:-1])
+            elif isinstance(value, Mapping):
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        for message in request.get("messages") or []:
+            if isinstance(message, Mapping):
+                collect(message.get("content"))
+                for call in message.get("tool_calls") or []:
+                    if isinstance(call, Mapping):
+                        collect((call.get("function") or {}).get("arguments"))
+        return tuple(sorted(values, key=len, reverse=True))
+
+    @staticmethod
+    def _normalize_error(exc: Exception, *, secrets: tuple[str, ...] = ()) -> LLMProviderError:
         if isinstance(exc, LLMProviderError):
             return exc
         status_code = getattr(exc, "status_code", None)
         response = getattr(exc, "response", None)
         if not isinstance(status_code, int):
             status_code = getattr(response, "status_code", None)
-        body = getattr(exc, "body", None)
-        error_body = body.get("error") if isinstance(body, dict) and isinstance(body.get("error"), dict) else {}
+        error_body = OpenAICompatibleLLM._provider_error_fields(exc)
         provider_code = str(error_body.get("code") or error_body.get("type") or "").strip() or None
         provider_message = str(error_body.get("message") or "")
         headers = getattr(response, "headers", None) if response is not None else None
@@ -452,7 +483,7 @@ class OpenAICompatibleLLM:
             retry_match = re.search(r"try again in\s+([0-9]+(?:\.[0-9]+)?)s", text)
             if retry_match:
                 retry_after_ms = max(0, int(float(retry_match.group(1)) * 1000))
-        if isinstance(exc, asyncio.TimeoutError) or "timeout" in text:
+        if isinstance(exc, (asyncio.TimeoutError, httpx.TimeoutException)) or (status_code is None and "timeout" in text):
             code, safe, retryable = LLMErrorCode.TIMEOUT, "LLM provider timed out", True
         elif status_code == 401:
             code, safe, retryable = LLMErrorCode.AUTHENTICATION, "LLM authentication failed", False
@@ -460,6 +491,10 @@ class OpenAICompatibleLLM:
             code, safe, retryable = LLMErrorCode.AUTHORIZATION, "LLM access was denied", False
         elif status_code == 404:
             code, safe, retryable = LLMErrorCode.MODEL_NOT_FOUND, "LLM model was not found", False
+        elif status_code == 408:
+            code, safe, retryable = LLMErrorCode.TIMEOUT, "LLM provider timed out", True
+        elif status_code is not None and status_code >= 500:
+            code, safe, retryable = LLMErrorCode.UPSTREAM, "LLM provider is unavailable", True
         elif status_code == 429 or any(
             marker in text
             for marker in ("rate_limit_exceeded", "rate limit reached", "tokens per minute")
@@ -467,23 +502,69 @@ class OpenAICompatibleLLM:
             code, safe, retryable = LLMErrorCode.RATE_LIMITED, "LLM provider rate limit reached", True
         elif status_code == 413 or any(marker in text for marker in ("context_length_exceeded", "maximum context length", "request too large")):
             code, safe, retryable = LLMErrorCode.REQUEST_TOO_LARGE, "LLM request exceeds provider limits", False
-        elif "tool" in text and ("not support" in text or "unsupported" in text or "tool_use_failed" in text):
+        elif any(marker in text for marker in (
+            "tool calling is not supported", "tool_calls are not supported",
+            "does not support tool calling", "unsupported tool calling",
+            "does not support tools", "tools are not supported",
+            "auto tool choice requires --enable-auto-tool-choice",
+            "enable-auto-tool-choice and --tool-call-parser",
+        )) or ("tool_use_failed" in text and ("tool choice is none" in text or "tool calling" in text)):
             code, safe, retryable = LLMErrorCode.TOOL_CALLING_UNSUPPORTED, "LLM does not support native tool calling", False
-        elif "json_validate_failed" in text or "response_format" in text or "json_schema" in text:
-            code, safe, retryable = LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED, "LLM does not support structured output", False
+        elif "json_validate_failed" in text or (
+            OpenAICompatibleLLM._structured_mode_rejected(text)
+            and not any(marker in text for marker in ("invalid schema", "invalid json_schema", "invalid json schema"))
+        ):
+            code, safe, retryable = LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED, "LLM structured output mode was rejected", False
         elif status_code is not None and 400 <= status_code < 500:
             code, safe, retryable = LLMErrorCode.INVALID_REQUEST, "LLM rejected the request", False
-        elif status_code is not None and status_code >= 500:
-            code, safe, retryable = LLMErrorCode.UPSTREAM, "LLM provider is unavailable", True
         elif "connection" in text or "connect" in text or "reset" in text:
             code, safe, retryable = LLMErrorCode.CONNECTION, "LLM provider connection failed", True
         else:
             code, safe, retryable = LLMErrorCode.UNKNOWN, "LLM request failed", True
         if not retryable:
             retry_after_ms = None
+
+        def diagnostic_field(value: Any, limit: int) -> Optional[str]:
+            if not isinstance(value, (str, int)) or isinstance(value, bool):
+                return None
+            return str(safe_diagnostic(str(value), secrets=secrets))[:limit] or None
+
         return LLMProviderError(code=code, safe_message=safe, retryable=retryable,
                                 status_code=status_code, provider_type=type(exc).__name__,
-                                provider_code=provider_code, retry_after_ms=retry_after_ms)
+                                provider_code=diagnostic_field(provider_code, 200), retry_after_ms=retry_after_ms,
+                                provider_message=diagnostic_field(error_body.get("message"), 2000),
+                                provider_param=diagnostic_field(error_body.get("param"), 200))
+
+    @staticmethod
+    def _structured_mode_rejected(text: str) -> bool:
+        # A rejected schema keyword is different from an unsupported output mode.
+        cleaned = re.sub(r"[\s\"'`:=]+", " ", text.lower())
+        mode = r"(?:response_format|json_schema|structured output)"
+        return re.search(
+            rf"{mode}\s+(?:(?:mode|type|format)\s+)?(?:is\s+|are\s+)?(?:not supported|unsupported)\b"
+            rf"|(?:does not support|unsupported)\s+(?:(?:parameter|value|format|mode)\s+)?{mode}\b",
+            cleaned,
+        ) is not None
+
+    @staticmethod
+    def _provider_error_fields(exc: Exception) -> Mapping[str, Any]:
+        """Read known provider envelopes; never fall back to raw SDK/HTML text."""
+        body = getattr(exc, "body", None)
+        if body is None or body == {}:
+            body = getattr(getattr(exc, "response", None), "text", None)
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except (ValueError, TypeError):
+                return {"message": body.strip()} if body.strip() and not re.search(
+                    r"<(?:!doctype|html|head|body)\b", body, re.IGNORECASE,
+                ) else {}
+        if not isinstance(body, Mapping):
+            return {}
+        detail = body.get("error", body.get("detail", body))
+        if isinstance(detail, str):
+            return {"message": detail}
+        return detail if isinstance(detail, Mapping) else {}
 
     @staticmethod
     def _request_shape_for_diagnostics(request_params: Mapping[str, Any]) -> dict[str, Any]:
@@ -532,21 +613,7 @@ class OpenAICompatibleLLM:
     @staticmethod
     def _provider_detail_for_diagnostics(exc: Exception) -> str:
         """Extract bounded provider error text, excluding request payloads."""
-        body = getattr(exc, "body", None)
-        detail: Any = body.get("error") if isinstance(body, Mapping) else body
-        if isinstance(detail, Mapping):
-            detail = {key: value for key, value in detail.items()
-                      if key in {"message", "type", "code", "param"}}
-        if detail is None:
-            response = getattr(exc, "response", None)
-            detail = getattr(response, "text", None) if response is not None else None
-        if detail is None:
-            detail = str(exc)
-        try:
-            rendered = json.dumps(detail, ensure_ascii=False, default=str)
-        except (TypeError, ValueError):
-            rendered = str(detail)
-        return rendered[:2000]
+        return json.dumps(OpenAICompatibleLLM._normalize_error(exc).diagnostics(), ensure_ascii=False)[:2400]
 
     @staticmethod
     def _record_call(*, connector: str, call_kind: str, outcome: str, duration_ms: int,

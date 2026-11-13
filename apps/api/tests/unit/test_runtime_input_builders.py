@@ -24,7 +24,7 @@ def test_graph_planner_input_builder_uses_the_current_ledger_payload():
     payload = PlannerInputBuilder().build_graph_request(_request())
 
     assert set(payload) == {
-        "goal", "trigger", "execution_ledger", "datastore", "memory_context", "task_brief",
+        "goal", "trigger", "execution_ledger", "resolution_targets", "datastore", "memory_context", "task_brief",
         "available_agents", "scope_context", "prior_result_inventory",
     }
     assert payload["trigger"] == "task_outcome"
@@ -181,3 +181,15 @@ async def test_payload_allowance_uses_model_window_prompt_and_response_schema(mo
     large = await prompt_payload_budget(session=session, model="chat-model", system_prompt="role rules", schema=LargeSchema)
     assert small is not None and 0 < small < 10_000
     assert large < small
+
+
+def test_resolution_targets_preserve_all_completed_and_incomplete_task_ids():
+    request = _request(execution_ledger={"tasks": [
+        {"task_id": "done", "status": "completed"},
+        {"task_id": "failed", "status": "failed"},
+        {"task_id": "need", "status": "needs_dependency"},
+    ]})
+    payload = PlannerInputBuilder().build_graph_request(request)
+    assert payload["resolution_targets"] == {
+        "completed_task_ids": ["done"], "incomplete_task_ids": ["failed", "need"],
+    }

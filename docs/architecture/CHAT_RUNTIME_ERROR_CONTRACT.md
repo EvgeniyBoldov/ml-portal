@@ -77,6 +77,24 @@ Diagnostics may include operator-facing data:
 
 These fields are shown in admin run page and sandbox inspector, not mixed into chat answer text.
 
+LLM rejection events (`llm_response` and terminal `error`) also preserve optional
+`status_code`, `provider_type`, `provider_code`, `provider_message` and
+`provider_param`. These are operator diagnostics, propagated through agent
+execution failures to shadow traces. The adapter extracts known error fields
+from nested/flat JSON or plain text, removes credentials and known message/tool
+content echoed by the provider, and bounds messages to 2,000 characters and
+codes/parameter names to 200 characters. Raw response objects, HTML and SDK
+exception chains are not used as the explanation. Missing evidence stays
+absent; a generic rejection does not establish a schema or capability fault.
+
+HTTP status takes precedence over incidental words such as `timeout` in a
+validation message. Mentioning `json_schema` alone does not imply unsupported
+structured output: invalid schemas retain `llm_invalid_request`. Explicit mode
+rejections and `json_validate_failed` allow the existing bounded compatibility
+fallback. Shadow HTTP failures retain status 502 and return the safe runtime
+message plus `details.error_code` and `details.retryable`; provider diagnostics
+remain in the operator trace.
+
 ## Safety Rules
 
 - Runtime/internal exceptions never go into conversational prompt history.

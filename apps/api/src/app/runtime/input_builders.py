@@ -135,6 +135,12 @@ class PlannerInputBuilder:
             "goal": context.goal,
             "trigger": context.trigger,
             "execution_ledger": context.execution_ledger,
+            "resolution_targets": {
+                "completed_task_ids": [item["task_id"] for item in context.execution_ledger.get("tasks", [])
+                    if isinstance(item, dict) and item.get("task_id") and item.get("status") == "completed"],
+                "incomplete_task_ids": [item["task_id"] for item in context.execution_ledger.get("tasks", [])
+                    if isinstance(item, dict) and item.get("task_id") and item.get("status") != "completed"],
+            },
             "datastore": build_datastore(
                 files=[*context.available_artifacts, *task_files(
                     item.get("result") for item in context.execution_ledger.get("tasks", [])

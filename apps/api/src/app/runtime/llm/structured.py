@@ -64,6 +64,9 @@ class StructuredCallError(RuntimeError):
         return type(self.original_exception).__name__ if self.original_exception is not None else None
 
     def debug_payload(self) -> Optional[Dict[str, Any]]:
+        if isinstance(self.original_exception, LLMProviderError):
+            from app.runtime.error_payloads import build_debug_payload
+            return build_debug_payload(exc=self.original_exception)
         if self.original_exception is None and not self.traceback_text:
             return None
         payload: Dict[str, Any] = {}
@@ -125,6 +128,8 @@ class StructuredLLMCall:
         budget_registry: Optional[Any] = None,
         budget_entity_id: Optional[str] = None,
         use_default_model: bool = False,
+        validation_context: Optional[Dict[str, Any]] = None,
+        output_validator: Optional[Callable[[T], None]] = None,
     ) -> StructuredCallResult[T]:
         """Execute the role with structured JSON payload, validate output against `schema`.
 
@@ -479,9 +484,9 @@ class StructuredLLMCall:
                         error_type=type(exc).__name__,
                         error_code=(exc.code.value if isinstance(exc, LLMProviderError) else "llm_unknown_error"),
                         safe_message=(exc.safe_message if isinstance(exc, LLMProviderError) else "LLM request failed"),
+                        operator_message=(exc.operator_message if isinstance(exc, LLMProviderError) else "LLM request failed"),
                         retryable=will_retry,
-                        status_code=(exc.status_code if isinstance(exc, LLMProviderError) else None),
-                        provider_code=(exc.provider_code if isinstance(exc, LLMProviderError) else None),
+                        **(exc.diagnostics() if isinstance(exc, LLMProviderError) else {}),
                         retry_after_ms=(exc.retry_after_ms if isinstance(exc, LLMProviderError) else None),
                         status="waiting_retry" if will_retry else "failed",
                         terminal=not will_retry,
@@ -563,16 +568,24 @@ class StructuredLLMCall:
                 await wait_before_retry()
                 continue
 
+            validation_reason = "schema_validation"
             try:
                 normalizations: list[dict[str, str]] = []
-                parsed = self._parse_and_validate(raw_response, schema, normalizations=normalizations)
+                parsed = self._parse_and_validate(raw_response, schema, normalizations=normalizations,
+                                                  validation_context=validation_context)
+                if output_validator is not None:
+                    validation_reason = "proposal_validation"
+                    try:
+                        output_validator(parsed)
+                    except ValueError as exc:
+                        raise StructuredCallError(f"runtime proposal validation failed: {exc}") from exc
             except StructuredCallError as exc:
                 last_error = str(exc)
                 logger.info(
                     "StructuredLLMCall schema mismatch role=%s attempt=%s: %s",
                     role, attempt + 1, exc,
                 )
-                await emit_protocol_retry(reason="schema_validation")
+                await emit_protocol_retry(reason=validation_reason)
                 if attempt < max_retries:
                     # A provider's JSON mode only guarantees syntactically valid
                     # JSON; semantic/Pydantic validation can still fail. Feed
@@ -739,12 +752,16 @@ class StructuredLLMCall:
         return str(response or "")
 
     @classmethod
-    def _parse_and_validate(cls, raw: str, schema: Type[T], *, normalizations: list[dict[str, str]] | None = None) -> T:
+    def _parse_and_validate(cls, raw: str, schema: Type[T], *, normalizations: list[dict[str, str]] | None = None,
+                            validation_context: Optional[Dict[str, Any]] = None) -> T:
         data = cls._extract_json(raw)
         if data is None:
             raise StructuredCallError("no JSON block detected in LLM response")
         try:
-            return schema.model_validate(data, context={"response_normalizations": normalizations} if normalizations is not None else None)
+            context = dict(validation_context or {})
+            if normalizations is not None:
+                context["response_normalizations"] = normalizations
+            return schema.model_validate(data, context=context or None)
         except ValidationError as exc:
             validation_errors = exc.errors(include_input=False, include_url=False, include_context=False)
             errors = [{"path": "$" + "".join(f"[{key}]" if isinstance(key, int) else f".{key}" for key in error["loc"]),

@@ -336,3 +336,28 @@ async def test_jira_mcp_string_response_reaches_store_as_records(monkeypatch):
     assert save.await_args.kwargs["dataset_meta"]["total"] == 1
     assert save.await_args.kwargs["source_page"]["value"] == [issue]
     assert view["value"] == [issue]
+
+
+@pytest.mark.parametrize("arguments", [{"fields": "summary,subtasks"}, {"fields": "*all"}, {"include": "subtasks"}])
+def test_requested_jira_subtasks_missing_from_response_are_incomplete(arguments):
+    issue = {"key": "TEST-1", "summary": "Example"}
+    page = normalize_result(issue, "jira_get_issue", arguments)
+    assert page.value == [issue]
+    assert "subtasks" not in page.value[0]
+    assert page.meta.complete is False
+    assert page.meta.model_extra["missing_requested_fields"] == ["subtasks"]
+
+
+@pytest.mark.parametrize("value", [None, []])
+def test_jira_null_and_empty_subtasks_remain_distinct(value):
+    page = normalize_result({"key": "TEST-1", "fields": {"subtasks": value}},
+                            "jira_get_issue", {"fields": "subtasks"})
+    assert page.value[0]["fields"]["subtasks"] == value
+    assert not page.meta.model_extra.get("missing_requested_fields")
+
+
+
+def test_missing_jira_fields_are_preserved_in_model_metadata():
+    from app.services.result_workspace import _bounded_model_meta
+    meta = normalize_result({"key": "TEST-1"}, "jira_get_issue", {"fields": "subtasks"}).meta.model_dump()
+    assert _bounded_model_meta(meta)["missing_requested_fields"] == ["subtasks"]

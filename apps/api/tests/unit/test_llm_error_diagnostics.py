@@ -14,6 +14,7 @@ from app.runtime.events import RuntimeEventType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.services.runtime_limits_service import ModelCallLimits
+from app.runtime.error_payloads import build_debug_payload
 
 
 class _Result(BaseModel):
@@ -22,6 +23,50 @@ class _Result(BaseModel):
 
 class _ItemsResult(BaseModel):
     items: list[dict[str, str]]
+
+
+def test_normalized_provider_debug_does_not_expose_sdk_cause():
+    try:
+        try:
+            raise RuntimeError("raw SDK response: Bearer private-key and prompt")
+        except RuntimeError as cause:
+            raise LLMProviderError(
+                code=LLMErrorCode.INVALID_REQUEST, safe_message="LLM rejected the request", retryable=False,
+                provider_message="oneOf is forbidden", status_code=400,
+            ) from cause
+    except LLMProviderError as exc:
+        payload = build_debug_payload(exc=exc)
+        structured = StructuredCallError("failed", original_exception=exc, traceback_text="raw private-key")
+        for debug in (payload, structured.debug_payload()):
+            assert "private-key" not in str(debug)
+            assert debug["provider_message"] == "oneOf is forbidden"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("partial", [False, True])
+async def test_stream_preserves_provider_reason_with_and_without_partial_output(partial):
+    from app.runtime.llm.streaming import StreamTurn
+
+    async def stream(*args, **kwargs):
+        if partial:
+            yield "partial answer"
+        raise LLMProviderError(
+            code=LLMErrorCode.UPSTREAM, safe_message="LLM provider is unavailable", retryable=True,
+            status_code=503, provider_message="Upstream disconnected", provider_code="unavailable",
+        )
+
+    client = AsyncMock()
+    client.chat_stream = stream
+    call = RoleStreamingCall(session=AsyncMock(), llm_client=client)
+    call._limits_service.resolve_model = AsyncMock(return_value=ModelCallLimits(request_timeout_s=1, max_retries=0))
+    events = [event async for event in call.invoke_stream(
+        role=SystemLLMRoleType.SYNTHESIZER, messages=[{"role": "user", "content": "hello"}],
+        llm_call_id="stream:1", role_config={"model": "test"},
+    )]
+    event = events[-1]
+    assert isinstance(event, StreamTurn if partial else StreamError)
+    assert event.provider_diagnostics["provider_message"] == "Upstream disconnected"
+    assert event.provider_diagnostics["status_code"] == 503
 
 
 def test_structured_prompt_generates_contract_for_non_synthesizer_roles():
@@ -171,6 +216,8 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
         safe_message="LLM request exceeds provider limits",
         retryable=False,
         status_code=413,
+        provider_message="Requested tokens exceed the model limit",
+        provider_param="max_tokens",
     ))
     call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
     call.role_service.get_role_config = AsyncMock(
@@ -197,6 +244,8 @@ async def test_structured_call_preserves_normalized_error_code_in_trace():
     assert len(responses) == 2
     assert responses[-1].data["error_code"] == "llm_request_too_large"
     assert responses[-1].data["retryable"] is False
+    assert responses[-1].data["provider_message"] == "Requested tokens exceed the model limit"
+    assert responses[-1].data["provider_param"] == "max_tokens"
     assert client.chat.await_count == 2
 
 

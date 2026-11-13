@@ -30,12 +30,17 @@ async def test_technical_failure_uses_error_path() -> None:
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
 
     async def emit_error(*, ctx, **_kwargs):
-        ctx.extra["agent_execution_failure"] = {"code": "llm_rate_limited", "message": "limited", "retryable": True}
+        ctx.extra["agent_execution_failure"] = {
+            "code": "llm_rate_limited", "message": "limited", "retryable": True,
+            "details": {"status_code": 429, "provider_message": "Please try again in 3s"},
+        }
         yield RuntimeEvent.error("limited", retryable=True)
 
     executor.execute = emit_error  # type: ignore[method-assign]
-    with pytest.raises(TaskExecutionError, match="limited"):
+    with pytest.raises(TaskExecutionError, match="limited") as raised:
         await executor.execute_attempt(request=_request(), runtime_state=SimpleNamespace(), messages=[], ctx=SimpleNamespace(extra={}), user_id=AsyncMock(), tenant_id=AsyncMock())
+    assert raised.value.details["provider_message"] == "Please try again in 3s"
+    assert raised.value.details["status_code"] == 429
 
 
 @pytest.mark.asyncio

@@ -597,6 +597,7 @@ class AgentExecutor:
         final_error_code: Optional[str] = None
         final_retryable: Optional[bool] = None
         final_retry_after_ms: Optional[int] = None
+        final_diagnostics: Dict[str, Any] = {}
         success = True
 
         def task_ledger_entries() -> list[Any]:
@@ -708,6 +709,12 @@ class AgentExecutor:
                             sub_sources.append(src)
                 elif runtime_event.type == RuntimeEventType.ERROR:
                     success = False
+                    final_diagnostics = {
+                        key: runtime_event.data[key] for key in (
+                            "status_code", "provider_type", "provider_code", "provider_message", "provider_param",
+                            "user_message", "operator_message",
+                        ) if runtime_event.data.get(key) is not None
+                    }
                     final_error = str(runtime_event.data.get("error", "") or "sub_agent_error")
                     raw_code = runtime_event.data.get("error_code")
                     if raw_code is not None:
@@ -758,7 +765,7 @@ class AgentExecutor:
                 "message": final_error or "Task execution failed",
                 "retryable": bool(final_retryable),
                 "retry_after_ms": final_retry_after_ms,
-                "details": {"runtime_observed_partial": partial_verified},
+                "details": {"runtime_observed_partial": partial_verified, **final_diagnostics},
             }
         else:
             try:

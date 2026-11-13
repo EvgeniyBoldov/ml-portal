@@ -10,8 +10,9 @@ class LLMToolCallingUnsupportedError(RuntimeError):
     code = "llm_tool_calling_unsupported"
     retryable = False
 
-    def __init__(self, message: str = "Native tool calling is not supported by the selected LLM") -> None:
+    def __init__(self, message: str = "Native tool calling is not supported by the selected LLM", *, provider_error: LLMProviderError | None = None) -> None:
         super().__init__(message)
+        self.provider_error = provider_error
         self.user_message = (
             "Выбранная модель не поддерживает вызов инструментов. "
             "Переключаюсь на текстовый протокол."
@@ -24,8 +25,9 @@ class LLMRequestTooLargeError(RuntimeError):
     code = "llm_provider_request_too_large"
     retryable = False
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, *, provider_error: LLMProviderError | None = None) -> None:
         super().__init__(message)
+        self.provider_error = provider_error
         self.user_message = (
             "Запрос слишком большой для выбранной модели: превышен лимит контекста "
             "или токенов провайдера. Сократите задачу или разделите её на несколько шагов."
@@ -90,9 +92,9 @@ def is_request_too_large_error(exc: Exception) -> bool:
 def classify_provider_error(exc: Exception) -> Optional[RuntimeError]:
     if isinstance(exc, LLMProviderError):
         if exc.code is LLMErrorCode.TOOL_CALLING_UNSUPPORTED:
-            return LLMToolCallingUnsupportedError(exc.safe_message)
+            return LLMToolCallingUnsupportedError(exc.safe_message, provider_error=exc)
         if exc.code is LLMErrorCode.REQUEST_TOO_LARGE:
-            return LLMRequestTooLargeError(exc.safe_message)
+            return LLMRequestTooLargeError(exc.safe_message, provider_error=exc)
         return exc
     if isinstance(exc, (LLMToolCallingUnsupportedError, LLMRequestTooLargeError)):
         return exc

@@ -109,6 +109,13 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
             "after HTTP 400, do not repeat the same arguments; inspect collection.info/filter hints or retry only with corrected or removed filters",
         ))
 
+    if canonical == "jira_get_issue":
+        notes.extend((
+            "include selects enrichment sections; subtasks is an issue field, not an include value",
+            "to inspect subtasks request fields containing subtasks; if omitted from the response, use jira_search with JQL parent = ISSUE_KEY",
+            "a missing or null subtasks field is unknown, not an empty list; claim no subtasks only from an explicit empty list or a complete empty parent search",
+        ))
+
     input_schema = dict(getattr(op, "input_schema", {}) or {})
     properties = input_schema.get("properties")
     if isinstance(properties, dict) and "filters" in properties:

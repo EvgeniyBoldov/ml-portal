@@ -135,6 +135,16 @@ def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) 
         return ResultPage(value=items, meta=ResultMeta(source="jira", total=total,
             has_next=more, next_arguments=next_arguments,
             complete=complete, coverage_incomplete=not nested_complete))
+    if source_tool == "jira_get_issue" and isinstance(payload, dict):
+        requested = {item.strip() for item in str(arguments.get("fields") or "").split(",")}
+        included = {item.strip() for item in str(arguments.get("include") or "").split(",")}
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+        missing_subtasks = (bool(requested & {"subtasks", "*all"}) or "subtasks" in included) and (
+            "subtasks" not in payload and "subtasks" not in fields)
+        return ResultPage(value=[payload], meta=ResultMeta(source="jira",
+            complete=False if missing_subtasks else None,
+            **({"missing_requested_fields": ["subtasks"], "coverage_incomplete": True}
+               if missing_subtasks else {})))
     if source_tool in {"execute_sql", "sql.execute_sql", "collection.sql.execute"}:
         if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
             raise ValueError("SQL MCP response must contain a rows array")

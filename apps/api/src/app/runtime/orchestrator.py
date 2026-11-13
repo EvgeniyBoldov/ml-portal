@@ -845,11 +845,21 @@ class GraphOrchestrator:
             await self.store.update_memory_context(plan_id, document_memory(context))
         paused_snapshot = await self.store.snapshot(plan_id)
         answers = interaction_history(paused_snapshot.get("pauses", []), stage="planner")
+
+        def validate_proposal(candidate: IterationProposal) -> None:
+            # Validate against full runtime-owned data, never the compacted
+            # planner projection. Recheck a fresh snapshot before persistence.
+            self._compile(candidate, available_agents, request.context.execution_ledger,
+                          request.context.scope_context, paused_snapshot)
+            if candidate.synthesis_brief and not _same_user_question(candidate.synthesis_brief.user_question, goal):
+                raise PlanValidationError("synthesis brief user_question must equal the immutable plan goal")
+
         proposal = await self.planner.plan(
             request=request,
             planner_iteration_trace_id=str(iteration_entity_id),
             persist_memory=persist_memory,
             interaction_answers=answers,
+            proposal_validator=validate_proposal,
             **planner_kwargs,
         )
         canonical_snapshot = await self.store.snapshot(plan_id)

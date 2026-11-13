@@ -190,3 +190,108 @@ def test_logged_planner_shape_errors_remain_rejected_by_provider_and_runtime(pro
     assert not Draft202012Validator(schema).is_valid(response)
     with pytest.raises(ValidationError):
         PlannerStep.model_validate(response)
+
+
+@pytest.mark.parametrize("marker", [
+    {"resolution": "completed", "attempts": 1},
+    {"action": "completed", "reason": "Already completed"},
+])
+def test_completed_status_markers_are_normalized_before_schema_validation(marker):
+    import json
+    notes = []
+    payload = {"kind": "proposal", "proposal": {"terminal": "synthesis", "tasks": [],
+        "synthesis_brief": BRIEF, "resolutions": [{"task_id": "done", **marker}]}}
+    original = deepcopy(payload)
+    step = StructuredLLMCall._parse_and_validate(json.dumps(payload), PlannerStep,
+        normalizations=notes, validation_context={"planner_execution_ledger": {
+            "tasks": [{"task_id": "done", "status": "completed"}]}})
+    assert step.proposal.resolutions == []
+    assert notes == [{"path": "$.proposal.resolutions[0]", "operation": "drop_completed_task_status_marker"}]
+    assert payload == original
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate(payload)
+
+
+@pytest.mark.parametrize("status", ["failed", "needs_dependency", "pending", "unknown"])
+def test_status_markers_cannot_complete_incomplete_or_unknown_tasks(status):
+    payload = {"kind": "proposal", "proposal": {"terminal": "synthesis", "synthesis_brief": BRIEF,
+        "resolutions": [{"task_id": "task", "action": "completed"}]}}
+    ledger = {"tasks": [] if status == "unknown" else [{"task_id": "task", "status": status}]}
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate(payload, context={"planner_execution_ledger": ledger})
+
+
+def test_completed_marker_with_replacement_intent_is_not_discarded():
+    payload = {"kind": "proposal", "proposal": {"terminal": "synthesis", "synthesis_brief": BRIEF,
+        "resolutions": [{"task_id": "done", "action": "completed", "replacement_task_ids": ["new"]}]}}
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate(payload, context={"planner_execution_ledger": {
+            "tasks": [{"task_id": "done", "status": "completed"}]}})
+
+
+@pytest.mark.asyncio
+async def test_runtime_semantic_error_is_corrected_within_structured_call_budget(monkeypatch):
+    import json
+    responses = [
+        {"kind": "proposal", "proposal": {"terminal": "synthesis", "synthesis_brief": BRIEF,
+            "resolutions": [{"task_id": "unknown", "action": "report_unresolved", "reason": "done"}]}},
+        {"kind": "proposal", "proposal": {"terminal": "synthesis", "synthesis_brief": BRIEF}},
+    ]
+    requests = []
+    async def chat(messages, **kwargs):
+        requests.append(deepcopy(messages))
+        return json.dumps(responses[len(requests) - 1])
+    call = StructuredLLMCall(session=AsyncMock(), llm_client=SimpleNamespace(chat=chat))
+    call.role_service.get_role_config = AsyncMock(return_value={"model": "test"})
+    call.limits_service.resolve_model = AsyncMock(return_value=ModelCallLimits(request_timeout_s=1, max_retries=1))
+    monkeypatch.setattr("app.runtime.llm.structured.asyncio.sleep", AsyncMock())
+    def validate(step):
+        GraphOrchestrator._compile(step.to_runtime_proposal(goal=BRIEF["user_question"]), [], {"tasks": [], "needs": []})
+    result = await call.invoke(role=SystemLLMRoleType.PLANNER, payload={}, schema=PlannerStep,
+                               output_validator=validate)
+    assert result.value.proposal.resolutions == []
+    assert len(requests) == 2
+    assert "prior incomplete task" in requests[1][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_completed_task_replanning_marker_needs_one_call_and_emits_normalization(monkeypatch):
+    import json
+    response = {"kind": "proposal", "proposal": {"terminal": "synthesis", "tasks": [],
+        "synthesis_brief": BRIEF, "resolutions": [{"task_id": "done", "resolution": "completed", "attempts": 1}]}}
+    client = SimpleNamespace(chat=AsyncMock(return_value=json.dumps(response)))
+    call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
+    call.role_service.get_role_config = AsyncMock(return_value={"model": "test"})
+    call.limits_service.resolve_model = AsyncMock(return_value=ModelCallLimits(request_timeout_s=1, max_retries=10))
+    events = []
+    async def emit(event):
+        events.append(event)
+    result = await call.invoke(role=SystemLLMRoleType.PLANNER, payload={}, schema=PlannerStep,
+        validation_context={"planner_execution_ledger": {"tasks": [{"task_id": "done", "status": "completed"}]}},
+        event_sink=emit, trace_parent_entity_id="iteration")
+    client.chat.assert_awaited_once()
+    assert result.value.proposal.resolutions == []
+    assert any(event.data.get("stage") == "llm_response_normalized" for event in events)
+    assert not any(event.type.value == "protocol_retry" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_prevalidation_uses_full_snapshot_not_compacted_outputs():
+    from uuid import uuid4
+    from app.runtime.orchestrator_contracts import PlanRequest, PlannerContext
+    candidate = IterationProposal.model_validate({"terminal": "synthesis", "synthesis_brief": BRIEF,
+        "resolutions": [{"task_id": "partial", "action": "accept_partial", "output_keys": ["items"], "reason": "Use observed data"}]})
+    request = PlanRequest(plan_id=uuid4(), run_id=uuid4(), context=PlannerContext(
+        goal=BRIEF["user_question"], trigger="task_outcome",
+        execution_ledger={"tasks": [{"task_id": "partial", "status": "failed", "result": {}}]}))
+    snapshot = {"tasks": {"partial": {"status": "failed", "result": {"outputs": {"items": [1]}}}}}
+    store = SimpleNamespace(snapshot=AsyncMock(return_value=snapshot), apply_iteration=AsyncMock())
+    async def plan(**kwargs):
+        kwargs["proposal_validator"](candidate)
+        return candidate
+    orchestrator = GraphOrchestrator(store=store, planner=SimpleNamespace(plan=plan), executor=None)
+    orchestrator._planner_request = AsyncMock(return_value=request)
+    result = await orchestrator._invoke_planner(plan_id=request.plan_id, goal=BRIEF["user_question"],
+        trigger="task_outcome", available_agents=[], available_artifacts=[], planner_kwargs={})
+    assert result.resolutions[0].output_keys == ["items"]
+    store.apply_iteration.assert_awaited_once()

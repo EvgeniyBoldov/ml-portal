@@ -14,13 +14,14 @@ from app.runtime.events import RuntimeEventType
 from app.runtime.orchestrator_contracts import TaskRequest
 from app.runtime.task_completion_prompt import build_task_completion_prompt
 from app.services.runtime_event_logger import RuntimeLoggingLevel
+from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("repair", [False, True])
 @pytest.mark.parametrize("with_tools", [False, True])
-@pytest.mark.parametrize("first_response", ["prose", "invalid_interaction", "interaction_exhausted", "valid_interaction"])
+@pytest.mark.parametrize("first_response", ["prose", "invalid_interaction", "interaction_exhausted", "valid_interaction", "provider_failure"])
 async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native_tools(monkeypatch, native, repair, with_tools, first_response):
     task = TaskRequest(task_id="task", executor="viewer", intent="list", instructions="List",
                        expected_outputs=[{"key": "list", "description": "List", "schema": {"type": "array"}}])
@@ -41,6 +42,13 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
     runtime.llm.raw_client._connection_resolver = None
     runtime.llm.call = AsyncMock(side_effect=responses)
     runtime.llm.call_raw = AsyncMock(side_effect=[{"content": text} for text in responses])
+    if first_response == "provider_failure":
+        failure = LLMProviderError(
+            code=LLMErrorCode.INVALID_REQUEST, safe_message="LLM rejected the request", retryable=False,
+            status_code=400, provider_message="oneOf is forbidden", provider_param="response_format",
+        )
+        runtime.llm.call.side_effect = failure
+        runtime.llm.call_raw.side_effect = failure
     runtime.llm.normalize_response = lambda response: response["content"]
     runtime.config_resolver.resolve = AsyncMock(return_value=(
         PolicyLimits(max_llm_calls=5, max_retries=2), GenerationParams(model="test"),
@@ -75,6 +83,15 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
         request.resolved_operations = []
     request.agent_version = None
     events = [event async for event in runtime.execute(request, [{"role": "user", "content": "List"}], ctx)]
+    if first_response == "provider_failure":
+        for kind in (RuntimeEventType.LLM_RESPONSE, RuntimeEventType.ERROR):
+            failed = [event for event in events if event.type == kind]
+            assert len(failed) == 1
+            assert failed[0].data["provider_message"] == "oneOf is forbidden"
+            assert failed[0].data["provider_param"] == "response_format"
+            assert failed[0].data["status_code"] == 400
+        assert failed[0].data["user_message"] == "LLM rejected the request"
+        return
     if first_response == "interaction_exhausted":
         assert not any(event.type in {RuntimeEventType.WAITING_INPUT, RuntimeEventType.FINAL} for event in events)
         assert any(event.type == RuntimeEventType.ERROR and event.data.get("error_code") == "output_contract_invalid" for event in events)

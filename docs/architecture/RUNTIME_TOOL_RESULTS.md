@@ -116,6 +116,12 @@ The source adapter decodes exactly one such envelope before page normalization;
 issue fields become record fields rather than an opaque `result` string.
 Malformed/non-object search results still fail closed; record descriptions and
 unknown-source responses are never recursively decoded.
+Jira issue responses preserve absent, null and explicitly empty `subtasks`
+values as distinct states. If `fields` requests `subtasks`/`*all` and the source
+omits that field, coverage is incomplete and `missing_requested_fields` records
+`subtasks` in dataset metadata. Legacy stored calls with `include=subtasks`
+receive the same missing-field marker; new such calls are rejected before
+source dispatch because subtasks is a field rather than an enrichment section.
 Jira uses startAt/total/issues and retains JQL. Sources initially queried at a
 nonzero offset do not claim complete coverage. Exhaustion and total coverage
 are distinct; a short response inconsistent with its total is not complete.

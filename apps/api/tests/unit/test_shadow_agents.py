@@ -127,6 +127,24 @@ async def test_runtime_failure_maps_to_upstream_error(invocation):
 
 
 @pytest.mark.asyncio
+async def test_shadow_keeps_provider_reason_in_trace_and_safe_public_explanation(invocation):
+    invocation.service.executor.execute_attempt.side_effect = TaskExecutionError(
+        code="llm_invalid_request", message="Agent LLM call failed", retryable=False,
+        details={"status_code": 400, "provider_message": "oneOf is forbidden",
+                 "provider_param": "response_format", "user_message": "LLM rejected the request"},
+    )
+    with pytest.raises(ExternalServiceError) as raised:
+        await invoke(invocation)
+    assert str(raised.value) == "LLM rejected the request"
+    assert raised.value.details == {"error_code": "llm_invalid_request", "retryable": False}
+    errors = [call.args[0] for call in invocation.journal.emit.await_args_list
+              if call.args[0].type.value == "error"]
+    assert errors[-1].data["provider_message"] == "oneOf is forbidden"
+    assert errors[-1].data["provider_param"] == "response_format"
+    assert errors[-1].data["status_code"] == 400
+
+
+@pytest.mark.asyncio
 async def test_cancellation_finishes_run(invocation):
     invocation.service.executor.execute_attempt.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):

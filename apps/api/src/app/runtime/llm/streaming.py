@@ -40,6 +40,7 @@ class StreamTurn:
     duration_ms: int = 0
     partial: bool = False
     error_message: Optional[str] = None
+    provider_diagnostics: Optional[Dict[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,8 @@ class StreamError:
     error_type: Optional[str] = None
     retry_after_ms: Optional[int] = None
     debug: Optional[Dict[str, Any]] = None
+    provider_diagnostics: Optional[Dict[str, Any]] = None
+    operator_message: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -155,6 +158,8 @@ class RoleStreamingCall:
                 recoverable=provider_error.retryable if provider_error is not None else True,
                 error_type=type(stream_error).__name__,
                 retry_after_ms=provider_error.retry_after_ms if provider_error is not None else None,
+                provider_diagnostics=provider_error.diagnostics() if provider_error is not None else None,
+                operator_message=provider_error.operator_message if provider_error is not None else None,
                 debug=build_debug_payload(
                     exc=stream_error,
                     traceback_text=stream_traceback,
@@ -173,7 +178,9 @@ class RoleStreamingCall:
             tokens_total=tokens_total,
             duration_ms=duration_ms,
             partial=stream_error is not None,
-            error_message=str(stream_error) if stream_error is not None else None,
+            error_message=(stream_error.operator_message if isinstance(stream_error, LLMProviderError)
+                           else str(stream_error) if stream_error is not None else None),
+            provider_diagnostics=stream_error.diagnostics() if isinstance(stream_error, LLMProviderError) else None,
         )
 
 

@@ -128,6 +128,10 @@ needs in this flow. Invalid results and execution failures return HTTP 502;
 wrong agent type/incompatible version returns 409, RBAC denial 403, absent agent
 or published version 404, and invalid request envelope 422. Errors use the
 platform's existing JSON error envelope.
+For execution failures the envelope includes `details.error_code` and
+`details.retryable`, and uses the runtime's safe user message when available.
+Sanitized provider rejection evidence stays in the operator trace, including
+the terminal shadow error; see [Chat Runtime Error Contract](CHAT_RUNTIME_ERROR_CONTRACT.md).
 
 Events use the existing canonical journal with `origin=shadow`, real run and
 agent execution UUIDs, correlation id, user/tenant identity and nullable chat id.
@@ -1061,3 +1065,30 @@ are distinct from successful receipts; unresolved execution must not be reported
 as success. Repeated duplicate batches without new evidence receive bounded
 repair opportunities before a controlled terminal limitation. The full native
 call/result pairs remain in the journal even when model context is compacted.
+
+
+### Planner correction at iteration checkpoints
+
+The planner receives `resolution_targets` with completed and incomplete task IDs
+alongside the structural ledger. `resolutions` are dispositions of prior
+incomplete tasks, never task status updates. For completed tasks, bounded legacy
+status-only entries (`action=completed` or `resolution=completed`, optionally
+with a reason/attempt count) are discarded before schema validation, using only
+the caller-owned ledger. The raw reply stays in the journal and a
+`llm_response_normalized` event records each discarded path. Unknown/incomplete
+tasks, extra fields and entries with replacement/output intent are not repaired
+this way. Runtime never treats model-authored `completed` as task completion.
+
+The orchestrator supplies a pure proposal validator to the planner's structured
+call. Compilation errors and immutable-goal errors therefore participate in the
+same bounded LLM correction budget as shape errors. Prevalidation uses the full
+runtime snapshot, not the compacted model projection; compilation and store
+validation run again against current state before persistence. The planner
+cannot mutate lifecycle state by passing prevalidation.
+
+Agent completion instructions distinguish absent/null fields from explicit
+empty values and complete empty searches. Jira `subtasks` is an issue field,
+not an `include` section. `include=subtasks` is rejected before dispatch with
+instructions to request the field or search `parent = ISSUE_KEY`. If a requested
+subtasks field is absent from the actual response, its receipt records incomplete
+coverage and `missing_requested_fields`; no synthetic empty array is inserted.

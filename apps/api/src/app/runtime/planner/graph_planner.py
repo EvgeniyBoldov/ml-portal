@@ -42,6 +42,7 @@ class GraphPlanner:
         persist_memory: Optional[Callable[[list[dict[str, Any]]], Awaitable[None]]] = None,
         ctx: ToolContext | None = None,
         interaction_answers: list[dict[str, Any]] | None = None,
+        proposal_validator: Callable[[IterationProposal], None] | None = None,
         **runtime_context: Any,
     ) -> IterationProposal:
         answers = interaction_answers or []
@@ -127,10 +128,19 @@ class GraphPlanner:
             if prompt_memory_budget is not None:
                 payload = bound_prompt_memory(payload, token_budget=prompt_memory_budget,
                                               model=model_name)
+            def validate_step(step: PlannerStep) -> None:
+                if step.kind != "proposal":
+                    return
+                proposal = step.to_runtime_proposal(goal=request.context.goal)
+                if proposal_validator is not None:
+                    proposal_validator(proposal)
+
             result = await self._llm.invoke(
                 role=SystemLLMRoleType.PLANNER,
                 payload=payload,
                 schema=PlannerStep,
+                validation_context={"planner_execution_ledger": request.context.execution_ledger},
+                output_validator=validate_step,
                 system_prompt=system_prompt,
                 chat_id=chat_id,
                 tenant_id=tenant_id,

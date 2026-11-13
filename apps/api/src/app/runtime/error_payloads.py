@@ -3,6 +3,8 @@ from __future__ import annotations
 import traceback
 from typing import Any, Dict, Optional
 
+from app.adapters.interfaces.llm import LLMProviderError
+
 
 def build_debug_payload(
     *,
@@ -13,6 +15,15 @@ def build_debug_payload(
     payload: Dict[str, Any] = {}
     if exc is not None:
         payload["exception_type"] = type(exc).__name__
+    if isinstance(exc, LLMProviderError):
+        # SDK causes can contain raw response bodies and echoed credentials.
+        payload.update(exc.diagnostics())
+        payload["traceback"] = "".join(traceback.format_exception(
+            type(exc), exc, exc.__traceback__, chain=False,
+        ))
+        if context:
+            payload["context"] = dict(context)
+        return payload
     if traceback_text:
         payload["traceback"] = traceback_text
     elif exc is not None:

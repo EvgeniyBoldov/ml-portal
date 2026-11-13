@@ -102,6 +102,42 @@ class PlannerStep(BaseModel):
             info.context.setdefault("response_normalizations", []).append({"path": "$", "operation": operation})
         return adapted
 
+    @model_validator(mode="before")
+    @classmethod
+    def discard_completed_resolution_noops(cls, value: Any, info: ValidationInfo) -> Any:
+        """Use caller-owned ledger state, never status claims from model JSON."""
+        ledger = (info.context or {}).get("planner_execution_ledger")
+        if not isinstance(value, dict) or not isinstance(ledger, dict):
+            return value
+        completed = {item.get("task_id") for item in ledger.get("tasks", [])
+                     if isinstance(item, dict) and isinstance(item.get("task_id"), str)
+                     and item.get("status") == "completed"}
+        if not completed:
+            return value
+        proposal = value.get("proposal", value)
+        if not isinstance(proposal, dict) or not isinstance(proposal.get("resolutions"), list):
+            return value
+        retained = []
+        for index, item in enumerate(proposal["resolutions"]):
+            # A completed task has no disposition left to apply. Never drop
+            # a resolution that carries replacement/binding intent.
+            if (isinstance(item, dict) and isinstance(item.get("task_id"), str)
+                    and item["task_id"] in completed
+                    and not item.get("replacement_task_ids") and not item.get("output_keys")
+                    and item.get("action", item.get("resolution")) == "completed"
+                    and set(item) <= {"task_id", "action", "resolution", "reason", "attempts"}):
+                if info.context is not None:
+                    info.context.setdefault("response_normalizations", []).append({
+                        "path": f"$.proposal.resolutions[{index}]",
+                        "operation": "drop_completed_task_status_marker",
+                    })
+                continue
+            retained.append(item)
+        if len(retained) == len(proposal["resolutions"]):
+            return value
+        updated = {**proposal, "resolutions": retained}
+        return {**value, "proposal": updated} if "proposal" in value else updated
+
     def to_runtime_proposal(self, *, goal: str) -> IterationProposal:
         if self.proposal is None:
             raise ValueError("only a proposal step can compile to an iteration")

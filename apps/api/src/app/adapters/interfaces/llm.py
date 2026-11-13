@@ -35,9 +35,29 @@ class LLMProviderError(RuntimeError):
     provider_type: Optional[str] = None
     provider_code: Optional[str] = None
     retry_after_ms: Optional[int] = None
+    provider_message: Optional[str] = None
+    provider_param: Optional[str] = None
+
+    def diagnostics(self) -> dict[str, Any]:
+        """Adapter-sanitized evidence for operator traces, never public messages."""
+        return {key: value for key, value in {
+            "status_code": self.status_code,
+            "provider_type": self.provider_type,
+            "provider_code": self.provider_code,
+            "provider_message": self.provider_message,
+            "provider_param": self.provider_param,
+        }.items() if value is not None}
 
     def __str__(self) -> str:
         return self.safe_message
+
+    @property
+    def operator_message(self) -> str:
+        evidence = "; ".join(str(value) for value in (
+            f"HTTP {self.status_code}" if self.status_code is not None else None,
+            self.provider_code, self.provider_param, self.provider_message,
+        ) if value)
+        return f"{self.safe_message}: {evidence}" if evidence else self.safe_message
 
 
 @dataclass(frozen=True)

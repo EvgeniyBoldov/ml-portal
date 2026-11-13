@@ -135,11 +135,21 @@ class ShadowAgentService:
             status = "cancelled"
             raise
         except (TaskExecutionError, TaskConfirmationRequired) as exc:
+            details = exc.details if isinstance(exc, TaskExecutionError) else {}
+            diagnostics = {key: details[key] for key in (
+                "status_code", "provider_type", "provider_code", "provider_message", "provider_param",
+            ) if details.get(key) is not None}
             await self._safe_emit(agent_journal, RuntimeEvent.error(
                 "Shadow agent execution failed",
                 error_code=getattr(exc, "code", "shadow_confirmation_required"),
+                operator_message=details.get("operator_message") or "Shadow agent execution failed",
+                **diagnostics,
             ), OrchestrationPhase.AGENT)
-            raise ExternalServiceError("Shadow agent execution failed") from exc
+            raise ExternalServiceError(
+                details.get("user_message") or "Shadow agent execution failed",
+                details={"error_code": getattr(exc, "code", "shadow_confirmation_required"),
+                         "retryable": bool(getattr(exc, "retryable", False))},
+            ) from exc
         except Exception as exc:
             await self._safe_emit(agent_journal, RuntimeEvent.error(
                 "Shadow invocation failed", exception_type=type(exc).__name__,

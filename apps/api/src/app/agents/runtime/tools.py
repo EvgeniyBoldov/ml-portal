@@ -585,6 +585,15 @@ class OperationExecutionFacade:
         if not schema:
             return None
 
+        if operation.operation == "jira_get_issue" or operation.target.mcp_tool_name == "jira_get_issue":
+            include = arguments.get("include")
+            if isinstance(include, str) and "subtasks" in {item.strip().lower() for item in include.split(",")}:
+                return OperationValidationError(
+                    code=RuntimeErrorCode.OPERATION_INVALID_ARGS,
+                    message="subtasks is an issue field, not an include section. Request fields containing subtasks, or use jira_search with JQL parent = ISSUE_KEY. A missing field does not mean an empty list.",
+                    field_path="$.include", retryable=True,
+                )
+
         # Coerce types before validation to handle LLM passing strings instead of integers
         coerced_args = OperationExecutionFacade._coerce_args(arguments, schema)
 
