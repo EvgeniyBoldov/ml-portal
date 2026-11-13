@@ -191,6 +191,7 @@ async def test_agent_preflight_keeps_missing_credentials_as_user_limitation():
     state, _ = fixture()
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
     executor._prepare_sub_agent_request = AsyncMock(return_value=SimpleNamespace(
+        agent=SimpleNamespace(description=""),
         mode=ExecutionMode.UNAVAILABLE, missing_requirements=MissingRequirements(credentials=['source'])))
     user, tenant = uuid4(), uuid4()
     ctx = ToolContext(user_id=user, tenant_id=tenant)

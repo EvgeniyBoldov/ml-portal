@@ -337,6 +337,12 @@ File/resource bodies are excluded, and the complete tool transcript remains
 available for resume. This projection preserves useful text without copying a
 recoverable dataset payload into the prompt a second time.
 
+`ResultObservation` preserves unknown metadata as explicit `null`, including
+`fields`. Synthesis accepts these serialized receipts from both completed task
+reports and selected result-tool evidence. An absent field projection does not
+prevent selecting or reading the saved result; the observation remains intact,
+and distinct explicit field projections remain separate evidence views.
+
 Before executing a batch of tool calls, runtime estimates the input room for
 the next model request with `inspect_context`, including current history, the
 assistant tool-call message, placeholder tool replies, tool schemas,

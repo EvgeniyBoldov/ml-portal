@@ -38,6 +38,7 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
     elif not repair:
         responses[-1] = responses[1]
     runtime = AgentToolRuntime(Mock())
+    runtime.llm.raw_client._connection_resolver = None
     runtime.llm.call = AsyncMock(side_effect=responses)
     runtime.llm.call_raw = AsyncMock(side_effect=[{"content": text} for text in responses])
     runtime.llm.normalize_response = lambda response: response["content"]
@@ -52,6 +53,11 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
     monkeypatch.setattr(agent_module, "serialize_published_collections", lambda *args: [])
     monkeypatch.setattr(agent_module, "build_tools_payload", lambda operations: [{"type": "function"}])
     monkeypatch.setattr(agent_module, "parse_native_tool_calls", lambda response: None)
+    # Keep workspace tools in tool-enabled cases; the other cases exercise
+    # the LLM-only branch rather than implicitly gaining workspace tools.
+    from app.agents.runtime.result_workspace_tools import with_workspace_operations
+    monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations",
+                        lambda operations: with_workspace_operations(operations) if operations else [])
     deps = SimpleNamespace(sandbox_overrides={"prompt": "Sandbox override: answer in prose"}, resolved_operations=[])
     ctx = SimpleNamespace(extra={"task_completion_response_format": {"type": "json_schema"},
                                  "task_completion_prompt": build_task_completion_prompt(task),

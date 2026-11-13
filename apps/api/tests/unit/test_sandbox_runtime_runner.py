@@ -30,6 +30,43 @@ async def test_cancel_local_is_idempotent_when_run_is_not_owned_here():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+@pytest.mark.parametrize("pipeline_status", [None, "completed", "failed", "cancelled"])
+async def test_terminal_fallback_does_not_repeat_persisted_pipeline_status(status, pipeline_status):
+    db = AsyncMock()
+    service = AsyncMock()
+    journal = MagicMock(emit=AsyncMock())
+    command = SimpleNamespace(
+        run_id=uuid4(), user_id=uuid4(), tenant_id=uuid4(),
+        pipeline_request=SimpleNamespace(chat_turn_id=None),
+        tool_context=SimpleNamespace(extra={"runtime_root_event_logger": SimpleNamespace(
+            run_terminal_status=pipeline_status,
+        )}),
+    )
+
+    @asynccontextmanager
+    async def session_factory():
+        yield db
+
+    with (
+        patch("app.services.sandbox.runtime_runner.SandboxService", return_value=service),
+        patch("app.services.sandbox.runtime_runner.RuntimeEventJournalFactory.create", return_value=journal),
+    ):
+        await SandboxRuntimeRunner()._persist_terminal(
+            command=command, session_factory=session_factory, status=status,
+            error=None, paused_payload=None,
+        )
+
+    service.finish_run.assert_awaited_once_with(command.run_id, status, None)
+    db.commit.assert_awaited_once()
+    if pipeline_status == status:
+        journal.emit.assert_not_awaited()
+    else:
+        journal.emit.assert_awaited_once()
+        assert journal.emit.await_args.args[0].data["status"] == status
+
+
+@pytest.mark.asyncio
 async def test_terminal_completion_completes_companion_chat_turn() -> None:
     turn_id = str(uuid4())
     turns = AsyncMock()
@@ -303,6 +340,7 @@ async def test_control_unsubscribe_failure_does_not_skip_terminal_persistence() 
         user_id=uuid4(),
         tenant_id=uuid4(),
         pipeline_request=SimpleNamespace(chat_turn_id=None, sandbox_overrides={}),
+        tool_context=SimpleNamespace(extra={}),
     )
 
     @asynccontextmanager

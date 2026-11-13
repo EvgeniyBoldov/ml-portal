@@ -598,7 +598,8 @@ class Synthesizer:
         selected: Dict[tuple[Any, ...], Dict[str, Any]] = {}
 
         def view_key(item: Dict[str, Any]) -> tuple[Any, ...]:
-            fields = tuple(str(field) for field in item.get("fields", []) if isinstance(field, str))
+            # Serialized ResultObservation keeps unknown fields as explicit null.
+            fields = tuple(field for field in (item.get("fields") or []) if isinstance(field, str))
             return (str(item.get("result_id") or ""), item.get("revision"), item.get("offset"),
                     fields, item.get("path"), item.get("text_offset"), item.get("text_limit"),
                     item.get("next_text_offset"), item.get("child_offset"), item.get("child_limit"),

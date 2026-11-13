@@ -156,6 +156,12 @@ class RuntimeEventLogger:
         self._open_llm_calls: dict[str, dict[str, Any]] = {}
         self._open_tool_calls: dict[str, dict[str, Any]] = {}
         self._open_synthesis_runs: dict[str, dict[str, Any]] = {}
+        self._run_terminal_status: str | None = None
+
+    @property
+    def run_terminal_status(self) -> str | None:
+        """Status of the last run_end successfully persisted by this logger."""
+        return self._run_terminal_status
 
     def for_entity(
         self, *, entity_type: str, entity_id: str, parent_entity_type: Optional[str] = None,
@@ -338,6 +344,8 @@ class RuntimeEventLogger:
         return result
 
     def _track_lifecycle(self, event_type: str, data: dict[str, Any]) -> None:
+        if event_type == "run_end":
+            self._run_terminal_status = str(data.get("status") or "completed")
         entity_id = str(data.get("entity_id") or data.get("llm_call_id") or data.get("call_id") or "")
         if event_type == "llm_request" and entity_id:
             self._open_llm_calls[entity_id] = dict(data)

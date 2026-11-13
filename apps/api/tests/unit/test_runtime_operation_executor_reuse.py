@@ -60,6 +60,81 @@ def test_argument_normalization_applies_schema_defaults_before_reuse_keying():
     assert ToolExecutor._normalize_args(operation, {}) == {"limit": 20}
 
 
+@pytest.mark.parametrize("arguments", [{}, {"expand": None, "properties": None}])
+def test_normalization_does_not_insert_invalid_null_defaults(arguments):
+    operation = _operation().model_copy(update={"input_schema": {
+        "type": "object", "properties": {
+            "expand": {"type": "string", "default": None},
+            "properties": {"type": "string", "default": None},
+            "limit": {"type": "integer", "default": 10},
+        },
+    }})
+
+    normalized = ToolExecutor._normalize_args(operation, {**arguments, "collection_slug": "sql-demo"})
+
+    assert normalized == {"limit": 10, "collection_slug": "sql-demo"}
+    assert ToolExecutor._validate_args(operation, normalized) is None
+    assert ToolExecutor._normalize_args(operation, normalized) == normalized
+
+
+def test_default_expansion_preserves_nullable_defaults_and_required_validation():
+    operation = _operation().model_copy(update={"input_schema": {
+        "type": "object", "required": ["issue_key"], "properties": {
+            "issue_key": {"type": "string", "default": None},
+            "nullable": {"type": ["string", "null"], "default": None},
+            "choice": {"anyOf": [{"type": "string"}, {"type": "null"}], "default": None},
+            "include": {"type": "string", "default": "all"},
+        },
+    }})
+    normalized = ToolExecutor._normalize_args(operation, {"collection_slug": "sql-demo"})
+    assert normalized == {"nullable": None, "choice": None, "include": "all", "collection_slug": "sql-demo"}
+    assert ToolExecutor._validate_args(operation, normalized) is not None
+    normalized = ToolExecutor._normalize_args(operation, {"issue_key": None, "collection_slug": "sql-demo"})
+    assert "issue_key" in normalized and normalized["issue_key"] is None
+    assert ToolExecutor._validate_args(operation, normalized) is not None
+
+
+def test_nested_default_expansion_does_not_reintroduce_invalid_nulls():
+    schema = {"type": "object", "properties": {"requests": {
+        "type": "array", "items": {"type": "object", "properties": {
+            "expand": {"type": "string", "default": None},
+            "limit": {"type": "integer", "default": 10},
+        }},
+    }}}
+    assert ToolExecutor._apply_schema_defaults({"requests": [{}]}, schema) == {
+        "requests": [{"limit": 10}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_jira_style_omitted_arguments_reach_executor_without_invalid_null_defaults():
+    operation = _operation().model_copy(update={"input_schema": {
+        "type": "object", "required": ["issue_key"], "properties": {
+            "issue_key": {"type": "string"},
+            "expand": {"type": "string", "default": None},
+            "properties": {"type": "string", "default": None},
+            "include": {"type": "string", "default": None},
+            "comment_limit": {"type": "integer", "default": 10},
+        },
+    }})
+    ctx = ToolContext(tenant_id=uuid4(), user_id=uuid4())
+    executor = AsyncMock()
+    executor.execute.return_value = ToolResult.ok({"issue": "TEST-1"})
+    ctx.set_runtime_deps(RuntimeDependencies(operation_executor=executor))
+
+    result, _ = await ToolExecutor().execute(
+        operation_call=ToolCall(id="jira-call", tool_name=operation.operation_slug,
+                                arguments={"issue_key": "TEST-1", "collection_slug": "sql-demo"}),
+        ctx=ctx, operations=[operation],
+    )
+
+    assert result.success is True
+    executor.execute.assert_awaited_once()
+    assert executor.execute.await_args.args[0].arguments == {
+        "issue_key": "TEST-1", "comment_limit": 10, "collection_slug": "sql-demo",
+    }
+
+
 @pytest.mark.asyncio
 async def test_operation_executor_reuses_from_tool_ledger():
     operation = _operation()

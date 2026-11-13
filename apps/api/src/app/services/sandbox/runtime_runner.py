@@ -281,7 +281,11 @@ class SandboxRuntimeRunner:
             logger.exception("sandbox_runtime_terminal_persist_failed run_id=%s", command.run_id)
             return
 
-        if status in {"cancelled", "failed"}:
+        # Pipeline journals its terminal event before yielding it, including
+        # cancellation/error paths that never yield RUN_END to this runner.
+        root_logger = getattr(command.tool_context, "extra", {}).get("runtime_root_event_logger")
+        pipeline_status = getattr(root_logger, "run_terminal_status", None)
+        if status in {"cancelled", "failed"} and pipeline_status != status:
             terminal_logger = RuntimeEventJournalFactory.create(
                 context=RuntimeLogContext(
                     run_id=command.run_id,

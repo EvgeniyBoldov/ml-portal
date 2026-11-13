@@ -619,7 +619,12 @@ class OperationExecutionFacade:
                 return normalized
             for name, property_schema in properties.items():
                 if name not in normalized and isinstance(property_schema, dict) and "default" in property_schema:
-                    normalized[name] = copy.deepcopy(property_schema["default"])
+                    default = property_schema["default"]
+                    # Some discovered schemas annotate optional strings with
+                    # default=null without allowing null as an argument value.
+                    # Do not turn an omitted valid argument into an invalid call.
+                    if default is not None or OperationExecutionFacade._schema_accepts_null(property_schema):
+                        normalized[name] = copy.deepcopy(default)
                 if name in normalized:
                     normalized[name] = OperationExecutionFacade._apply_schema_defaults(
                         normalized[name], property_schema if isinstance(property_schema, dict) else {})

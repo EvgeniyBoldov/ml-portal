@@ -2,7 +2,48 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from app.runtime.synthesis_context import SynthesisContextBuilder
+
+
+@pytest.mark.parametrize("receipt_source", ["task", "evidence"])
+def test_synthesis_accepts_nullable_fields_in_serialized_result_observation(receipt_source):
+    from app.agents.runtime.result_context import ResultObservation
+    from app.runtime.synthesizer import Synthesizer
+
+    observation = ResultObservation(
+        result_id="dcbox-result", revision=1, source_complete=True, source_total=2, row_count=2,
+    ).model_dump(mode="json")
+    reports, run_context = [], {}
+    if receipt_source == "task":
+        references = SynthesisContextBuilder._verified_result_references({"receipts": [{
+            "success": True, "result_id": "dcbox-result", "operation": "netbox_search_objects",
+            "result_observation": observation,
+        }]})
+        reports = [{"verified_result_refs": references}]
+    else:
+        run_context = {"evidence": [{"tool": "result.read", "arguments": {}, "data": {
+            "result_id": "dcbox-result", "revision": 1, "result_observation": observation,
+        }}]}
+
+    selected = Synthesizer._selected_result_references(reports, run_context)
+
+    assert len(selected) == 1
+    assert selected[0]["revision"] == 1
+    assert selected[0]["fields"] is None
+    assert selected[0]["observation"] == observation
+
+
+def test_synthesis_keeps_distinct_field_projections_with_nullable_observation():
+    from app.runtime.synthesizer import Synthesizer
+
+    references = [{"result_id": "r", "revision": 1, "observation": {"fields": fields}}
+                  for fields in (None, ["name"], ["address"])]
+    selected = Synthesizer._selected_result_references([{"verified_result_refs": references}], {})
+
+    assert len(selected) == 3
+    assert {tuple(item["fields"] or []) for item in selected} == {(), ("name",), ("address",)}
 
 
 def test_synthesis_receives_current_plan_focus_without_a_memory_search():

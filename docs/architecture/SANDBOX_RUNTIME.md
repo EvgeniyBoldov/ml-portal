@@ -416,6 +416,13 @@ shared chat-context lifecycle. `SandboxRuntimeRunner` runs independently from
 the HTTP/SSE observer. Disconnecting an observer does not stop a started run;
 the dedicated cancel path signals the runner.
 
+Pipeline owns the normal `run_end` journal event. Its root logger records the
+terminal status only after a successful journal append, including cancellation
+paths that do not yield the event to the runner. After persisting the sandbox
+run and companion turn, the runner emits a failure/cancellation fallback event
+only when that status has not already been journaled by the pipeline. A later
+change of status still emits its terminal event.
+
 Only `STOP` events with `waiting_input` or `waiting_confirmation` create a
 resumable sandbox pause. Terminal `STOP`, `ERROR`, and `FINAL` events finish the
 run and companion turn with their terminal status. If setup fails before

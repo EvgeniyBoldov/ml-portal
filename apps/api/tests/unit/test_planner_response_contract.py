@@ -174,3 +174,19 @@ def test_planner_provider_schema_rejects_invented_freshness_policy():
     assert not Draft202012Validator(schema).is_valid(response)
     with pytest.raises(ValidationError):
         PlannerStep.model_validate(response)
+
+
+@pytest.mark.parametrize("proposal", [
+    {"terminal": "planner", "tasks": [{**TASK, "response_spec": {
+        "type": "object", "properties": {"address": {"type": "string"}},
+    }}]},
+    {"terminal": "synthesis", "synthesis_brief": {**BRIEF, "planned_work": ["Read DCBox"]}},
+    {"terminal": "synthesis", "synthesis_brief": {**BRIEF, "delivery": "markdown"}},
+    {"terminal": "synthesis", "synthesis_brief": {**BRIEF, "findings": "Two addresses"}},
+])
+def test_logged_planner_shape_errors_remain_rejected_by_provider_and_runtime(proposal):
+    response = {"kind": "proposal", "proposal": proposal}
+    schema = StructuredLLMCall._compact_response_schema(PlannerStep.model_json_schema())
+    assert not Draft202012Validator(schema).is_valid(response)
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate(response)

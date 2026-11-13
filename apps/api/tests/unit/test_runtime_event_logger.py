@@ -18,6 +18,26 @@ def _logger(level: RuntimeLoggingLevel) -> RuntimeEventLogger:
     ))
 
 
+@pytest.mark.asyncio
+async def test_run_terminal_status_is_set_only_after_successful_journal_append(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    logger = _logger(RuntimeLoggingLevel.FULL)
+    event = RuntimeEvent.run_end(run_id=str(logger.context.run_id), status="failed")
+    append = AsyncMock(side_effect=RuntimeError("journal unavailable"))
+    monkeypatch.setattr(logger, "append_runtime_event", append)
+    monkeypatch.setattr(logger, "_publish_progress", AsyncMock())
+
+    with pytest.raises(RuntimeError, match="journal unavailable"):
+        await logger.emit(event, phase=OrchestrationPhase.PIPELINE)
+    assert logger.run_terminal_status is None
+
+    append.side_effect = None
+    append.return_value = event
+    await logger.emit(event, phase=OrchestrationPhase.PIPELINE)
+    assert logger.run_terminal_status == "failed"
+
+
 def test_none_never_creates_runtime_events() -> None:
     logger = _logger(RuntimeLoggingLevel.NONE)
     assert logger.should_log("error") is False

@@ -167,6 +167,48 @@ async def test_synthesizer_inventory_uses_selected_reports_and_preserves_file_de
 
 
 @pytest.mark.asyncio
+async def test_synthesis_stream_delivers_answer_from_nullable_dcbox_receipt(monkeypatch):
+    from app.agents.runtime.result_context import ResultObservation
+    from app.runtime.synthesis_context import SynthesisContextBuilder
+
+    observation = ResultObservation(
+        result_id="dcbox-result", revision=1, source_complete=True, source_total=2, row_count=2,
+    ).model_dump(mode="json")
+    references = SynthesisContextBuilder._verified_result_references({"receipts": [{
+        "success": True, "result_id": "dcbox-result", "operation": "netbox_search_objects",
+        "result_observation": observation,
+    }]})
+    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([
+        {"result_id": "dcbox-result", "revision": 1, "source_total": 2, "row_count": 2},
+    ], "available")))
+    read = AsyncMock(return_value={
+        "revision": 1, "value": [{"address": "10.243.98.4/25"}, {"address": "10.243.98.4/25"}],
+        "source_complete": True, "read_complete": True,
+    })
+    monkeypatch.setattr("app.services.result_workspace.ResultWorkspace.read", read)
+    monkeypatch.setattr("app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
+                        AsyncMock(return_value={"prompt": "Test", "model": "test"}))
+    state = _runtime_state()
+    llm = _LLMClientProbe(["Found two IP records."])
+    context = {**_synthesis_context(), "completed_task_reports": [{
+        "task_id": "inspect", "status": "completed", "verified_result_refs": references,
+    }]}
+    events = [event async for event in Synthesizer(session=SimpleNamespace(), llm_client=llm).stream(
+        runtime_state=state, run_id=state.run_id, synthesis_context=context,
+        ctx=SimpleNamespace(user_id=state.user_id, tenant_id=state.tenant_id),
+    )]
+
+    read.assert_awaited_once()
+    assert read.await_args.kwargs["fields"] is None
+    assert read.await_args.kwargs["revision"] == 1
+    evidence = json.loads(llm.calls[0]["messages"][1]["content"])["evidence_preparation"]
+    assert evidence["coverage"] == "available"
+    assert len(evidence["result_pages"][0]["records"]) == 2
+    assert state.final_answer == "Found two IP records."
+    assert any(event.type == RuntimeEventType.FINAL for event in events)
+
+
+@pytest.mark.asyncio
 async def test_synthesizer_uses_direct_source_mode_without_task_reports():
     llm = _LLMClientProbe(["Формулировка принята."])
     synth = Synthesizer(session=SimpleNamespace(), llm_client=llm)

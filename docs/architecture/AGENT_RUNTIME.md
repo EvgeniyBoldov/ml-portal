@@ -338,8 +338,11 @@ Agent task responses use protocol v2 generated from Pydantic. The agent owns
 `completion` (`fulfilled`, `needs`, `unfulfillable`) and may return `answer`,
 arbitrary `structured_response`, and discovered `needs` in any applicable
 combination. Runtime validates the envelope and need identities, not the
-correctness or completeness of task data. JSON/schema deviations never trigger
-terminal correction, null coercion, coverage proofs, or repeated tool calls.
+correctness or completeness of task data. Deviations of task data from advisory
+schemas never trigger terminal correction, null coercion, coverage proofs, or
+repeated tool calls. An invalid protocol envelope (including prose instead of
+strict JSON) may trigger a bounded declaration correction with the existing
+tool transcript retained; this does not re-execute successful tools.
 
 Planner `response_spec` requests `any`, `text`, `structured`, or `artifact`.
 Its optional `schema`, registered input/output schemas and legacy
@@ -350,6 +353,13 @@ an undeleted runtime-created attachment from this task's operations. Missing
 files preserve the response and return `required_artifact_missing` to planning.
 Runtime adds attachments/sources; the LLM does not repeat identifiers or slots.
 Tool/API argument validation, ACL, confirmations and scheduler invariants remain strict.
+
+The planner response envelope also remains strict. `response_spec` wraps the
+presentation request; any JSON Schema belongs inside its `schema` field.
+`synthesis_brief` gives editorial requirements, with nonempty string fields
+`planned_work`, `purpose`, and `answer_requirements`; task findings stay in the
+task reports. Runtime instructions clarify these shapes while the provider
+schema and validation remain generated from Pydantic.
 
 Bindings select a legacy output key or JSON Pointer into the actual persisted
 result, e.g. `/structured_response/devices`, `/answer`, `/attachments`.
@@ -1020,6 +1030,14 @@ again in the same agent execution. The identity includes the resolved source
 and normalized arguments. `require_retrieval` requires a real retrieval in this
 execution; it does not require repeated retrieval of the same selection. A repeated
 call refers to the original result and is not new evidence or a new dataset.
+
+Argument normalization removes optional non-nullable nulls and expands schema
+defaults before validation and reuse keying. A discovered `default: null` is
+not inserted when the property does not allow null: an omitted Jira `expand`
+or `properties` argument must remain omitted rather than fail string validation.
+Nullable defaults and explicit nullable values are preserved. Missing required
+arguments and explicit nulls for required non-nullable arguments still fail
+validation; the schema is not weakened.
 
 Saved-data reads remain available. Stateful source continuation and file access
 retain their revision, cursor and permission revalidation requirements. Errors
