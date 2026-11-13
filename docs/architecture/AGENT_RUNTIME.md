@@ -112,8 +112,16 @@ only `fulfilled` without needs and a JSON-object `structured_response`, projects
 that object to `result`, and validates it before completing the run. A Pydantic
 `ShadowCompletionDeclaration` specialization requires that object in the native
 provider schema and in the agent's bounded terminal correction loop, so a bare
-`fulfilled` declaration can be corrected before the attempt ends. Empty objects
-are valid; non-object and non-finite results are rejected. Runtime
+`fulfilled` declaration can be corrected before the attempt ends. Provider
+schemas materialize parent object properties and required fields in every
+`oneOf` branch, for grammar providers that compile branches independently.
+After the correction budget is exhausted, invalid shadow declarations emit
+`output_contract_invalid` and cannot be accepted as successful task results. Empty objects
+are valid; non-object and non-finite results are rejected. Shadow task
+instructions distinguish mission-defined fallbacks from non-fulfillment: a
+configured unknown/empty fallback is a fulfilled result, with JSON null for
+unknown values, rather than the string "None". The mission still owns whether
+such a fallback exists. Runtime
 limits, provider error handling and bounded protocol retries remain in effect;
 a correct response normally requires one LLM call. No additional agents resolve
 needs in this flow. Invalid results and execution failures return HTTP 502;

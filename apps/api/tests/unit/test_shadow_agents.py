@@ -154,7 +154,7 @@ async def test_shadow_executor_disables_operation_discovery():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("repair", [False, True])
+@pytest.mark.parametrize("repair", [False, True, "exhausted"])
 async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monkeypatch, repair):
     """Exercise real executor + agent runtime, replacing only IO boundaries."""
     from app.agents.execution_preflight import ExecutionRequest
@@ -183,6 +183,9 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
             {"choices": [{"message": {"content": '{"completion":"fulfilled","interaction":null}'}}]},
             client.chat.return_value,
         ]
+    if repair == "exhausted":
+        client.chat.side_effect = None
+        client.chat.return_value = {"choices": [{"message": {"content": '{"completion":"fulfilled"}'}}]}
     executor = AgentExecutor(session=invocation.service.session, llm_client=client)
     invocation.service.executor = executor
     invocation.version.compiled_prompt = "Summarize the supplied text."
@@ -193,6 +196,14 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
     executor._tool_runtime.config_resolver.resolve = AsyncMock(return_value=(
         PolicyLimits(), GenerationParams(model="test"), {}, SimpleNamespace(sources={})))
 
+    if repair == "exhausted":
+        with pytest.raises(ExternalServiceError):
+            await invoke(invocation)
+        assert any(event.type.value == "error" and event.data.get("error_code") == "output_contract_invalid"
+                   for event in observed)
+        assert observed[-1].type.value == "run_end"
+        assert observed[-1].data["status"] == "failed"
+        return
     result = await invoke(invocation)
     assert result.model_dump() == {"agent": "shadow-a", "result": {"summary": "ok"}}
     assert client.chat.await_count == (2 if repair else 1)
@@ -253,3 +264,15 @@ async def test_shadow_journal_failure_preserves_original_error_and_attempts_run_
     events = [call.args[0].type.value for call in invocation.journal.emit.await_args_list]
     assert events.count("agent_start") == 1
     assert events[-1] == "run_end"
+
+
+def test_shadow_provider_branches_require_result_even_when_compiled_independently():
+    from jsonschema import Draft202012Validator
+    from app.runtime.orchestrator_contracts import task_completion_json_schema
+    task = TaskRequest(task_id="t", executor="shadow", intent="invoke", instructions="Classify")
+    schema = task_completion_json_schema(task, shadow=True, provider_compatible=True)
+    for branch in schema["oneOf"]:
+        standalone = {**branch, "$defs": schema["$defs"]}
+        assert "structured_response" in branch["required"]
+        assert not Draft202012Validator(standalone).is_valid({"completion": "fulfilled", "interaction": None})
+    Draft202012Validator(schema).validate({"completion": "fulfilled", "structured_response": {"class": "легкий"}})

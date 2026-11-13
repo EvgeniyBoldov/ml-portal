@@ -283,3 +283,56 @@ def test_empty_search_is_zero_records_with_known_coverage():
     page = normalize_result({"results": [{"object_type": "dcim.device", "results": [], "count": 0, "next": None}],
         "errors": [], "searched_types": ["dcim.device"]}, "netbox_search_objects", {"q": "none"})
     assert page.value == [] and page.meta.total == 0 and page.meta.complete
+
+
+@pytest.mark.parametrize("tool", ["jira_search", "jira_search_issues", "jira_get_project_issues", "jira_list_issues"])
+def test_jira_fastmcp_string_envelope_preserves_records_and_continuation(tool):
+    import json
+    raw = {"total": 2, "start_at": 0, "issues": [{"key": "TEST-1", "description": None}]}
+    page = normalize_result({"result": json.dumps(raw)}, tool, {"jql": "project=TEST"})
+    assert page.value == raw["issues"]
+    assert page.meta.total == 2
+    assert page.meta.complete is False
+    assert page.meta.next_arguments == {"jql": "project=TEST", "start_at": 1}
+
+
+def test_jira_fastmcp_issue_is_a_record_rather_than_an_encoded_string():
+    import json
+    issue = {"key": "TEST-1", "description": '{"result":"keep as text"}', "assignee": None}
+    page = normalize_result({"result": json.dumps(issue)}, "jira_get_issue", {})
+    assert page.value == [issue]
+    assert page.meta.complete is None
+
+
+@pytest.mark.parametrize("value", ["not JSON", "null", "[]", '{"result":"{}"}'])
+def test_jira_string_envelope_invalid_or_nested_search_fails_closed(value):
+    with pytest.raises(ValueError):
+        normalize_result({"result": value}, "jira_search", {})
+
+
+def test_unknown_source_result_string_is_not_implicitly_decoded():
+    payload = {"result": '{"issues":[]}'}
+    assert normalize_result(payload, "unknown_api", {}).value == [payload]
+
+
+@pytest.mark.asyncio
+async def test_jira_mcp_string_response_reaches_store_as_records(monkeypatch):
+    from app.services.result_workspace import ResultWorkspace
+    from app.services.tool_result_store import ToolResultStore
+
+    issue = {"key": "TEST-1", "summary": "Example", "description": None}
+    payload = {"result": json.dumps({"total": 1, "start_at": 0, "issues": [issue]})}
+    result = DirectOperationExecutor._tool_result_from_payload({"structuredContent": payload})
+    save = AsyncMock(return_value={"result_id": "saved"})
+    monkeypatch.setattr(ToolResultStore, "save", save)
+    descriptor, view = await ResultWorkspace().save_source(
+        payload=result.data, source_tool="jira_search", arguments={"jql": "project=TEST"},
+        run_id=str(uuid4()), call_id="call-1", operation="jira_search",
+        tenant_id=uuid4(), user_id=uuid4(), task_id="task", agent_execution_id=str(uuid4()),
+    )
+    assert descriptor["result_id"] == "saved"
+    assert save.await_args.kwargs["payload"] == [issue]
+    assert save.await_args.kwargs["source_complete"] is True
+    assert save.await_args.kwargs["dataset_meta"]["total"] == 1
+    assert save.await_args.kwargs["source_page"]["value"] == [issue]
+    assert view["value"] == [issue]

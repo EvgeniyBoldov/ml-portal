@@ -110,6 +110,12 @@ retains the original query/types and requires agreeing next offsets across endpo
 Nonadvancing continuations are rejected. Missing pagination metadata remains
 unknown, and a normalized page cannot claim complete coverage while declaring
 another page or fewer records than its total.
+Known Jira search and issue tools accept the FastMCP string-return envelope
+`{"result": "<JSON object>"}` as well as their direct JSON object response.
+The source adapter decodes exactly one such envelope before page normalization;
+issue fields become record fields rather than an opaque `result` string.
+Malformed/non-object search results still fail closed; record descriptions and
+unknown-source responses are never recursively decoded.
 Jira uses startAt/total/issues and retains JQL. Sources initially queried at a
 nonzero offset do not claim complete coverage. Exhaustion and total coverage
 are distinct; a short response inconsistent with its total is not complete.

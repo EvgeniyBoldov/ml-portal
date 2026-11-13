@@ -757,6 +757,27 @@ def _terminal_provider_schema(schema: Dict[str, Any] | bool) -> Dict[str, Any] |
         if isinstance(result.get(keyword), list):
             result[keyword] = [_terminal_provider_schema(child) if isinstance(child, dict) else child
                                for child in result[keyword]]
+    # Grammar providers may compile oneOf branches as standalone objects.
+    # Materialize the inherited object constraints in each branch so they
+    # cannot generate a completion that omits the actual result fields.
+    if result.get("type") == "object" and isinstance(result.get("properties"), dict) and isinstance(result.get("oneOf"), list):
+        properties = result["properties"]
+        for branch in result["oneOf"]:
+            if not isinstance(branch, dict):
+                continue
+            refinements = branch.get("properties", {})
+            merged = dict(properties)
+            for name, refinement in refinements.items():
+                base = dict(properties.get(name) or {})
+                if "const" in refinement:
+                    base.pop("$ref", None)
+                    base.pop("enum", None)
+                merged[name] = {**base, **refinement}
+            branch["type"] = "object"
+            branch["properties"] = merged
+            branch["required"] = list(dict.fromkeys([*result.get("required", []), *branch.get("required", [])]))
+            if "additionalProperties" in result:
+                branch["additionalProperties"] = result["additionalProperties"]
     return result
 
 

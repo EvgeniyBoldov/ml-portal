@@ -82,6 +82,11 @@ class ShadowAgentService:
             task_id=str(uuid4()), executor=agent.slug, intent="Shadow invocation",
             instructions=("Perform your configured mission using the supplied task inputs. "
                           "Return the result as a JSON object in structured_response. "
+                          "Represent unknown values as JSON null, not the string None. "
+                          "If your configured mission defines a fallback for insufficient input, "
+                          "return that fallback in structured_response with completion=fulfilled: "
+                          "applying the mission's fallback is a completed task. "
+                          "Use unfulfillable only when neither the requested result nor a mission-defined fallback can be produced. "
                           "No tools, conversation history or memory are available."),
             inputs=request.data, response_spec=ResponseSpec(mode="structured"),
         )

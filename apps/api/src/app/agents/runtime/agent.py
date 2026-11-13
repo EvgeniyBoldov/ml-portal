@@ -1294,6 +1294,11 @@ class AgentToolRuntime(BaseRuntime):
                             "reason": "terminal_json_correction", "validation_errors": terminal_errors,
                         })
                         continue
+                    if terminal_errors and ctx.extra.get("shadow_execution"):
+                        message = "Shadow task completion did not satisfy the required JSON result contract"
+                        yield RuntimeEvent.error(message, error_code="output_contract_invalid", recoverable=False)
+                        await run_session.finish("failed", message)
+                        return
                     if isinstance(terminal_candidate, dict) and terminal_candidate.get("completion") == "interaction":
                         if terminal_errors:
                             message = "Invalid task completion declaration"
@@ -2242,6 +2247,8 @@ class AgentToolRuntime(BaseRuntime):
                 result.error = ("Tool result could not be stored; execution outcome must be verified before retry."
                                 if outcome_unknown else
                                 "Tool result could not be stored; retrying this read is safe.")
+                if failure_stage == "source_protocol":
+                    result.error = "Source response did not match the expected data format."
                 result.metadata.update({"error_code": "source_result_protocol_invalid" if failure_stage == "source_protocol" else "tool_result_store_failed",
                                        "failure_stage": failure_stage,
                                        "exception_type": type(exc).__name__,

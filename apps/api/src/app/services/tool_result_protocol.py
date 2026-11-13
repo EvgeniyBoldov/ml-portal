@@ -1,6 +1,8 @@
 """Explicit source adapters and the runtime dataset protocol."""
 from __future__ import annotations
 
+import json
+from decimal import Decimal
 from typing import Any
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
@@ -29,6 +31,18 @@ class ResultPage(BaseModel):
 
 def normalize_result(payload: Any, source_tool: str, arguments: dict[str, Any]) -> ResultPage:
     """Never infer collection paths from arbitrary JSON. Known adapters own them."""
+    # FastMCP represents string-returning Jira tools as structuredContent
+    # {"result": "<JSON>"}. Decode exactly this one published envelope for
+    # known Jira sources; never search inside arbitrary objects or records.
+    if (source_tool in {"jira_search", "jira_search_issues", "jira_get_project_issues", "jira_list_issues", "jira_get_issue"}
+            and isinstance(payload, dict) and set(payload) == {"result"}
+            and isinstance(payload["result"], str)):
+        try:
+            payload = json.loads(payload["result"], parse_float=Decimal)
+        except ValueError as exc:
+            raise ValueError("Jira string result must contain a JSON object") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("Jira string result must contain a JSON object")
     if isinstance(payload, dict) and set(payload) == {"value", "meta"}:
         return ResultPage.model_validate(payload)
     if source_tool == "netbox_search_objects":
