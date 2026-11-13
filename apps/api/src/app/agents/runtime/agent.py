@@ -1573,6 +1573,7 @@ class AgentToolRuntime(BaseRuntime):
                                     RuntimeErrorCode.OPERATION_AMBIGUOUS.value,
                                     RuntimeErrorCode.OPERATION_EXECUTION_FAILED.value,
                                     "tool_result_store_failed",
+                                    "source_result_protocol_invalid",
                                 }
                                 and new_entry.get("retryable") is False
                             ):
@@ -2222,20 +2223,28 @@ class AgentToolRuntime(BaseRuntime):
                 result.data = redacted_result_data
                 stored_result["sql_available"] = any(op.operation_slug == "result.sql" for op in available_operations)
                 result.metadata["stored_result"] = stored_result
-            except Exception:
+            except Exception as exc:
+                from app.services.result_workspace import SourceResultProtocolError
+                failure_stage = "source_protocol" if isinstance(exc, SourceResultProtocolError) else "result_storage"
+                # Log identity and exception classes only: exception messages and
+                # SQL driver tracebacks may contain complete source payloads.
+                logger.error("runtime_tool_result_preparation_failed run_id=%s call_id=%s operation=%s stage=%s error_type=%s cause_type=%s",
+                    root_run_id, operation_call.id, operation_call.tool_name, failure_stage,
+                    type(exc).__name__, type(exc.__cause__).__name__ if exc.__cause__ else None)
                 # A storage failure happens after the source ran. Only calls
                 # whose execution may have changed external state need an
                 # outcome-unknown guard; safe reads remain retryable.
-                outcome_unknown = bool(resolved_operation and (
-                    resolved_operation.side_effects or not resolved_operation.idempotent
-                    or not _is_read_operation_name(operation_call.tool_name)
-                ))
+                outcome_unknown = not bool(resolved_operation and
+                    resolved_operation.side_effects is False and
+                    resolved_operation.idempotent and resolved_operation.risk_level == "safe")
                 result.success = False
                 result.data = None
                 result.error = ("Tool result could not be stored; execution outcome must be verified before retry."
                                 if outcome_unknown else
                                 "Tool result could not be stored; retrying this read is safe.")
-                result.metadata.update({"error_code": "tool_result_store_failed",
+                result.metadata.update({"error_code": "source_result_protocol_invalid" if failure_stage == "source_protocol" else "tool_result_store_failed",
+                                       "failure_stage": failure_stage,
+                                       "exception_type": type(exc).__name__,
                                        "outcome_unknown": outcome_unknown,
                                        "retryable": not outcome_unknown})
                 sources = []

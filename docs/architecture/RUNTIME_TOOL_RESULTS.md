@@ -430,3 +430,18 @@ truncation. These context datasets also remain available through the workspace r
 Legacy declarations are adapted: `report` becomes `answer`, value slots become
 `structured_response`; runtime-issued files/sources come from the observed
 ledger. New responses do not need slots, coverage claims or evidence identifiers.
+
+
+## Result preparation failures
+
+A null or absent MCP `structuredContent` falls back to JSON text extraction;
+non-null values (including false, zero and empty containers) take precedence.
+Source adapter failures use `source_result_protocol_invalid`, separately from
+`tool_result_store_failed` for result persistence/preparation failures. Runtime
+logs the stage, run/call/operation identity and exception/cause classes, without
+source payloads, SQL parameters or raw exception messages. Neither failure
+establishes an empty source result.
+After the source has run, retry safety uses resolved metadata: only operations
+with `side_effects=false`, `idempotent=true` and `risk_level=safe` are safe to
+repeat. Names such as `jira_search` do not override those metadata. Other
+operations retain outcome-unknown protection against repeated side effects.

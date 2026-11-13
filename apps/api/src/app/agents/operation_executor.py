@@ -603,7 +603,7 @@ class DirectOperationExecutor:
             return ToolResult.fail(failure["user_message"], mcp_failure=failure, user_message=failure["user_message"])
 
         structured = payload.get("structuredContent")
-        if "structuredContent" in payload:
+        if structured is not None:
             content = payload.get("content") or []
             extras = _meaningful_mcp_content(content, structured)
             return ToolResult.ok(structured, **({"mcp_content": safe_diagnostic(extras, secrets=secrets)} if extras else {}))
@@ -615,6 +615,9 @@ class DirectOperationExecutor:
                 return ToolResult.ok(json.loads(text))
             except (ValueError, TypeError):
                 pass
+        if "structuredContent" in payload:
+            # Preserve an explicit null when there is no JSON text alternative.
+            return ToolResult.ok(None)
         return ToolResult.ok({"content": text, "raw": payload})
 
     @staticmethod

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from uuid import UUID, uuid4
 
 from pydantic import ValidationError as PydanticValidationError
@@ -25,8 +26,12 @@ from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.runtime_config_service import RuntimeConfigService
 from app.services.runtime_event_logger import (
+    RuntimeEventLogger,
     RuntimeEventJournalFactory, RuntimeLogContext, RuntimeLoggingLevel,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class ShadowAgentService:
@@ -115,27 +120,49 @@ class ShadowAgentService:
                 json.dumps(response.model_dump(), allow_nan=False)
             except (PydanticValidationError, ValueError, TypeError) as exc:
                 raise ExternalServiceError("Shadow agent returned an invalid JSON object") from exc
-            await agent_journal.emit(RuntimeEvent.status(
+            await self._safe_emit(agent_journal, RuntimeEvent.status(
                 "shadow_result_validated", agent_slug=agent.slug,
                 agent_version_id=str(version.id),
-            ), phase=OrchestrationPhase.AGENT)
+            ), OrchestrationPhase.AGENT)
             status = "completed"
             return response
         except asyncio.CancelledError:
             status = "cancelled"
             raise
         except (TaskExecutionError, TaskConfirmationRequired) as exc:
-            await agent_journal.emit(RuntimeEvent.error("Shadow agent execution failed"), phase=OrchestrationPhase.AGENT)
+            await self._safe_emit(agent_journal, RuntimeEvent.error(
+                "Shadow agent execution failed",
+                error_code=getattr(exc, "code", "shadow_confirmation_required"),
+            ), OrchestrationPhase.AGENT)
             raise ExternalServiceError("Shadow agent execution failed") from exc
         except Exception as exc:
-            await agent_journal.emit(RuntimeEvent.error(
+            await self._safe_emit(agent_journal, RuntimeEvent.error(
                 "Shadow invocation failed", exception_type=type(exc).__name__,
-            ), phase=OrchestrationPhase.AGENT)
+                error_code="shadow_result_invalid" if isinstance(exc, ExternalServiceError) else "shadow_invocation_failed",
+            ), OrchestrationPhase.AGENT)
             raise
         finally:
-            await agent_journal.emit(RuntimeEvent.agent_end(
-                agent_execution_id=str(execution_id), parent_entity_type="run",
-                parent_entity_id=str(run_id), agent_slug=agent.slug,
-                task_id=task.task_id, status=status, outcome=status,
-            ), phase=OrchestrationPhase.AGENT)
-            await journal.emit(RuntimeEvent.run_end(run_id=str(run_id), status=status), phase=OrchestrationPhase.PIPELINE)
+            async def finish_journal() -> None:
+                await self._safe_emit(agent_journal, RuntimeEvent.agent_end(
+                    agent_execution_id=str(execution_id), parent_entity_type="run",
+                    parent_entity_id=str(run_id), agent_slug=agent.slug,
+                    task_id=task.task_id, status=status, outcome=status,
+                ), OrchestrationPhase.AGENT)
+                await self._safe_emit(journal, RuntimeEvent.run_end(
+                    run_id=str(run_id), status=status), OrchestrationPhase.PIPELINE)
+
+            terminal_write = asyncio.create_task(finish_journal())
+            try:
+                await asyncio.shield(terminal_write)
+            except asyncio.CancelledError:
+                await asyncio.shield(terminal_write)
+                raise
+
+    @staticmethod
+    async def _safe_emit(journal: RuntimeEventLogger, event: RuntimeEvent, phase: OrchestrationPhase) -> None:
+        """Journal availability must not replace an invocation result or error."""
+        try:
+            await journal.emit(event, phase=phase)
+        except Exception as exc:
+            logger.error("shadow_journal_write_failed event_type=%s error_type=%s",
+                         event.type.value, type(exc).__name__)

@@ -51,11 +51,15 @@ def page_key(arguments: dict[str, Any]) -> str:
     return hashlib.sha256(json.dumps(arguments, sort_keys=True, separators=(",", ":"), default=str).encode()).hexdigest()
 
 
+class SourceResultProtocolError(ToolResultStoreError):
+    """Source response did not satisfy its explicit adapter contract."""
+
+
 def normalized_page(payload: Any, source_tool: str, arguments: dict[str, Any]) -> ResultPage:
     try:
         return normalize_result(payload, source_tool, arguments)
     except (ValueError, TypeError) as exc:
-        raise ToolResultStoreError(f"Source result protocol is invalid: {exc}") from exc
+        raise SourceResultProtocolError("Source result protocol is invalid") from exc
 
 
 def _json_pointer(value: Any, pointer: str) -> Any:

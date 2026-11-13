@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 
 
 class RuntimeErrorCode(str, Enum):
+    SOURCE_RESULT_PROTOCOL_INVALID = "source_result_protocol_invalid"
+    TOOL_RESULT_STORE_FAILED = "tool_result_store_failed"
     OPERATION_UNAVAILABLE = "operation_unavailable"
     OPERATION_AMBIGUOUS = "operation_ambiguous"
     OPERATION_INVALID_ARGS = "operation_invalid_args"

@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Annotated, Any, Dict, List, Literal, Optional, Union
 from uuid import UUID
 
-from pydantic import BaseModel, Field, GetJsonSchemaHandler, field_validator, model_validator
+from pydantic import BaseModel, JsonValue, Field, GetJsonSchemaHandler, field_validator, model_validator
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
@@ -723,13 +723,19 @@ def parse_task_completion_declaration(content: str) -> TaskCompletionDeclaration
 _NONBLANK_STRING_PATTERN = r"^[\s\S]*\S[\s\S]*$"
 
 
-def task_completion_json_schema(request: TaskRequest, *, provider_compatible: bool = False) -> Dict[str, Any]:
+class ShadowCompletionDeclaration(TaskCompletionDeclaration):
+    """Machine invocation requires a JSON object, including an empty object."""
+    structured_response: Dict[str, JsonValue] = Field(...)
+    model_config = {**TaskCompletionDeclaration.model_config, "allow_inf_nan": False}
+
+
+def task_completion_json_schema(request: TaskRequest, *, shadow: bool = False, provider_compatible: bool = False) -> Dict[str, Any]:
     """Pydantic envelope independent of requested data schemas."""
-    schema = TaskCompletionDeclaration.model_json_schema(by_alias=True)
+    schema = (ShadowCompletionDeclaration if shadow else TaskCompletionDeclaration).model_json_schema(by_alias=True)
     for key in ("outputs", "coverage", "limitation"):
         schema["properties"].pop(key, None)
     schema["$defs"] = {key: val for key, val in schema.get("$defs", {}).items()
-                       if key in {"AgentExecutionCompletion", "DiscoveredNeed", "InteractionQuestion"}}
+                       if key in {"AgentExecutionCompletion", "DiscoveredNeed", "InteractionQuestion", "JsonValue"}}
     return _terminal_provider_schema(schema) if provider_compatible else schema
 
 

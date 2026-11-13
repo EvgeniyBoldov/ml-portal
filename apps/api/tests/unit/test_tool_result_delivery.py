@@ -226,3 +226,37 @@ async def test_document_listing_commits_returned_file_references(monkeypatch):
     assert result.data['documents'][0]['artifact_id'] == str(reference_id)
     register.assert_awaited_once()
     session.commit.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("unsafe", [False, True])
+@pytest.mark.parametrize("protocol", [False, True])
+async def test_result_failure_preserves_stage_and_classifies_by_metadata(monkeypatch, caplog, unsafe, protocol):
+    from app.services.result_workspace import SourceResultProtocolError
+    failure = SourceResultProtocolError("private source body") if protocol else RuntimeError("private source body")
+    save = AsyncMock(side_effect=failure)
+    monkeypatch.setattr("app.services.result_workspace.ResultWorkspace.save_source", save)
+    runtime = AgentToolRuntime(Mock())
+    runtime.tools.execute = AsyncMock(return_value=(ToolResult.ok({"issues": []}), []))
+    operation = SimpleNamespace(result_delivery="store", discovered_tool_id=None,
+        observed_data_schema=None, source="mcp", side_effects=unsafe, idempotent=not unsafe,
+        risk_level="write" if unsafe else "safe", target=SimpleNamespace(mcp_tool_name="jira_search"))
+    runtime.tools._find_operation = Mock(return_value=(operation, None))
+    session = SimpleNamespace(run_id=uuid4(), record_event=AsyncMock(), finish=AsyncMock())
+    outputs = []
+    events = [event async for event in runtime._execute_single_operation_call(
+        operation_call=ToolCall(id="jira-call", tool_name="jira_search", arguments={}),
+        agent_slug="workflow", agent_execution_id="execution", llm_call_id="llm",
+        ctx=ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={"runtime_root_run_id": str(uuid4())}),
+        available_operations=[], policy=PolicyLimits(), run_session=session,
+        all_operation_outputs=outputs, all_sources=[], loop_state=AgentLoopState(),
+        operation_results_for_context=[], operation_calls_total_ref=[0],
+        remaining_wall_time_ms=60000, result_context_budget_tokens=1000, result_context_model=None,
+    )]
+    assert not outputs[0]["success"]
+    assert outputs[0]["retryable"] is not unsafe
+    event = next(event for event in events if event.type.value == "tool_result")
+    assert event.data["outcome_unknown"] is unsafe
+    assert event.data["error_code"] == ("source_result_protocol_invalid" if protocol else "tool_result_store_failed")
+    assert ("stage=source_protocol" if protocol else "stage=result_storage") in caplog.text
+    assert "private source body" not in caplog.text

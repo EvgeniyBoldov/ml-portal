@@ -154,7 +154,8 @@ async def test_shadow_executor_disables_operation_discovery():
 
 
 @pytest.mark.asyncio
-async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monkeypatch):
+@pytest.mark.parametrize("repair", [False, True])
+async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monkeypatch, repair):
     """Exercise real executor + agent runtime, replacing only IO boundaries."""
     from app.agents.execution_preflight import ExecutionRequest
     from app.agents.runtime.policy import GenerationParams, PolicyLimits
@@ -177,6 +178,11 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
     invocation.service.session.scalar.return_value = "full"
     client = SimpleNamespace(chat=AsyncMock(return_value={"choices": [{"message": {"content":
         '{"completion":"fulfilled","structured_response":{"summary":"ok"},"needs":[]}'}}]}))
+    if repair:
+        client.chat.side_effect = [
+            {"choices": [{"message": {"content": '{"completion":"fulfilled","interaction":null}'}}]},
+            client.chat.return_value,
+        ]
     executor = AgentExecutor(session=invocation.service.session, llm_client=client)
     invocation.service.executor = executor
     invocation.version.compiled_prompt = "Summarize the supplied text."
@@ -189,12 +195,13 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
 
     result = await invoke(invocation)
     assert result.model_dump() == {"agent": "shadow-a", "result": {"summary": "ok"}}
-    client.chat.assert_awaited_once()
+    assert client.chat.await_count == (2 if repair else 1)
     kwargs = client.chat.call_args.kwargs
     assert "tools" not in kwargs["params"]
     assert kwargs["params"]["response_format"]["type"] == "json_schema"
-    assert "x" * 9000 in kwargs["messages"][-1]["content"]
+    assert any("x" * 9000 in message.get("content", "") for message in kwargs["messages"])
     assert executor.preflight.prepare.call_args.kwargs["enable_operations"] is False
+    assert sum(event.type.value == "agent_start" for event in observed) == 1
     endings = [event for event in observed if event.type.value == "agent_end"]
     assert len(endings) == 1
     assert endings[0].data["status"] == "completed"
@@ -213,3 +220,36 @@ async def test_explicit_shadow_selection_cannot_bypass_planner_catalog(monkeypat
     with pytest.raises(AgentUnavailableError, match="Shadow agents"):
         await pipeline._resolve_available_agents_for_planner(
             platform=PlatformSnapshot(), explicit_slug="shadow-a", user_id=uuid4(), tenant_id=uuid4())
+
+
+@pytest.mark.parametrize("result", [None, [], "text", {"bad": float("inf")}])
+def test_shadow_terminal_requires_json_object_before_attempt_ends(result):
+    import json
+    from app.runtime.orchestrator_contracts import task_completion_json_schema
+    from jsonschema import Draft202012Validator
+    task = TaskRequest(task_id="t", executor="shadow", intent="invoke", instructions="Do it")
+    raw = json.dumps({"completion": "fulfilled", "structured_response": result})
+    assert AgentExecutor._terminal_validation_errors(raw, task=task, verified={}, shadow=True)
+    schema = task_completion_json_schema(task, shadow=True)
+    if not isinstance(result, dict):
+        assert not Draft202012Validator(schema).is_valid(json.loads(raw))
+    valid = {"completion": "fulfilled", "structured_response": {}}
+    Draft202012Validator(schema).validate(valid)
+    assert AgentExecutor._terminal_validation_errors(json.dumps(valid), task=task, verified={}, shadow=True) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_event", ["error", "agent_end", "run_end"])
+async def test_shadow_journal_failure_preserves_original_error_and_attempts_run_end(invocation, failed_event):
+    original = TaskExecutionError(code="original_failure", message="original", retryable=False)
+    invocation.service.executor.execute_attempt.side_effect = original
+    async def emit(event, **kwargs):
+        if event.type.value == failed_event:
+            raise RuntimeError("journal unavailable")
+    invocation.journal.emit.side_effect = emit
+    with pytest.raises(ExternalServiceError) as caught:
+        await invoke(invocation)
+    assert caught.value.__cause__ is original
+    events = [call.args[0].type.value for call in invocation.journal.emit.await_args_list]
+    assert events.count("agent_start") == 1
+    assert events[-1] == "run_end"

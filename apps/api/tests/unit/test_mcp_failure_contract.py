@@ -220,3 +220,24 @@ async def test_initialize_jsonrpc_failure_preserves_code_data_and_stage():
 
 async def _async_value(value):
     return value
+
+
+@pytest.mark.parametrize("value", [{"issues": []}, [], False, 0, ""])
+def test_non_null_mcp_structured_values_take_precedence(value):
+    result = DirectOperationExecutor._tool_result_from_payload({
+        "structuredContent": value, "content": [{"type": "text", "text": '{"other": true}'}],
+    })
+    assert result.success and result.data == value
+
+
+def test_null_mcp_structured_content_falls_back_to_json_text():
+    result = DirectOperationExecutor._tool_result_from_payload({
+        "structuredContent": None,
+        "content": [{"type": "text", "text": '{"issues": [], "total": 0}'}],
+    })
+    assert result.success and result.data == {"issues": [], "total": 0}
+
+
+def test_null_mcp_value_without_json_text_remains_null():
+    result = DirectOperationExecutor._tool_result_from_payload({"structuredContent": None, "content": []})
+    assert result.success and result.data is None

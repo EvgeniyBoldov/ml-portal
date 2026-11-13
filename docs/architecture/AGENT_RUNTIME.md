@@ -109,7 +109,11 @@ Versions requiring fresh retrieval are incompatible with this LLM-only mode.
 
 The agent uses the existing completion protocol internally. The adapter accepts
 only `fulfilled` without needs and a JSON-object `structured_response`, projects
-that object to `result`, and validates it before completing the run. Runtime
+that object to `result`, and validates it before completing the run. A Pydantic
+`ShadowCompletionDeclaration` specialization requires that object in the native
+provider schema and in the agent's bounded terminal correction loop, so a bare
+`fulfilled` declaration can be corrected before the attempt ends. Empty objects
+are valid; non-object and non-finite results are rejected. Runtime
 limits, provider error handling and bounded protocol retries remain in effect;
 a correct response normally requires one LLM call. No additional agents resolve
 needs in this flow. Invalid results and execution failures return HTTP 502;
@@ -120,7 +124,11 @@ platform's existing JSON error envelope.
 Events use the existing canonical journal with `origin=shadow`, real run and
 agent execution UUIDs, correlation id, user/tenant identity and nullable chat id.
 The agent's logging level applies; agent/run completion occurs after output
-validation. Shadow executions appear in the existing admin agent-run inspector.
+validation. ShadowAgentService owns both agent lifecycle boundaries; the executor
+does not duplicate them. Failure diagnostics and terminal writes are best effort:
+each terminal event is attempted independently, with shielded cancellation cleanup.
+Journal errors preserve the original invocation outcome and are logged without
+source content. Shadow executions appear in the existing admin agent-run inspector.
 
 ## Архитектурное правило
 

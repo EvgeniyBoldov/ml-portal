@@ -549,7 +549,7 @@ class AgentExecutor:
             "type": "json_schema",
             "json_schema": {
                 "name": "TaskCompletionDeclaration",
-                "schema": task_completion_json_schema(task, provider_compatible=True),
+                "schema": task_completion_json_schema(task, shadow=bool(ctx.extra.get("shadow_execution")), provider_compatible=True),
                 "strict": True,
             },
         }
@@ -607,7 +607,8 @@ class AgentExecutor:
                 task=task, ledger_entries=task_ledger_entries(),
                 sources=sub_sources, verified_artifacts=artifacts,
             )
-            return self._terminal_validation_errors(raw, task=task, verified=verified)
+            return self._terminal_validation_errors(raw, task=task, verified=verified,
+                shadow=bool(ctx.extra.get("shadow_execution")))
 
         # Apply after prompt rendering so version/sandbox overrides cannot
         # replace the mandatory terminal task contract.
@@ -878,7 +879,7 @@ class AgentExecutor:
                     progress_level=level,
                 )
                 # The graph emits this lifecycle event before executor start.
-                if not is_chat:
+                if not is_chat and not ctx.extra.get("shadow_execution"):
                     await logger.emit(RuntimeEvent.agent_start(
                         agent_execution_id=lifecycle_agent_execution_id,
                         parent_entity_type=parent_type,
@@ -1313,11 +1314,15 @@ class AgentExecutor:
         return "\n\n".join(part for part in [str(prompt or "").strip(), build_task_completion_prompt(task)] if part)
 
     @staticmethod
-    def _terminal_validation_errors(raw: str, *, task: TaskRequest, verified: Dict[str, Any]) -> list[str]:
+    def _terminal_validation_errors(raw: str, *, task: TaskRequest, verified: Dict[str, Any], shadow: bool = False) -> list[str]:
         """Use the final reducer inside the agent loop, before ending an attempt."""
         from pydantic import ValidationError
         try:
             declaration = parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
+            if shadow:
+                from app.runtime.orchestrator_contracts import ShadowCompletionDeclaration
+                ShadowCompletionDeclaration.model_validate(declaration.model_dump(by_alias=True))
+                json.dumps(declaration.structured_response, allow_nan=False)
         except ValidationError as exc:
             errors = []
             for error in exc.errors(include_input=False)[:10]:
