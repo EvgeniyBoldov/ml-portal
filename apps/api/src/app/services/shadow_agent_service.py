@@ -11,18 +11,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import RuntimeDependencies, ToolContext
 from app.core.db import get_session_factory
-from app.core.exceptions import ConflictError, ExternalServiceError, ForbiddenError
+from app.core.exceptions import ConflictError, ExternalServiceError, ForbiddenError, ValidationError
 from app.core.http.clients import LLMClientProtocol
 from app.models.agent import Agent, AgentType
 from app.models.agent_version import AgentVersion, AgentVersionStatus
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.events import OrchestrationPhase, RuntimeEvent
 from app.runtime.orchestrator_contracts import (
-    ResponseSpec, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
+    FreshnessPolicy, ResponseSpec, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
 )
 from app.runtime.turn_state import RuntimeTurnState
 from app.schemas.shadow_agents import ShadowAgentRequest, ShadowAgentResponse
 from app.services.agent_service import AgentService
+from app.services.memory_scope_preferences_service import MemoryScopePreferencesService
+from app.services.shadow_execution_guard_service import ShadowExecutionGuardService
+from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
+from app.runtime.memory.execution_context import memory_execution_context
+from app.runtime.memory.effective_scope import EffectiveScopeContext
 from app.services.permission_service import PermissionService
 from app.services.runtime_config_service import RuntimeConfigService
 from app.services.runtime_event_logger import (
@@ -52,15 +57,15 @@ class ShadowAgentService:
         version = await agents.resolve_published_version(agent.slug, tenant_id=tenant_id)
         if version.status != AgentVersionStatus.PUBLISHED.value:
             raise ConflictError("Shadow invocation requires a published agent version")
-        if version.requires_fresh_retrieval:
-            raise ConflictError("Shadow LLM-only invocation cannot require fresh retrieval")
         return agent, version
 
     async def invoke(
         self, request: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID,
         scopes: list[str], request_id: str,
+        invocation_id: UUID | None = None, claim_id: UUID | None = None,
     ) -> ShadowAgentResponse:
         agent, version = await self.validate(request, user_id=user_id, tenant_id=tenant_id)
+        scope_context = await self.resolve_scope_context(request, user_id=user_id, tenant_id=tenant_id)
         platform_config = await RuntimeConfigService(self.session).get_pipeline_config()
         run_id, execution_id = uuid4(), uuid4()
         level = RuntimeLoggingLevel.parse(agent.logging_level)
@@ -77,18 +82,31 @@ class ShadowAgentService:
             extra={"shadow_execution": True, "runtime_root_run_id": str(run_id),
                    "runtime_event_logger": journal},
         )
+        ctx.extra["memory_search_scope_keys"] = scope_context.keys
+        ctx.extra["memory_execution_context"] = memory_execution_context(scope_context.keys)
+        guard = ShadowExecutionGuardService(
+            session_factory, run_id=run_id, claim_id=claim_id or execution_id, invocation_id=invocation_id,
+        )
+        ctx.extra["runtime_execution_guard_service"] = guard
         ctx.set_runtime_deps(RuntimeDependencies(session_factory=session_factory))
         task = TaskRequest(
             task_id=str(uuid4()), executor=agent.slug, intent="Shadow invocation",
             instructions=("Perform your configured mission using the supplied task inputs. "
-                          "Return the result as a JSON object in structured_response. "
+                          "Follow the output format defined in your configured mission exactly. "
+                          "Put the mission result in structured_response: JSON data stays JSON; "
+                          "a textual result is a JSON string preserving its content and formatting. "
+                          "The completion envelope is internal and is not part of the mission result. "
                           "Represent unknown values as JSON null, not the string None. "
                           "If your configured mission defines a fallback for insufficient input, "
                           "return that fallback in structured_response with completion=fulfilled: "
                           "applying the mission's fallback is a completed task. "
                           "Use unfulfillable only when neither the requested result nor a mission-defined fallback can be produced. "
-                          "No tools, conversation history or memory are available."),
-            inputs=request.data, response_spec=ResponseSpec(mode="structured"),
+                          "Use the available tools and sources when needed. No chat history is supplied. "
+                          "User interactions are unavailable in this API; do not bypass operation confirmation requirements."),
+            inputs=request.data, scope_context=scope_context.model_payload(),
+            freshness_policy=(FreshnessPolicy.REQUIRE_RETRIEVAL if version.requires_fresh_retrieval
+                              else FreshnessPolicy.ALLOW_MEMORY),
+            response_spec=ResponseSpec(mode="structured"),
         )
         state = RuntimeTurnState(
             run_id=run_id, user_id=user_id, tenant_id=tenant_id, goal=task.instructions,
@@ -108,8 +126,10 @@ class ShadowAgentService:
         await agent_journal.emit(RuntimeEvent.agent_start(
             agent_execution_id=str(execution_id), parent_entity_type="run",
             parent_entity_id=str(run_id), agent_slug=agent.slug, task_id=task.task_id,
+            task_title=version.mission, agent_version_id=str(version.id),
         ), phase=OrchestrationPhase.AGENT)
         try:
+            await guard.start()
             receipt = await self.executor.execute_attempt(
                 request=task, runtime_state=state, messages=[], ctx=ctx,
                 user_id=user_id, tenant_id=tenant_id, platform_config=platform_config,
@@ -124,7 +144,7 @@ class ShadowAgentService:
                 # Python's JSON parser accepts NaN/Infinity; the public contract does not.
                 json.dumps(response.model_dump(), allow_nan=False)
             except (PydanticValidationError, ValueError, TypeError) as exc:
-                raise ExternalServiceError("Shadow agent returned an invalid JSON object") from exc
+                raise ExternalServiceError("Shadow agent returned an invalid JSON value") from exc
             await self._safe_emit(agent_journal, RuntimeEvent.status(
                 "shadow_result_validated", agent_slug=agent.slug,
                 agent_version_id=str(version.id),
@@ -134,7 +154,7 @@ class ShadowAgentService:
         except asyncio.CancelledError:
             status = "cancelled"
             raise
-        except (TaskExecutionError, TaskConfirmationRequired) as exc:
+        except (TaskExecutionError, TaskConfirmationRequired, RuntimeExecutionGuardError) as exc:
             details = exc.details if isinstance(exc, TaskExecutionError) else {}
             diagnostics = {key: details[key] for key in (
                 "status_code", "provider_type", "provider_code", "provider_message", "provider_param",
@@ -158,6 +178,10 @@ class ShadowAgentService:
             raise
         finally:
             async def finish_journal() -> None:
+                try:
+                    await guard.finish()
+                except Exception:
+                    logger.exception("shadow_guard_finish_failed")
                 await self._safe_emit(agent_journal, RuntimeEvent.agent_end(
                     agent_execution_id=str(execution_id), parent_entity_type="run",
                     parent_entity_id=str(run_id), agent_slug=agent.slug,
@@ -172,6 +196,17 @@ class ShadowAgentService:
             except asyncio.CancelledError:
                 await asyncio.shield(terminal_write)
                 raise
+
+    async def resolve_scope_context(self, request: ShadowAgentRequest, *, user_id: UUID, tenant_id: UUID) -> EffectiveScopeContext:
+        preferences = MemoryScopePreferencesService(self.session)
+        context = {}
+        if request.scope_keys is not None:
+            try:
+                keys = await preferences.validate_keys(request.scope_keys)
+            except ValueError as exc:
+                raise ValidationError(str(exc)) from exc
+            context = {"focus": {"scope_mode": "replace", "scope_keys": keys}}
+        return await preferences.resolve_context(user_id=user_id, tenant_id=tenant_id, chat_context=context)
 
     @staticmethod
     async def _safe_emit(journal: RuntimeEventLogger, event: RuntimeEvent, phase: OrchestrationPhase) -> None:

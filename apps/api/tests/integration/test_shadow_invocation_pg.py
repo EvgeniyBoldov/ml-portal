@@ -29,14 +29,14 @@ async def test_delivery_owner_ack_and_task_states(monkeypatch):
                     id uuid primary key, user_id uuid not null, tenant_id uuid not null,
                     agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
                     request_id varchar(255) not null, idempotency_key varchar(255),
-                    request_fingerprint varchar(64), status varchar(20) not null,
+                    request_fingerprint varchar(64), scope_keys jsonb, status varchar(20) not null,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
                     created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
                     UNIQUE (user_id, tenant_id, idempotency_key)
                 ) ON COMMIT DROP'''))
                 async with AsyncSession(bind=connection, expire_on_commit=False, join_transaction_mode="create_savepoint") as session:
                     owner, other, tenant = uuid4(), uuid4(), uuid4()
-                    agent = SimpleNamespace(validate=AsyncMock())
+                    agent = SimpleNamespace(resolve_scope_context=AsyncMock(), validate=AsyncMock())
                     service = ShadowInvocationService(session, agent)
                     task_id = await service.enqueue(ShadowAgentRequest(agent="test", data={}), user_id=owner,
                                                     tenant_id=tenant, scopes=[], request_id="test")
@@ -77,7 +77,7 @@ async def test_read_scope_keeps_owned_result_across_active_tenant_order_and_deni
                     id uuid primary key, user_id uuid not null, tenant_id uuid not null,
                     agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
                     request_id varchar(255) not null, idempotency_key varchar(255),
-                    request_fingerprint varchar(64), status varchar(20) not null,
+                    request_fingerprint varchar(64), scope_keys jsonb, status varchar(20) not null,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
                     created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
                     UNIQUE (user_id, tenant_id, idempotency_key)
@@ -119,7 +119,8 @@ async def test_read_scope_keeps_owned_result_across_active_tenant_order_and_deni
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("fails", [False, True])
-async def test_worker_persists_completion_or_failure(monkeypatch, fails):
+@pytest.mark.parametrize("output", [{"ok": True}, "text", [], None, False])
+async def test_worker_persists_completion_or_failure(monkeypatch, fails, output):
     from contextlib import asynccontextmanager
     from app.models.user import Users
     from app.workers import tasks_shadow_invocations as worker
@@ -133,7 +134,7 @@ async def test_worker_persists_completion_or_failure(monkeypatch, fails):
                     id uuid primary key, user_id uuid not null, tenant_id uuid not null,
                     agent varchar(255) not null, data jsonb not null, scopes jsonb not null,
                     request_id varchar(255) not null, idempotency_key varchar(255),
-                    request_fingerprint varchar(64), status varchar(20) not null,
+                    request_fingerprint varchar(64), scope_keys jsonb, status varchar(20) not null,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
                     created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
                     UNIQUE (user_id, tenant_id, idempotency_key)
@@ -153,7 +154,7 @@ async def test_worker_persists_completion_or_failure(monkeypatch, fails):
                     monkeypatch.setattr(worker, "get_worker_session", session_context)
                     monkeypatch.setattr(worker, "ApiTokensRepository", lambda _: SimpleNamespace(active_tenant_ids=AsyncMock(return_value=[str(tenant)])))
                     invoke = AsyncMock(side_effect=RuntimeError("private detail") if fails else None,
-                                       return_value=SimpleNamespace(result={"ok": True}))
+                                       return_value=SimpleNamespace(result=output))
                     monkeypatch.setattr(worker, "ShadowAgentService", lambda *_: SimpleNamespace(invoke=invoke))
                     monkeypatch.setattr(worker, "get_llm_client", lambda: None)
                     monkeypatch.setattr(worker, "reset_llm_client", lambda: None)
@@ -162,7 +163,7 @@ async def test_worker_persists_completion_or_failure(monkeypatch, fails):
                     session.expire_all()
                     row = await session.get(ShadowInvocation, invocation_id)
                     assert row.status == ("failed" if fails else "completed")
-                    assert row.result == (None if fails else {"ok": True})
+                    assert row.result == (None if fails else output)
                     assert row.error == ("Shadow agent execution failed" if fails else None)
                     await worker._execute(str(invocation_id))
                     assert invoke.await_count == 1

@@ -324,8 +324,6 @@ class AgentExecutor:
             prepare_kwargs["sandbox_tool_overrides"] = SandboxToolOverrides.from_runtime_overrides(
                 runtime_overrides
             )
-        if ctx.extra.get("shadow_execution"):
-            prepare_kwargs["enable_operations"] = False
         session_factory = ctx.get_runtime_deps().session_factory
         if session_factory is None:
             return await asyncio.wait_for(
@@ -522,7 +520,10 @@ class AgentExecutor:
             ctx.extra["runtime_execution_guard_required"] = True
             session_factory = deps.session_factory
             attempt_number = ctx.extra.get("runtime_task_attempt_number")
-            if session_factory is not None and isinstance(attempt_number, int) and attempt_number > 0:
+            if ctx.extra.get("shadow_execution"):
+                if ctx.extra.get("runtime_execution_guard_service") is None:
+                    raise TaskExecutionError(code="execution_guard_unavailable", message="Shadow execution guard is unavailable", retryable=False)
+            elif session_factory is not None and isinstance(attempt_number, int) and attempt_number > 0:
                 try:
                     ctx.extra["runtime_execution_guard_service"] = RuntimeExecutionGuardService(
                         session_factory, root_run_id=UUID(str(root_run_id)), task_id=task.task_id,
@@ -1328,7 +1329,7 @@ class AgentExecutor:
             declaration = parse_task_completion_declaration(AgentExecutor._unwrap_terminal_json_fence(raw))
             if shadow:
                 from app.runtime.orchestrator_contracts import ShadowCompletionDeclaration
-                ShadowCompletionDeclaration.model_validate(declaration.model_dump(by_alias=True))
+                ShadowCompletionDeclaration.model_validate_json(AgentExecutor._unwrap_terminal_json_fence(raw))
                 json.dumps(declaration.structured_response, allow_nan=False)
         except ValidationError as exc:
             errors = []

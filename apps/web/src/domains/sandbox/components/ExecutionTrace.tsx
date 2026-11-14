@@ -74,10 +74,10 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 function statusClass(status: string): string {
-  if (status === 'completed' || status === 'complete') return styles.executorComplete;
-  if (status === 'failed' || status === 'fail' || status === 'error' || status === 'unfulfillable' || status === 'stalled') return styles.executorFailed;
-  if (status === 'waiting' || status === 'waiting_input') return styles.executorWaiting;
-  if (status === 'paused') return styles.executorWaiting;
+  const normalized = normalizeTraceStatus(status);
+  if (normalized === 'completed') return styles.executorComplete;
+  if (['failed', 'unfulfillable', 'stalled', 'aborted'].includes(normalized)) return styles.executorFailed;
+  if (['waiting_input', 'waiting_confirmation', 'paused'].includes(normalized)) return styles.executorWaiting;
   return styles.executorRunning;
 }
 

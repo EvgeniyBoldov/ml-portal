@@ -37,7 +37,7 @@ async def isolated_schema():
                     id uuid PRIMARY KEY, user_id uuid NOT NULL, tenant_id uuid NOT NULL,
                     agent varchar(255) NOT NULL, data jsonb NOT NULL, scopes jsonb NOT NULL,
                     request_id varchar(255) NOT NULL, idempotency_key varchar(255),
-                    request_fingerprint varchar(64), status varchar(20) NOT NULL,
+                    request_fingerprint varchar(64), scope_keys jsonb, status varchar(20) NOT NULL,
                     result jsonb, error varchar(255), claim_id uuid, delivered_at timestamptz,
                     created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now(),
                     CONSTRAINT uq_shadow_invocations_user_tenant_idempotency
@@ -86,7 +86,7 @@ async def test_postgres_same_key_concurrent_replay_conflict_and_owner_tenant_sco
     async with isolated_schema() as engine:
         factory, _ = _session_context(engine)
         owner, other, tenant, other_tenant = uuid4(), uuid4(), uuid4(), uuid4()
-        agent = SimpleNamespace(validate=AsyncMock())
+        agent = SimpleNamespace(validate=AsyncMock(), resolve_scope_context=AsyncMock())
         dispatch = Mock()
         monkeypatch.setattr(worker.execute_shadow_invocation, "delay", dispatch)
         payload = ShadowAgentRequest(agent="shadow-a", data={"value": 1}, **{"async": True})

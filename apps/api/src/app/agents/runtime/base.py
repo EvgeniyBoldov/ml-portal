@@ -105,3 +105,20 @@ class BaseRuntime(ABC):
             content = m.get("content", "")[:200]
             parts.append(f"{role}: {content}")
         return "\n".join(parts)
+
+    @staticmethod
+    def _task_title_from_messages(messages: List[Dict[str, Any]], max_length: int = 240) -> Optional[str]:
+        """Return a compact title from the latest user request for the run journal."""
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, list):
+                content = " ".join(
+                    str(part.get("text") or "") for part in content
+                    if isinstance(part, dict) and part.get("type") == "text"
+                )
+            title = " ".join(str(content or "").split())
+            if title:
+                return title[:max_length]
+        return None

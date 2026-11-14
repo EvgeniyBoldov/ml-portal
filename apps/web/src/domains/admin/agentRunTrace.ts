@@ -11,9 +11,16 @@ export function agentRunTraceEvents(run: AgentRunDetail): RuntimeJournalEvent[] 
   const events = normalizeAgentRunEvents(run.events);
   const agentStart = events.find((event) => event.event_type === 'agent_start' && event.entity_type === 'agent_execution');
   if (!agentStart?.entity_id) return events;
+  const agentEnd = [...events].reverse().find((event) => (
+    event.event_type === 'agent_end'
+      && event.entity_type === 'agent_execution'
+      && event.entity_id === agentStart.entity_id
+  ));
   const stepId = agentStart.parent_entity_id || `agent-run-step-${run.agent_execution_id}`;
   const iterationId = `agent-run-iteration-${run.agent_execution_id}`;
   const occurredAt = agentStart.occurred_at;
+  const lastSequence = events.reduce((max, event) => Math.max(max, event.sequence), 0);
+  const finalStatus = typeof agentEnd?.payload.status === 'string' ? agentEnd.payload.status : null;
   const taskTitle = typeof agentStart.payload.task_title === 'string' ? agentStart.payload.task_title : 'Выполнение агента';
   const synthetic: RuntimeJournalEvent[] = [
     {
@@ -31,11 +38,27 @@ export function agentRunTraceEvents(run: AgentRunDetail): RuntimeJournalEvent[] 
       payload: { entity_type: 'step', entity_id: stepId, parent_entity_type: 'planner_iteration', parent_entity_id: iterationId, title: taskTitle, objective: taskTitle },
     },
   ];
+  const terminalAncestors: RuntimeJournalEvent[] = agentEnd && finalStatus ? [
+    {
+      id: `synthetic-step-end-${run.agent_execution_id}`, run_id: run.run_id, sequence: lastSequence + 1,
+      event_type: 'step_end', occurred_at: agentEnd.occurred_at,
+      entity_type: 'step', entity_id: stepId, parent_entity_type: 'planner_iteration', parent_entity_id: iterationId,
+      caused_by_event_id: agentEnd.id, duration_ms: agentEnd.duration_ms,
+      payload: { entity_type: 'step', entity_id: stepId, parent_entity_type: 'planner_iteration', parent_entity_id: iterationId, status: finalStatus },
+    },
+    {
+      id: `synthetic-iteration-end-${run.agent_execution_id}`, run_id: run.run_id, sequence: lastSequence + 2,
+      event_type: 'planner_iteration_end', occurred_at: agentEnd.occurred_at,
+      entity_type: 'planner_iteration', entity_id: iterationId, parent_entity_type: null, parent_entity_id: null,
+      caused_by_event_id: agentEnd.id, duration_ms: agentEnd.duration_ms,
+      payload: { entity_type: 'planner_iteration', entity_id: iterationId, status: finalStatus },
+    },
+  ] : [];
   return [...synthetic, ...events.map((event) => (
     event.entity_type === 'agent_execution' && event.entity_id === agentStart.entity_id
       ? { ...event, parent_entity_type: 'step', parent_entity_id: stepId, payload: { ...event.payload, parent_entity_type: 'step', parent_entity_id: stepId } }
       : event
-  ))];
+  )), ...terminalAncestors];
 }
 
 /** Convert the API's optional nullable fields to the canonical journal shape. */

@@ -191,3 +191,4 @@ __all__ = [
 from .long_memory_document import LongMemoryDocumentOperation
 from .runtime_context import ChatArtifactRepresentation, RuntimeRunContext
 from .shadow_invocation import ShadowInvocation
+from .shadow_execution_guard import ShadowExecutionGuard

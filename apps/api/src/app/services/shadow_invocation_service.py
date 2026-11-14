@@ -27,6 +27,7 @@ class ShadowInvocationService:
         if normalized_key is not None and (not normalized_key or len(normalized_key) > 255):
             raise ValueError("Idempotency-Key must be nonblank and at most 255 characters")
         await self.agent_service.validate(payload, user_id=user_id, tenant_id=tenant_id)
+        await self.agent_service.resolve_scope_context(payload, user_id=user_id, tenant_id=tenant_id)
         fingerprint = self._request_fingerprint(payload) if normalized_key is not None else None
         if normalized_key is not None:
             existing = await self.repo.by_idempotency_key(user_id=user_id, tenant_id=tenant_id,
@@ -35,7 +36,7 @@ class ShadowInvocationService:
                 self._validate_replay(existing, fingerprint)
                 return existing.id
         row = ShadowInvocation(user_id=user_id, tenant_id=tenant_id, agent=payload.agent,
-                               data=payload.data, scopes=scopes, request_id=request_id, status="queued",
+                               data=payload.data, scope_keys=payload.scope_keys, scopes=scopes, request_id=request_id, status="queued",
                                idempotency_key=normalized_key, request_fingerprint=fingerprint)
         try:
             await self.repo.add(row)
@@ -61,7 +62,7 @@ class ShadowInvocationService:
 
     @staticmethod
     def _request_fingerprint(payload: ShadowAgentRequest) -> str:
-        normalized = json.dumps({"agent": payload.agent, "data": payload.data},
+        normalized = json.dumps({"agent": payload.agent, "data": payload.data, **({"scope_keys": payload.scope_keys} if payload.scope_keys is not None else {})},
                                 ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
         return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 

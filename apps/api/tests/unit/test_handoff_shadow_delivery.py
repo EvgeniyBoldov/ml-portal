@@ -35,7 +35,7 @@ def service(monkeypatch):
     from app.workers import tasks_shadow_invocations
 
     session = SimpleNamespace(commit=AsyncMock(), rollback=AsyncMock())
-    agent_service = SimpleNamespace(validate=AsyncMock())
+    agent_service = SimpleNamespace(validate=AsyncMock(), resolve_scope_context=AsyncMock())
     instance = ShadowInvocationService(session, agent_service)
     instance.repo = MemoryInvocationRepository()
     dispatch = Mock()

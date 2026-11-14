@@ -165,7 +165,7 @@ async def test_result_listing_uses_authenticated_identity(api, monkeypatch):
         response = await client.get("/api/v1/agents/shadow/results", headers={"Authorization": f"Bearer {api.token}"})
     assert response.status_code == 200
     assert response.json() == []
-    listing.assert_awaited_once_with(api.user_id)
+    listing.assert_awaited_once_with(api.user_id, tenant_ids=[api.tenant_id])
 
 
 @pytest.mark.asyncio
@@ -183,5 +183,18 @@ async def test_result_by_id_and_ack_use_authenticated_identity(api, monkeypatch)
     assert response.status_code == 200
     assert response.json()["status"] == "running"
     assert ack.status_code == 204
-    get.assert_awaited_once_with(invocation_id, api.user_id)
-    acknowledge.assert_awaited_once_with(invocation_id, api.user_id)
+    get.assert_awaited_once_with(invocation_id, api.user_id, tenant_ids=[api.tenant_id])
+    acknowledge.assert_awaited_once_with(invocation_id, api.user_id, tenant_ids=[api.tenant_id])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output", ["text\ncontent", [1, None], False, 0, None])
+async def test_sync_result_preserves_mission_format_and_memory_selection(api, output):
+    api.invoke.return_value = ShadowAgentResponse(agent="shadow-a", result=output)
+    async with httpx.AsyncClient(app=api.app, base_url="http://test") as client:
+        response = await client.post("/api/v1/agents/shadow/invoke",
+            headers={"Authorization": f"Bearer {api.token}"},
+            json={"agent": "shadow-a", "data": {}, "scope_keys": []})
+    assert response.status_code == 200
+    assert response.json() == {"agent": "shadow-a", "result": output}
+    assert api.invoke.call_args.args[0].scope_keys == []

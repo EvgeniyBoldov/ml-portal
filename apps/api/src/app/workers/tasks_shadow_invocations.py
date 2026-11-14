@@ -8,6 +8,8 @@ from sqlalchemy import func, or_, select, update
 from app.celery_app import app as celery_app
 from app.core.config import get_settings
 from app.core.di import cleanup_clients, get_llm_client, reset_llm_client
+from app.core.db import dispose_db_engine
+from app.services.tool_result_store import dispose_tool_results_engine
 from app.core.logging import get_logger
 from app.models.shadow_invocation import ShadowInvocation
 from app.models.user import Users
@@ -92,7 +94,7 @@ async def _execute(invocation_id: str) -> None:
             return
         claim = uuid4()
         row.status, row.claim_id = "running", claim
-        payload = ShadowAgentRequest(agent=row.agent, data=row.data)
+        payload = ShadowAgentRequest(agent=row.agent, data=row.data, scope_keys=row.scope_keys)
         user_id, tenant_id, scopes, request_id = row.user_id, row.tenant_id, row.scopes, row.request_id
         await session.commit()
         try:
@@ -103,7 +105,7 @@ async def _execute(invocation_id: str) -> None:
             reset_llm_client()
             async def invoke():
                 return await ShadowAgentService(session, get_llm_client()).invoke(
-                    payload, user_id=user_id, tenant_id=tenant_id, scopes=scopes, request_id=request_id)
+                    payload, user_id=user_id, tenant_id=tenant_id, scopes=scopes, request_id=request_id, invocation_id=UUID(invocation_id), claim_id=claim)
             result = await _invoke_under_lease(UUID(invocation_id), claim, invoke)
             status, output, error = "completed", result.result, None
         except Exception:
@@ -122,9 +124,18 @@ async def _execute(invocation_id: str) -> None:
             await session.commit()
 
 
+async def _run_isolated(invocation_id: str) -> None:
+    """Clean cached async pools before the next Celery task creates a new loop."""
+    try:
+        await _execute(invocation_id)
+    finally:
+        await dispose_tool_results_engine()
+        await dispose_db_engine()
+
+
 @celery_app.task(name="app.workers.tasks_shadow_invocations.execute_shadow_invocation")
 def execute_shadow_invocation(invocation_id: str) -> None:
-    asyncio.run(_execute(invocation_id))
+    asyncio.run(_run_isolated(invocation_id))
 
 
 async def _pending() -> list[str]:

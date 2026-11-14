@@ -1176,10 +1176,13 @@ export interface AgentRunListItem {
   run_id: string;
   tenant_id?: string | null;
   user_id?: string | null;
+  user_name?: string | null;
   agent_slug?: string | null;
   agent_id?: string | null;
   agent_name?: string | null;
   task_title?: string | null;
+  status: string;
+  agent_type: 'regular' | 'shadow';
   logging_level: 'error' | 'brief' | 'full' | string;
   started_at: string;
 }

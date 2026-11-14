@@ -211,3 +211,12 @@ async def health_check() -> bool:
     except Exception as e:
         logger.error(f"Database health check failed: {e}")
         return False
+
+
+async def dispose_db_engine() -> None:
+    """Dispose cached async DB pools before Celery starts another event loop."""
+    global _engine, _session_factory
+    if _engine is not None:
+        await _engine.dispose()
+    _engine = None
+    _session_factory = None

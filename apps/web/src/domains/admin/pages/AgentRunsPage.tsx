@@ -12,6 +12,24 @@ const loggingLevelLabel: Record<string, string> = {
   full: 'Полный',
   none: 'Выключено',
 };
+const runStatusLabel: Record<string, string> = {
+  completed: 'Завершён',
+  failed: 'Ошибка',
+  cancelled: 'Отменён',
+  running: 'Выполняется',
+  queued: 'В очереди',
+  waiting_retry: 'Повтор',
+  waiting_input: 'Ожидает ответа',
+  paused: 'На паузе',
+  unfulfillable: 'Не выполнено',
+};
+const runStatusTone = (status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' => {
+  if (status === 'completed') return 'success';
+  if (status === 'failed' || status === 'unfulfillable') return 'danger';
+  if (status === 'cancelled' || status === 'waiting_retry' || status === 'waiting_input' || status === 'paused') return 'warn';
+  if (status === 'running') return 'info';
+  return 'neutral';
+};
 
 export default function AgentRunsPage() {
   const navigate = useNavigate();
@@ -24,11 +42,24 @@ export default function AgentRunsPage() {
     queryKey: ['admin', 'memory-jobs'], queryFn: memoryJobsApi.list, staleTime: 5_000, refetchInterval: 5_000,
   });
   const columns: DataTableColumn<AgentRunListItem>[] = [
-    { key: 'agent_slug', label: 'АГЕНТ', sortable: true, render: (run) => <><strong>{run.agent_name || run.agent_slug || 'agent'}</strong><small style={{ display: 'block', color: 'var(--text-secondary)' }}>{run.agent_slug}</small></> },
-    { key: 'task_title', label: 'ЗАДАЧА', render: (run) => <span>{run.task_title || 'Без названия задачи'}</span> },
+    { key: 'agent_slug', label: 'АГЕНТ', sortable: true, width: 180, render: (run) => <><strong title={run.agent_name || run.agent_slug || 'agent'}>{run.agent_name || run.agent_slug || 'agent'}</strong><small style={{ display: 'block', color: 'var(--text-secondary)' }}>{run.agent_slug}</small></> },
+    {
+      key: 'agent_type', label: 'ТИП', width: 120,
+      render: (run) => <Badge tone={run.agent_type === 'shadow' ? 'info' : 'neutral'}>{run.agent_type === 'shadow' ? 'Теневой' : 'Обычный'}</Badge>,
+    },
+    {
+      key: 'status', label: 'СТАТУС', width: 150,
+      render: (run) => <Badge tone={runStatusTone(run.status)}>{runStatusLabel[run.status] || run.status}</Badge>,
+    },
+    {
+      key: 'task_title', label: 'ЗАДАЧА', width: 540,
+      render: (run) => <span title={run.task_title || undefined}>
+        {run.task_title ? `${run.task_title.slice(0, 180)}${run.task_title.length > 180 ? '…' : ''}` : 'Задача не записана'}
+      </span>,
+    },
     { key: 'logging_level', label: 'ЛОГИРОВАНИЕ', width: 150, render: (run) => <Badge tone="neutral">{loggingLevelLabel[run.logging_level] || run.logging_level}</Badge> },
     { key: 'started_at', label: 'ЗАПУЩЕН', sortable: true, width: 190, render: (run) => <span style={{ color: 'var(--text-secondary)' }}>{formatDate(run.started_at)}</span> },
-    { key: 'tenant_id', label: 'ТЕНАНТ', width: 130, render: (run) => <code>{run.tenant_id ? run.tenant_id.slice(0, 8) : '—'}</code> },
+    { key: 'user_name', label: 'ПОЛЬЗОВАТЕЛЬ', width: 180, render: (run) => <span title={run.user_name || undefined}>{run.user_name || '—'}</span> },
   ];
   const memoryColumns: DataTableColumn<MemoryJobListItem>[] = [
     { key: 'document_title', label: 'ДОКУМЕНТ', sortable: true, render: (job) => <><strong>{job.document_title || job.document_filename || 'Документ без названия'}</strong><small style={{ display: 'block', color: 'var(--text-secondary)' }}>{job.document_filename}</small></> },

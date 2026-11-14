@@ -1,6 +1,7 @@
 """Durable asynchronous shadow invocations."""
 import uuid
 from datetime import datetime
+from pydantic import JsonValue
 from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -24,7 +25,8 @@ class ShadowInvocation(Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(255))
     request_fingerprint: Mapped[str | None] = mapped_column(String(64))
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
-    result: Mapped[dict | None] = mapped_column(JSONB)
+    scope_keys: Mapped[list | None] = mapped_column(JSONB)
+    result: Mapped[JsonValue] = mapped_column(JSONB)
     error: Mapped[str | None] = mapped_column(String(255))
     claim_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

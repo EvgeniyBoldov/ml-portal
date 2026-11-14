@@ -724,8 +724,8 @@ _NONBLANK_STRING_PATTERN = r"^[\s\S]*\S[\s\S]*$"
 
 
 class ShadowCompletionDeclaration(TaskCompletionDeclaration):
-    """Machine invocation requires a JSON object, including an empty object."""
-    structured_response: Dict[str, JsonValue] = Field(...)
+    """Machine invocation preserves the mission result as any finite JSON value."""
+    structured_response: JsonValue = Field(...)
     model_config = {**TaskCompletionDeclaration.model_config, "allow_inf_nan": False}
 
 

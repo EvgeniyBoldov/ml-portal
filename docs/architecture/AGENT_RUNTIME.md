@@ -59,8 +59,13 @@ server-side session families; logout and replay revoke the family, including
 its access tokens. See [Authentication and Sessions](AUTHENTICATION.md).
 Request: `{"agent":"agent_slug","data":{}}`.
 Successful response: `{"agent":"agent_slug","result":{}}` (application/json).
-Both envelopes reject extra fields and require JSON objects for data/result;
-their nested contents are arbitrary JSON values, with non-finite numbers rejected.
+Both envelopes reject extra fields. `data` is a JSON object; `result` is any JSON value,
+including an object, array, string, number, boolean or null. Non-finite numbers are rejected.
+The published mission prompt defines the result format. Text is returned as a JSON string;
+JSON data retains its structure without a synthesis pass. The internal completion envelope is not exposed.
+Optional `scope_keys` selects concrete document-memory scope slugs; null/omission inherits
+tenant and user defaults (with the standard company fallback), and `[]` disables document search.
+Scope selection does not grant source access or change credentials/RBAC.
 This validates the machine API envelope, not an agent-specific business schema.
 The response agent slug is set by the server from the resolved agent.
 
@@ -101,30 +106,27 @@ body. There is no separate shadow permission system.
 reuses the canonical execution path. The adapter creates one run and one task
 context in memory, pins the published version and consumes the event stream.
 It creates no chat, turn, persisted plan or planner iteration, and invokes no
-TurnPreflight, planner, synthesizer or memory read/write pipeline. Inputs stay
-inline, including inputs over the normal 8000-character workspace threshold;
-normal model context limits still apply. Preflight checks RBAC/configuration but
-skips all operation discovery (including system tools and memory tools).
-Versions requiring fresh retrieval are incompatible with this LLM-only mode.
+TurnPreflight, planner or synthesizer. Inputs stay inline. The ordinary preflight
+resolves configured operations, collections and system tools under the caller's
+permissions. Workspace result readers and task-local document memory use the same
+agent loop as regular agents. `requires_fresh_retrieval` versions are supported.
+There is no chat-history recall or automatic dialog-fact writeback for this standalone API.
 
 The agent uses the existing completion protocol internally. The adapter accepts
-only `fulfilled` without needs and a JSON-object `structured_response`, projects
-that object to `result`, and validates it before completing the run. A Pydantic
-`ShadowCompletionDeclaration` specialization requires that object in the native
-provider schema and in the agent's bounded terminal correction loop, so a bare
-`fulfilled` declaration can be corrected before the attempt ends. Provider
-schemas materialize parent object properties and required fields in every
-`oneOf` branch, for grammar providers that compile branches independently.
-After the correction budget is exhausted, invalid shadow declarations emit
-`output_contract_invalid` and cannot be accepted as successful task results. Empty objects
-are valid; non-object and non-finite results are rejected. Shadow task
-instructions distinguish mission-defined fallbacks from non-fulfillment: a
-configured unknown/empty fallback is a fulfilled result, with JSON null for
-unknown values, rather than the string "None". The mission still owns whether
-such a fallback exists. Runtime
+only `fulfilled` without needs and a finite JSON `structured_response`, projects
+that value to `result`, and validates it before completing the run. The mission
+prompt defines the contents and format; the runtime requires an explicit result
+field, including when its value is null. Shadow does not send the internal terminal
+JSON Schema as provider-native `response_format`, including tool-free calls.
+The bounded correction loop validates the terminal declaration locally and
+preserves tools while correcting the envelope. It does not rerun successful
+operations merely to repair an output. Invalid declarations end with
+`output_contract_invalid`. Mission-defined unknown/empty fallbacks may be fulfilled.
+Runtime
 limits, provider error handling and bounded protocol retries remain in effect;
-a correct response normally requires one LLM call. No additional agents resolve
-needs in this flow. Invalid results and execution failures return HTTP 502;
+a response without retrieval normally requires one LLM call. No additional agents resolve
+needs in this flow. Interactive questions and confirmation pauses are unsupported;
+operations requiring confirmation remain blocked rather than implicitly approved. Invalid results and execution failures return HTTP 502;
 wrong agent type/incompatible version returns 409, RBAC denial 403, absent agent
 or published version 404, and invalid request envelope 422. Errors use the
 platform's existing JSON error envelope.
@@ -132,6 +134,15 @@ For execution failures the envelope includes `details.error_code` and
 `details.retryable`, and uses the runtime's safe user message when available.
 Sanitized provider rejection evidence stays in the operator trace, including
 the terminal shadow error; see [Chat Runtime Error Contract](CHAT_RUNTIME_ERROR_CONTRACT.md).
+
+Migration `0213` adds the optional async scope selection and `shadow_execution_guards`.
+Both sync and async executions durably admit sensitive operations before dispatch.
+The async ledger is shared across retries of an invocation and fenced by its worker
+claim; completed calls cannot be repeated, and admitted calls without a known
+outcome require verification. This guards dispatch without promising exactly-once
+external effects. The ledger records fingerprints/outcomes, not arguments or secrets.
+Async scope selection is persisted with the request; inherited defaults are resolved
+again at execution time. Explicit scope selection participates in idempotency matching.
 
 Events use the existing canonical journal with `origin=shadow`, real run and
 agent execution UUIDs, correlation id, user/tenant identity and nullable chat id.

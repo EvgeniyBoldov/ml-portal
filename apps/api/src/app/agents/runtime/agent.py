@@ -398,8 +398,7 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         from app.agents.runtime.result_workspace_tools import with_workspace_operations
-        available_operations = (list(exec_request.resolved_operations or []) if ctx.extra.get("shadow_execution")
-                                else with_workspace_operations(exec_request.resolved_operations or []))
+        available_operations = with_workspace_operations(exec_request.resolved_operations or [])
         deps = ctx.get_runtime_deps()
         deps.resolved_operations = list(available_operations or [])
         ctx.set_runtime_deps(deps)
@@ -415,13 +414,12 @@ class AgentToolRuntime(BaseRuntime):
         )
 
         system_prompt = prompt_bundle.system_prompt
-        if not ctx.extra.get("shadow_execution"):
-            system_prompt += (
-                "\n\nDocument memory is local to this task. Use memory.search when rules or knowledge needed for this task "
-                "are missing. Original search passages accumulate by scope in [Document memory for this task], "
-                "including findings restored from this task's explicit continuation. Search receipts in conversation "
-                "history do not repeat passage text. Use each passage only within its stated scope and applicability."
-            )
+        system_prompt += (
+            "\n\nDocument memory is local to this task. Use memory.search when rules or knowledge needed for this task "
+            "are missing. Original search passages accumulate by scope in [Document memory for this task], "
+            "including findings restored from this task's explicit continuation. Search receipts in conversation "
+            "history do not repeat passage text. Use each passage only within its stated scope and applicability."
+        )
         if any(item.operation_slug in {
                 "result.describe", "result.read", "result.sql", "result.load",
                 "result.aggregate", "result.find", "result.analyze",
@@ -447,7 +445,8 @@ class AgentToolRuntime(BaseRuntime):
         # prompt overrides; agent-version instructions cannot replace them.
         terminal_contract_prompt = ctx.extra.get("task_completion_prompt")
         native_completion_format = (ctx.extra.get("task_completion_response_format")
-                                    if not available_operations and ctx.extra.get("task_completion_instructions") else None)
+                                    if not ctx.extra.get("shadow_execution") and not available_operations
+                                    and ctx.extra.get("task_completion_instructions") else None)
         if native_completion_format:
             terminal_contract_prompt = ctx.extra.get("task_completion_instructions") or terminal_contract_prompt
         if isinstance(terminal_contract_prompt, str) and terminal_contract_prompt.strip():
@@ -525,6 +524,9 @@ class AgentToolRuntime(BaseRuntime):
                 ),
             },
         ) or {}
+        task_title = self._task_title_from_messages(messages)
+        if task_title:
+            executor_config_snapshot["task_title"] = task_title
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,
@@ -620,8 +622,7 @@ class AgentToolRuntime(BaseRuntime):
         # Build working messages for LLM (mutable copy)
         llm_messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
         task_memory_message: Dict[str, Any] = {"role": "user", "content": ""}
-        if not ctx.extra.get("shadow_execution"):
-            llm_messages.append(task_memory_message)
+        llm_messages.append(task_memory_message)
         llm_messages.append({"role": "user", "content": datastore_message})
         llm_messages.extend(list(messages))
         loop_state = AgentLoopState(
@@ -632,11 +633,10 @@ class AgentToolRuntime(BaseRuntime):
             saved_messages = [item for item in saved_messages if not str(item.get("content", "")).startswith((
                 "[Datastore — available file and result metadata]", "[Saved tool results available as SQL tables]"))]
             saved_messages.insert(0, {"role": "user", "content": datastore_message})
-            if not ctx.extra.get("shadow_execution"):
-                saved_messages = [item for item in saved_messages
-                                  if item.get("content") != task_memory_message.get("content")
-                                  and "[Document memory for this task]" not in str(item.get("content", ""))]
-                saved_messages.insert(0, task_memory_message)
+            saved_messages = [item for item in saved_messages
+                              if item.get("content") != task_memory_message.get("content")
+                              and "[Document memory for this task]" not in str(item.get("content", ""))]
+            saved_messages.insert(0, task_memory_message)
             llm_messages = [{"role": "system", "content": system_prompt}, *saved_messages]
             llm_messages.append({"role": "user", "content": json.dumps({
                 "runtime_interaction_answers": ctx.extra.get("interaction_answers") or [],

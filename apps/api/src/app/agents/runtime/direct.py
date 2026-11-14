@@ -77,6 +77,9 @@ class DirectRuntime(BaseRuntime):
                 "temperature": gen.temperature,
             },
         ) or {}
+        task_title = self._task_title_from_messages(messages)
+        if task_title:
+            executor_config_snapshot["task_title"] = task_title
         run_session = self._create_run_session(
             ctx=ctx,
             agent_slug=agent.slug,

@@ -232,6 +232,13 @@ curl --header "Authorization: Bearer $ML_PORTAL_ADMIN_PAT" http://localhost:8000
 
 Ключевые admin endpoints для диагностики runtime без container logs:
 
+- `GET /api/v1/admin/agent-runs` — журнал запусков с названием задачи, типом агента
+  (`regular`/`shadow`), отображаемым именем пользователя (`full_name`, с fallback на `login`)
+  и статусом из события завершения (`completed`, `failed`, `cancelled`, `paused` и другие
+  runtime-статусы) либо `running`, если событие завершения ещё не записано.
+  Для обычного запуска название берётся из задачи
+  или запроса пользователя; для теневого агента — из его опубликованной миссии.
+- `GET /api/v1/admin/agent-runs/{agent_execution_id}` — события выбранного запуска.
 - `GET /api/v1/admin/agent-runs/{run_id}/trace-pack`
 - `GET /api/v1/admin/agent-runs/{run_id}/diagnostics-summary`
 - `GET /api/v1/admin/collections/{collection_id}/runtime-readiness`

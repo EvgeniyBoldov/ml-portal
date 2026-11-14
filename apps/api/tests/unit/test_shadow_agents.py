@@ -55,11 +55,17 @@ def invocation(monkeypatch):
     journal.for_entity.return_value = journal
     monkeypatch.setattr(module.RuntimeEventJournalFactory, "create", Mock(return_value=journal))
     monkeypatch.setattr(module, "get_session_factory", lambda: None)
+    from app.runtime.memory.effective_scope import EffectiveScopeContext
+    scope_service = SimpleNamespace(validate_keys=AsyncMock(side_effect=lambda keys: keys),
+        resolve_context=AsyncMock(return_value=EffectiveScopeContext()))
+    monkeypatch.setattr(module, "MemoryScopePreferencesService", lambda _: scope_service)
+    monkeypatch.setattr(module, "ShadowExecutionGuardService", lambda *args, **kwargs: SimpleNamespace(
+        start=AsyncMock(), finish=AsyncMock()))
     service = module.ShadowAgentService(AsyncMock(), AsyncMock())
     service.executor.execute_attempt = AsyncMock(return_value=TaskExecutionReceipt(
         declaration=TaskCompletionDeclaration(completion="fulfilled", structured_response={"value": 42})))
     user_id, tenant_id = uuid4(), uuid4()
-    return SimpleNamespace(service=service, agent=agent, version=version, permissions=permissions,
+    return SimpleNamespace(service=service, agent=agent, version=version, permissions=permissions, scope_service=scope_service,
                            journal=journal, user_id=user_id, tenant_id=tenant_id,
                            kwargs=dict(user_id=user_id, tenant_id=tenant_id, scopes=["invoke"], request_id="test-request"))
 
@@ -98,7 +104,7 @@ async def test_rbac_denial_prevents_execution(invocation):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [("agent_type", "regular"), ("status", "draft"), ("requires_fresh_retrieval", True)])
+@pytest.mark.parametrize("field,value", [("agent_type", "regular"), ("status", "draft")])
 async def test_incompatible_agent_is_rejected(invocation, field, value):
     setattr(invocation.agent if field == "agent_type" else invocation.version, field, value)
     with pytest.raises(ConflictError):
@@ -107,7 +113,7 @@ async def test_incompatible_agent_is_rejected(invocation, field, value):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("result", [None, "prose", [], {"bad": float("inf")}])
+@pytest.mark.parametrize("result", [{"bad": float("inf")}])
 async def test_invalid_results_fail_run(invocation, result):
     invocation.service.executor.execute_attempt.return_value = TaskExecutionReceipt(
         declaration=TaskCompletionDeclaration(completion="fulfilled", structured_response=result))
@@ -160,7 +166,7 @@ async def test_shadow_keeps_large_input_inline():
 
 
 @pytest.mark.asyncio
-async def test_shadow_executor_disables_operation_discovery():
+async def test_shadow_executor_enables_operation_discovery():
     executor = AgentExecutor(session=AsyncMock(), llm_client=AsyncMock())
     executor.preflight.prepare = AsyncMock(return_value=object())
     ctx = ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={"shadow_execution": True})
@@ -168,7 +174,7 @@ async def test_shadow_executor_disables_operation_discovery():
         ctx=ctx, agent_slug="shadow-a", user_id=ctx.user_id, tenant_id=ctx.tenant_id,
         request_text="invoke", platform_config={}, agent_version_id=None,
         lifecycle_agent_execution_id=None, timeout_s=10)
-    assert executor.preflight.prepare.call_args.kwargs["enable_operations"] is False
+    assert executor.preflight.prepare.call_args.kwargs.get("enable_operations", True) is True
 
 
 @pytest.mark.asyncio
@@ -226,10 +232,10 @@ async def test_full_executor_runs_one_llm_call_and_returns_json(invocation, monk
     assert result.model_dump() == {"agent": "shadow-a", "result": {"summary": "ok"}}
     assert client.chat.await_count == (2 if repair else 1)
     kwargs = client.chat.call_args.kwargs
-    assert "tools" not in kwargs["params"]
-    assert kwargs["params"]["response_format"]["type"] == "json_schema"
+    assert "response_format" not in kwargs["params"]
+    assert any("result.read" in message.get("content", "") for message in kwargs["messages"])
     assert any("x" * 9000 in message.get("content", "") for message in kwargs["messages"])
-    assert executor.preflight.prepare.call_args.kwargs["enable_operations"] is False
+    assert executor.preflight.prepare.call_args.kwargs.get("enable_operations", True) is True
     assert sum(event.type.value == "agent_start" for event in observed) == 1
     endings = [event for event in observed if event.type.value == "agent_end"]
     assert len(endings) == 1
@@ -251,20 +257,24 @@ async def test_explicit_shadow_selection_cannot_bypass_planner_catalog(monkeypat
             platform=PlatformSnapshot(), explicit_slug="shadow-a", user_id=uuid4(), tenant_id=uuid4())
 
 
-@pytest.mark.parametrize("result", [None, [], "text", {"bad": float("inf")}])
-def test_shadow_terminal_requires_json_object_before_attempt_ends(result):
+@pytest.mark.parametrize("result", [None, [], "text", 0, False, {"key": "value"}])
+def test_shadow_terminal_preserves_json_values(result):
     import json
-    from app.runtime.orchestrator_contracts import task_completion_json_schema
-    from jsonschema import Draft202012Validator
     task = TaskRequest(task_id="t", executor="shadow", intent="invoke", instructions="Do it")
     raw = json.dumps({"completion": "fulfilled", "structured_response": result})
-    assert AgentExecutor._terminal_validation_errors(raw, task=task, verified={}, shadow=True)
-    schema = task_completion_json_schema(task, shadow=True)
-    if not isinstance(result, dict):
-        assert not Draft202012Validator(schema).is_valid(json.loads(raw))
-    valid = {"completion": "fulfilled", "structured_response": {}}
-    Draft202012Validator(schema).validate(valid)
-    assert AgentExecutor._terminal_validation_errors(json.dumps(valid), task=task, verified={}, shadow=True) == []
+    assert AgentExecutor._terminal_validation_errors(raw, task=task, verified={}, shadow=True) == []
+    assert AgentExecutor._terminal_validation_errors('{"completion":"fulfilled"}', task=task, verified={}, shadow=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [None, [], "text", 0, False, {"key": "value"}])
+async def test_shadow_service_preserves_json_values(invocation, result):
+    invocation.version.requires_fresh_retrieval = True
+    invocation.service.executor.execute_attempt.return_value = TaskExecutionReceipt(
+        declaration=TaskCompletionDeclaration(completion="fulfilled", structured_response=result))
+    response = await invoke(invocation)
+    assert response.result == result
+    assert type(response.result) is type(result)
 
 
 @pytest.mark.asyncio
@@ -294,3 +304,93 @@ def test_shadow_provider_branches_require_result_even_when_compiled_independentl
         assert "structured_response" in branch["required"]
         assert not Draft202012Validator(standalone).is_valid({"completion": "fulfilled", "interaction": None})
     Draft202012Validator(schema).validate({"completion": "fulfilled", "structured_response": {"class": "легкий"}})
+
+
+@pytest.mark.asyncio
+async def test_shadow_runs_memory_tool_and_passes_passages_to_next_decision(invocation, monkeypatch):
+    """Use the real executor/operation loop; replace only transport and tool IO."""
+    import json
+    from app.agents.context import ToolResult
+    from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
+    from app.agents.execution_preflight import ExecutionRequest
+    from app.agents.runtime.policy import GenerationParams, PolicyLimits
+    from app.services.runtime_event_logger import RuntimeLogContext, RuntimeLoggingLevel
+
+    monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([], "available")))
+    monkeypatch.setattr(RuntimeEventLogger, "emit", AsyncMock())
+    journal = RuntimeEventLogger(context=RuntimeLogContext(run_id=uuid4(), level=RuntimeLoggingLevel.FULL, origin="shadow"))
+    monkeypatch.setattr(module.RuntimeEventJournalFactory, "create", Mock(return_value=journal))
+    invocation.service.session.scalar.return_value = "full"
+    invocation.version.compiled_prompt = "Read memory and return the document title."
+    source = {"document_id": str(uuid4()), "document_title": "Operating rules"}
+    passage = {"kind": "document_passage", "scope_slug": "company", "text": "Back up before changes.",
+               "source_references": [source]}
+    client = SimpleNamespace(chat=AsyncMock(side_effect=[
+        {"choices": [{"message": {"content": None, "tool_calls": [{"id": "search-1", "type": "function",
+            "function": {"name": "memory.search", "arguments": json.dumps({"query": "backup"})}}]}}]},
+        {"choices": [{"message": {"content": json.dumps({"completion": "fulfilled",
+            "structured_response": {"title": "Operating rules"}, "needs": []})}}]},
+    ]))
+    executor = AgentExecutor(session=invocation.service.session, llm_client=client)
+    invocation.service.executor = executor
+    operation = ResolvedOperation(operation_slug="memory.search", operation="memory.search", name="Memory", source="local",
+        scope="system", data_instance_id="system", data_instance_slug="system",
+        target=ProviderExecutionTarget(operation_slug="memory.search", provider_type="local", handler_slug="memory.search",
+                                      data_instance_id="system", data_instance_slug="system"))
+    executor.preflight.prepare = AsyncMock(return_value=ExecutionRequest(
+        run_id=uuid4(), agent_slug=invocation.agent.slug, agent=invocation.agent, agent_version=invocation.version,
+        user_id=invocation.user_id, tenant_id=invocation.tenant_id, prompt=invocation.version.compiled_prompt,
+        resolved_operations=[operation]))
+    executor._tool_runtime.config_resolver.resolve = AsyncMock(return_value=(
+        PolicyLimits(), GenerationParams(model="test"), {"native_tool_calling": True}, SimpleNamespace(sources={})))
+    executor._tool_runtime.tools.execute = AsyncMock(return_value=(ToolResult.ok({"groups": [
+        {"scope_slug": "company", "success": True, "status": "completed", "items": [passage]}]}, delivery="direct"), [source]))
+    result = await invoke(invocation)
+    assert result.result == {"title": "Operating rules"}
+    assert client.chat.await_count == 2
+    executor._tool_runtime.tools.execute.assert_awaited_once()
+    second = client.chat.await_args_list[1].kwargs
+    assert "response_format" not in second["params"]
+    memory_messages = [message["content"] for message in second["messages"]
+                       if (message.get("content") or "").startswith("[Document memory for this task]")]
+    assert len(memory_messages) == 1
+    assert "Back up before changes." in memory_messages[0]
+    assert source["document_id"] in memory_messages[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("selection", [None, [], ["company"]])
+async def test_shadow_resolves_memory_selection_without_confusing_auth_scopes(invocation, selection):
+    from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity
+    keys = ["company"] if selection is None else selection
+    invocation.scope_service.resolve_context.return_value = EffectiveScopeContext(
+        selected=[ScopeIdentity(key=key) for key in keys])
+    await invocation.service.invoke(ShadowAgentRequest(agent="shadow-a", data={}, scope_keys=selection), **invocation.kwargs)
+    context = invocation.scope_service.resolve_context.await_args.kwargs["chat_context"]
+    if selection is None:
+        assert context == {}
+        invocation.scope_service.validate_keys.assert_not_awaited()
+    else:
+        assert context == {"focus": {"scope_mode": "replace", "scope_keys": selection}}
+    kwargs = invocation.service.executor.execute_attempt.await_args.kwargs
+    assert kwargs["ctx"].extra["memory_search_scope_keys"] == keys
+    assert kwargs["ctx"].scopes == ["invoke"]
+    assert kwargs["request"].scope_context["keys"] == keys
+
+
+@pytest.mark.asyncio
+async def test_unknown_scope_prevents_shadow_execution(invocation):
+    from app.core.exceptions import ValidationError as AppValidationError
+    invocation.scope_service.validate_keys.side_effect = ValueError("Unknown memory scope")
+    with pytest.raises(AppValidationError):
+        await invocation.service.invoke(ShadowAgentRequest(agent="shadow-a", data={}, scope_keys=["unknown"]), **invocation.kwargs)
+    invocation.service.executor.execute_attempt.assert_not_awaited()
+
+
+def test_async_idempotency_distinguishes_memory_selection():
+    from app.services.shadow_invocation_service import ShadowInvocationService
+    fingerprint = ShadowInvocationService._request_fingerprint
+    base = dict(agent="shadow-a", data={})
+    assert fingerprint(ShadowAgentRequest(**base)) == fingerprint(ShadowAgentRequest(**base, scope_keys=None))
+    assert fingerprint(ShadowAgentRequest(**base)) != fingerprint(ShadowAgentRequest(**base, scope_keys=[]))
+    assert fingerprint(ShadowAgentRequest(**base, scope_keys=[])) != fingerprint(ShadowAgentRequest(**base, scope_keys=["company"]))

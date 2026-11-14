@@ -88,6 +88,8 @@ async def test_shadow_service_with_real_preflight_rbac_config_and_journal(monkey
                 factory = async_sessionmaker(connection, expire_on_commit=False, join_transaction_mode="create_savepoint")
                 monkeypatch.setattr(module, "get_session_factory", lambda: factory)
                 async with factory() as session:
+                    from app.models.shadow_execution_guard import ShadowExecutionGuard
+                    await connection.run_sync(lambda conn: ShadowExecutionGuard.__table__.create(conn, checkfirst=True))
                     user = Users(login="shadow-test-" + uuid4().hex)
                     tenant = Tenants(name="shadow-test-" + uuid4().hex)
                     agent = Agent(slug="shadow-runtime-test-" + uuid4().hex, name="Shadow test", agent_type="shadow", logging_level="full", model="shadow-test-model")
@@ -106,7 +108,7 @@ async def test_shadow_service_with_real_preflight_rbac_config_and_journal(monkey
                         user_id=user.id, tenant_id=tenant.id, scopes=[], request_id="shadow-test-request")
                     assert response.result == {"summary": "ok"}
                     client.chat.assert_awaited_once()
-                    assert "tools" not in client.chat.call_args.kwargs["params"]
+                    assert "response_format" not in client.chat.call_args.kwargs["params"]
                     events = (await session.execute(select(RuntimeExecutionEvent).where(
                         RuntimeExecutionEvent.user_id == user.id,
                         RuntimeExecutionEvent.origin == "shadow",
