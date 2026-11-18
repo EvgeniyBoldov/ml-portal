@@ -13,6 +13,15 @@ export interface ChatRagSource {
   source_id?: string;
   source_name?: string;
   chunk_id?: string;
+  document_id?: string;
+  source_type?: string;
+  kind?: string;
+  artifact_id?: string;
+  artifact?: unknown;
+  url?: string;
+  excerpt?: string;
+  excerpt_truncated?: boolean;
+  excerpt_length?: number;
   text?: string;
   page?: number;
   score?: number;

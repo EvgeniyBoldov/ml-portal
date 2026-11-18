@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import ANY, AsyncMock, MagicMock
 import pytest
@@ -23,6 +24,45 @@ def orchestrator() -> ChatTurnOrchestrator:
 
 
 class TestChatTurnOrchestrator:
+    @pytest.mark.asyncio
+    async def test_runner_control_failure_cancellation_persists_failed_outcome(self, orchestrator):
+        from app.services.chat_context_contracts import ChatContextSnapshot
+
+        orchestrator.turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
+        orchestrator.turn_service.fail_turn = AsyncMock()
+        orchestrator.turn_service.cancel_turn = AsyncMock()
+        orchestrator.turn_service.session.rollback = AsyncMock()
+        orchestrator.turn_service.session.commit = AsyncMock()
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-partial", created_at="now"),
+        )
+        orchestrator.context_service.load_chat_context = AsyncMock(return_value=[])
+
+        async def fake_run_with_router(**_kwargs):
+            yield {"type": "delta", "content": "partial"}
+            await asyncio.Event().wait()
+
+        stream = orchestrator.execute_turn(
+            chat=SimpleNamespace(), chat_id="chat-1", user_id="user-1", content="hello",
+            artifact_ids=[], attachment_meta=[], attachment_contexts=[], idempotency_key=None,
+            continuation_meta=None, persist_user_message=False, run_with_router=fake_run_with_router,
+            store_idempotency=AsyncMock(), bind_attachments=AsyncMock(), preloaded_context=[],
+            preloaded_context_snapshot=ChatContextSnapshot(chat_id="chat-1"),
+        )
+        async for event in stream:
+            if event.get("type") == "delta":
+                break
+
+        with pytest.raises(asyncio.CancelledError):
+            await stream.athrow(asyncio.CancelledError("chat_runtime_control_failure"))
+
+        orchestrator.turn_service.fail_turn.assert_awaited_once_with(
+            ANY, error_message="chat_runtime_failed",
+        )
+        orchestrator.turn_service.cancel_turn.assert_not_awaited()
+        assert orchestrator.persistence_service.create_assistant_message.await_args.kwargs["extra_meta"]["runtime_status"] == "failed"
+
     @pytest.mark.asyncio
     async def test_execute_turn_reuses_resumed_turn_instead_of_creating_duplicate(self, orchestrator: ChatTurnOrchestrator):
         turn_id = uuid4()

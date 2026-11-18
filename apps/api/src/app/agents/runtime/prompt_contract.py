@@ -140,11 +140,11 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
     elif canonical == "collection.template.search":
         notes.append("use this to find the right template row by meaning before get_schema/fill")
     elif canonical == "collection.template.get_schema":
-        notes.append("row_id must come from collection.template.list")
+        notes.append("use row_id from collection.template.search or collection.template.list; a Result Store result_id is a reference to read, not a row_id")
         notes.append("use this immediately before fill to get exact values keys and placeholders")
         notes.append("do not invent row_id")
     elif canonical == "collection.template.fill":
-        notes.append("row_id must come from collection.template.list")
+        notes.append("use the same row_id from collection.template.search or collection.template.list that was passed to get_schema")
         notes.append("call collection.template.get_schema first and use the exact field keys it returns")
         notes.append("map every value explicitly supplied by the user to its matching schema field")
         notes.append("after fill, inspect missing_placeholders and correct any user-supplied field that remains unfilled")

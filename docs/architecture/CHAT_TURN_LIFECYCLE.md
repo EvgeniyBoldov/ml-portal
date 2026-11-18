@@ -78,6 +78,66 @@ stage snapshot, but does not reconstruct already-published deltas or earlier
 activity history. The UI reloads persisted messages on terminal errors and
 cancellation.
 
+Browser restoration is guarded by a generation token: a late active-run lookup
+cannot attach over a newer chat selection or send/resume operation. History
+reload merges canonical server rows by message ID (server data wins for
+duplicates), retains older pages, and preserves messages received while the
+request was in flight plus placeholders belonging to the current active run.
+A live assistant placeholder is retained across repeated pause/resume history
+reloads when the server page does not yet contain that assistant row.
+
+Run-control subscriber transport errors observed while execution is active are
+execution failures, not explicit Stop: the runner cancels and awaits the
+execution, then persists a failed turn with `chat_runtime_failed`. If execution
+has already completed, a later control-channel failure is logged without
+rewriting the completed turn or its terminal SSE event. Resume startup failures
+before runner creation compensate the durable running claim by persisting a
+failed turn and return HTTP 503 with RFC 7807 code
+`CHAT_RUNTIME_START_FAILED` and details containing `run_id` and
+`status: "failed"`; the client clears the terminal pause and reloads history
+for this code. A transient resume HTTP rejection keeps the pause available for
+retry. Once that compensation is confirmed persisted, the resume endpoint also
+best-effort publishes `state(status=failed)`, `error(code=chat_runtime_start_failed)`,
+and `done` to attached Redis observers, tagged with the failed execution's
+`execution_id`. Each frame publish is bounded by
+`CHAT_RUNTIME_START_FAILURE_NOTIFY_TIMEOUT_SECONDS` (default 1 second, range
+0.1–10 seconds); failure or timeout for one frame does not suppress attempts
+for the remaining frames. No terminal notification is fabricated when
+compensation is not confirmed or a live runner still owns the run. Subscriber
+resources are cleaned up on failed attach/start paths as well as normal stream
+completion. For a same-run resume while the previous
+process owner is finishing a pause, the runner waits for that owner, shielded
+from caller cancellation and outside the global runner lock, then rechecks
+ownership before creating the resumed task. Previous-owner cleanup cannot
+delete the resumed owner's Redis marker.
+
+Each runner execution has an internal `execution_id`, distinct from the stable
+root `run_id`. The runner tags its Redis service events and `done` marker with
+that ID. A resume observer accepts only its exact execution ID, so a queued
+`done` from the prior continuation cannot close the new stream. The initial
+duplicate-send observer remains unfiltered because a start request can reuse an
+already-running task created by another command. A generic attach treats a
+tagged `done` as a prompt to check current persisted chat/user/run status in a
+fresh short-lived session; it ignores the marker if the run is still active
+and closes only after the persisted run is terminal. The ID is internal to
+event transport; public lifecycle frames keep the root `run_id`.
+
+Stage snapshots are optional progress state: a Redis read failure is logged and
+the corresponding state/attach frame simply has no stage snapshot. Once a
+durable terminal outcome has been produced, a failure publishing a later
+service event or finishing the runner tail is logged and cleaned up without
+rewriting the persisted terminal status as failed or cancelled.
+
+Optional context compaction dispatch happens after the terminal `final` or
+`stop` event has been yielded. A detached task captures a bounded plain DTO,
+loads the committed snapshot through a fresh database session, and publishes
+through a worker thread. The request's live database session is not passed to
+it; asynchronous snapshot loading remains on the event loop, while only the
+synchronous broker publish is sent to a worker thread. Broker latency does not
+block delivery of the terminal event. Dispatch is best-effort and bounded by
+`CHAT_CONTEXT_COMPACTION_DISPATCH_LIMIT` (default 32, minimum 1); saturation
+skips dispatch.
+
 ## Global chat status stream
 
 `GET /api/v1/chats/status-events` is an authenticated application-level SSE

@@ -6,6 +6,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict
 
 
+RESULT_STORE_REFERENCE = "result_store_reference"
+RESULT_STORE_REFERENCE_MESSAGE = (
+    "This is a Result Store reference. Use the next action to read the data. "
+    "result_id identifies the saved response only."
+)
+
+
 class SourceCoverage(BaseModel):
     model_config = ConfigDict(extra="forbid")
     complete: bool | None
@@ -51,6 +58,47 @@ class ModelResultView(BaseModel):
     snapshot_only: bool | None = None
     imported_from: dict[str, Any] | None = None
     view: Literal["auto", "value", "children"] | None = None
+
+    def context_payload(self, *, preserve_null_records: bool = False) -> dict[str, Any]:
+        payload = self.model_dump(exclude_none=True)
+        if preserve_null_records:
+            payload["records"] = self.records
+        if "records" not in payload:
+            payload["result_kind"] = RESULT_STORE_REFERENCE
+            payload["message"] = RESULT_STORE_REFERENCE_MESSAGE
+            if self.next_action is None:
+                payload["next_action"] = ResultNextAction(
+                    arguments={"result_id": self.result_id, "revision": self.revision, "offset": 0, "limit": 5},
+                    message="Read the saved response.",
+                ).model_dump()
+        return payload
+
+
+class DirectResultReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: Literal["ready", "already_completed"] = "ready"
+    result_kind: Literal["result_store_reference"] = RESULT_STORE_REFERENCE
+    message: str = RESULT_STORE_REFERENCE_MESSAGE
+    result_id: str
+    revision: int
+    recoverability: Literal["direct_overflow_saved"] = "direct_overflow_saved"
+    reason: str
+    next_action: ResultNextAction
+
+    @classmethod
+    def from_recovery(cls, recovery: dict[str, Any], *, reused: bool = False) -> "DirectResultReference":
+        result_id = str(recovery["result_id"])
+        revision = int(recovery.get("revision") or 1)
+        return cls(
+            status="already_completed" if reused else "ready",
+            result_id=result_id,
+            revision=revision,
+            reason=str(recovery["reason"]),
+            next_action=ResultNextAction(
+                arguments={"result_id": result_id, "revision": revision, "offset": 0, "limit": 5},
+                message="Read the saved response.",
+            ),
+        )
 
 
 class ResultUnavailable(BaseModel):

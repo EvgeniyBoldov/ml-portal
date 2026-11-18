@@ -8,7 +8,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useNavigate } from 'react-router-dom';
 import { ChatProvider } from '@/domains/chat/contexts/ChatContext';
-import { uploadChatAttachment } from '@/shared/api/chats';
+import { getActiveChatRun, stopChatRun, uploadChatAttachment } from '@/shared/api/chats';
 import { fetchStreamWithAuth } from '@/shared/api/streamAuth';
 import Chat from './Chat';
 
@@ -24,6 +24,9 @@ vi.mock('@/shared/api/chats', () => ({
     .fn()
     .mockResolvedValue({ items: [], next_cursor: null, limit: 100 }),
   getPausedRun: vi.fn().mockResolvedValue({ pause: null }),
+  getActiveChatRun: vi.fn().mockResolvedValue({ run: null }),
+  attachChatRun: vi.fn(),
+  stopChatRun: vi.fn().mockResolvedValue({ run_id: 'run', accepted: true }),
   generateChatTitle: vi.fn().mockResolvedValue({ generated: false }),
   uploadChatAttachment: vi.fn(),
 }));
@@ -96,6 +99,7 @@ async function submitWithPendingUpload() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(getActiveChatRun).mockResolvedValue({ run: null });
 });
 
 it('marks a partial response as stopped and keeps it out of subsequent streaming runs', async () => {
@@ -129,7 +133,15 @@ it('marks a partial response as stopped and keeps it out of subsequent streaming
     )
   );
   await screen.findByText('Частичный ответ');
+  vi.mocked(stopChatRun).mockImplementation(async (chatId, runId) => {
+    expect(chatId).toBe('chat');
+    source.enqueue(
+      new TextEncoder().encode(`event: cancelled\ndata: ${JSON.stringify({ run_id: runId })}\n\n`)
+    );
+    return { run_id: runId, accepted: true };
+  });
   fireEvent.click(screen.getByRole('button', { name: 'Остановить генерацию' }));
+  await waitFor(() => expect(stopChatRun).toHaveBeenCalledWith('chat', expect.any(String)));
   await screen.findByText('Ответ остановлен');
   await waitFor(() => expect(screen.getByRole('textbox')).toBeEnabled());
   fireEvent.change(screen.getByRole('textbox'), {

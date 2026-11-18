@@ -6,7 +6,7 @@ import {
   type SetStateAction,
 } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { toApiError } from '@/shared/api/errors';
+import { ApiError, toApiError } from '@/shared/api/errors';
 import { qk } from '@/shared/api/keys';
 import { fetchStreamWithAuth } from '@/shared/api/streamAuth';
 import {
@@ -43,7 +43,6 @@ interface Options {
   clearPausedInteraction: () => void;
   applyPausedState: (pause: ChatStreamPause) => void;
   loadMessages: (chatId: string) => Promise<void>;
-  invalidateHistory: (chatId: string) => void;
 }
 
 async function ensureResponse(response: Response) {
@@ -72,7 +71,6 @@ export function useChatStreaming({
   clearPausedInteraction,
   applyPausedState,
   loadMessages,
-  invalidateHistory,
 }: Options) {
   const controllerRef = useRef<AbortController | null>(null);
   const streamTargetRef = useRef<{
@@ -81,6 +79,8 @@ export function useChatStreaming({
   } | null>(null);
   const flushRef = useRef<(() => void) | null>(null);
   const currentChatRef = useRef<string | null>(null);
+  const restoreGenerationRef = useRef(0);
+  const getRestoreGeneration = useCallback(() => restoreGenerationRef.current, []);
   const queryClient = useQueryClient();
   useEffect(
     () => () => {
@@ -159,7 +159,10 @@ export function useChatStreaming({
 
   const setCurrentChat = useCallback(
     (chatId: string | null) => {
-      if (currentChatRef.current !== chatId) abortStream();
+      if (currentChatRef.current !== chatId) {
+        restoreGenerationRef.current += 1;
+        abortStream();
+      }
       currentChatRef.current = chatId;
     },
     [abortStream]
@@ -302,6 +305,7 @@ export function useChatStreaming({
             } else if (event.type === 'pause') {
               applyPausedState(event.pause);
             } else if (event.type === 'cached') {
+              setActiveRun(null);
               await loadMessages(chatId);
             }
           },
@@ -350,7 +354,14 @@ export function useChatStreaming({
         return true;
       } catch (error: unknown) {
         if (controllerRef.current !== controller) return false;
-        if (error instanceof ChatStreamFailure) {
+        if (error instanceof ApiError && error.code === 'CHAT_RUNTIME_START_FAILED') {
+          // The backend committed a terminal failed turn during startup
+          // compensation. This pause cannot be retried, so clear HITL state and
+          // reconcile the persisted outcome instead of restoring previousRun.
+          clearPendingState();
+          removeEmptyAssistant(chatId, assistantId);
+          await loadMessages(chatId);
+        } else if (error instanceof ChatStreamFailure) {
           clearPendingState();
           await loadMessages(chatId);
         } else if (previousRun !== undefined && !hasOpenedStream) {
@@ -407,11 +418,11 @@ export function useChatStreaming({
         return false;
       }
       currentChatRef.current = chatId;
+      restoreGenerationRef.current += 1;
       const controller = new AbortController();
       controllerRef.current = controller;
       clearPendingState();
       setIsStreaming(true);
-      invalidateHistory(chatId);
       const userId = `temp-user-${createIdempotencyKey()}`;
       const assistantId = `temp-assistant-${createIdempotencyKey()}`;
       streamTargetRef.current = { chatId, assistantId };
@@ -467,7 +478,6 @@ export function useChatStreaming({
       addMessages,
       clearPendingState,
       executeStream,
-      invalidateHistory,
       setActiveRun,
       setIsStreaming,
     ]
@@ -490,24 +500,32 @@ export function useChatStreaming({
         onError('Дождитесь завершения текущего ответа');
         return false;
       }
+      restoreGenerationRef.current += 1;
       const controller = new AbortController();
       controllerRef.current = controller;
       setIsStreaming(true);
-      invalidateHistory(chatId);
       const assistantId =
         activeRun?.assistantMessageId ||
         `temp-assistant-${createIdempotencyKey()}`;
       streamTargetRef.current = { chatId, assistantId };
-      if (action !== 'cancel' && !activeRun) {
-        addMessages(chatId, [
-          {
-            id: assistantId,
-            role: 'assistant',
-            content: '',
-            createdAt: new Date().toISOString(),
-            isOptimistic: true,
-          },
-        ]);
+      if (action !== 'cancel') {
+        setMessagesByChat(prev => {
+          const current = prev[chatId] || { items: [], loading: false, loaded: true };
+          if (current.items.some(item => item.id === assistantId)) return prev;
+          return {
+            ...prev,
+            [chatId]: {
+              ...current,
+              items: [...current.items, {
+                id: assistantId,
+                role: 'assistant',
+                content: '',
+                createdAt: new Date().toISOString(),
+                isOptimistic: true,
+              }],
+            },
+          };
+        });
       }
       setActiveRun({
         userMessageId: activeRun?.userMessageId || '',
@@ -551,7 +569,6 @@ export function useChatStreaming({
       addMessages,
       clearPausedInteraction,
       executeStream,
-      invalidateHistory,
       setActiveRun,
       setIsStreaming,
     ]
@@ -562,8 +579,14 @@ export function useChatStreaming({
       chatId: string,
       runId: string,
       userMessageId: string | null,
-      activity?: ChatRuntimeProgressSnapshot | null
+      activity?: ChatRuntimeProgressSnapshot | null,
+      expectedGeneration?: number
     ) => {
+      if (
+        (expectedGeneration !== undefined && expectedGeneration !== restoreGenerationRef.current) ||
+        currentChatRef.current !== chatId
+      ) return false;
+      restoreGenerationRef.current += 1;
       if (controllerRef.current) abortStream();
       currentChatRef.current = chatId;
       const controller = new AbortController();
@@ -610,5 +633,5 @@ export function useChatStreaming({
     []
   );
 
-  return { abortStream, setCurrentChat, sendMessageStream, resumeStream, attachRun, stopRun };
+  return { abortStream, setCurrentChat, getRestoreGeneration, sendMessageStream, resumeStream, attachRun, stopRun };
 }

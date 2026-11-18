@@ -21,6 +21,8 @@ from app.api.deps import (
     resolve_chat_context,
 )
 from app.core.db import get_session_factory
+from app.core.config import get_settings
+from app.core.exceptions import ChatRuntimeStartError
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
@@ -47,7 +49,7 @@ from app.services.chat_runtime_runner import (
     read_chat_stage_snapshot,
     chat_runtime_runner,
 )
-from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailSubscriber
+from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailEventBus, RuntimeTailSubscriber
 from app.core.chat_lifecycle import (
     ACTIVE_STATUSES,
     WAITING_STATUSES,
@@ -66,6 +68,39 @@ router = APIRouter()
 logger = get_logger(__name__)
 CHAT_STATUS_POLL_SECONDS = 2.0
 CHAT_STATUS_KEEPALIVE_SECONDS = 15.0
+
+
+async def _publish_resume_start_failure(
+    *, redis: Redis, run_id: uuid.UUID, execution_id: uuid.UUID, user_message_id: Optional[str],
+) -> None:
+    """Best-effort wakeup for observers after a confirmed failed resume claim."""
+    timeout = get_settings().CHAT_RUNTIME_START_FAILURE_NOTIFY_TIMEOUT_SECONDS
+    bus = RuntimeTailEventBus(redis_client=redis)
+    terminal_events = (
+        {"type": "service_event", "event": {
+            "type": "state", "run_id": str(run_id), "status": "failed",
+            "user_message_id": user_message_id,
+        }},
+        {"type": "service_event", "event": {
+            "type": "error", "run_id": str(run_id), "code": "chat_runtime_start_failed",
+            "error": "Не удалось продолжить выполнение. Отправьте запрос заново.",
+        }},
+        {"type": "done"},
+    )
+    for event in terminal_events:
+        try:
+            await asyncio.wait_for(
+                bus.publish(
+                    stream_key=chat_event_stream_key(str(run_id)),
+                    payload={**event, "execution_id": str(execution_id)},
+                ),
+                timeout=timeout,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.warning("chat_resume_start_failure_notification_failed run_id=%s event_type=%s",
+                           run_id, event.get("event", {}).get("type", event.get("type")), exc_info=True)
 
 
 @router.get("/{chat_id}/context", response_model=ChatContextInspectionResponse)
@@ -277,36 +312,53 @@ async def attach_chat_run_events(
     subscriber = RuntimeTailSubscriber(
         stream_key=chat_event_stream_key(str(run_uuid)), redis_client=redis,
     )
-    await subscriber.subscribe()
-    result = await session.execute(
-        select(ChatTurn).where(
-            ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
-            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
-            ChatTurn.runtime_run_id == run_uuid,
-            ChatTurn.status.in_(ACTIVE_STATUSES),
-        ).limit(1)
-    )
-    turn = result.scalar_one_or_none()
-    if turn is None:
-        await subscriber.unsubscribe()
-        raise HTTPException(status_code=404, detail="Active run not found")
-    activity = await read_chat_stage_snapshot(redis, str(run_uuid))
-    state_frame = map_service_event_to_sse({
-        "type": "state",
-        "run_id": str(run_uuid),
-        "status": normalize_chat_turn_status(turn.status, turn.pause_status),
-        "stage": activity.get("stage") if activity else None,
-        "activity": activity,
-        "pause_reason": turn.pause_status,
-        "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
-    })
-    await session.close()
+    try:
+        await subscriber.subscribe()
+        result = await session.execute(
+            select(ChatTurn).where(
+                ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
+                ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+                ChatTurn.runtime_run_id == run_uuid,
+                ChatTurn.status.in_(ACTIVE_STATUSES),
+            ).limit(1)
+        )
+        turn = result.scalar_one_or_none()
+        if turn is None:
+            raise HTTPException(status_code=404, detail="Active run not found")
+        activity = await read_chat_stage_snapshot(redis, str(run_uuid))
+        state_frame = map_service_event_to_sse({
+            "type": "state",
+            "run_id": str(run_uuid),
+            "status": normalize_chat_turn_status(turn.status, turn.pause_status),
+            "stage": activity.get("stage") if activity else None,
+            "activity": activity,
+            "pause_reason": turn.pause_status,
+            "user_message_id": str(turn.user_message_id) if turn.user_message_id else None,
+        })
+        await session.close()
+    except BaseException:
+        try:
+            await subscriber.unsubscribe()
+        except Exception:
+            logger.warning("chat_run_attach_setup_cleanup_failed run_id=%s", run_uuid, exc_info=True)
+        raise
 
     async def _gen() -> AsyncGenerator[str, None]:
         try:
             yield state_frame or ""
             async for event in subscriber.listen():
                 if event.get("type") == "done":
+                    if event.get("execution_id"):
+                        from app.services.chat_turn_service import ChatTurnService
+                        factory = get_session_factory()
+                        async with factory() as status_session:
+                            current = await ChatTurnService(status_session).get_by_runtime_run_id(run_uuid)
+                            if (current is not None and current.status in ACTIVE_STATUSES
+                                    and str(current.chat_id) == str(chat_ctx.chat_id)
+                                    and str(current.user_id) == str(current_user.id)):
+                                # A previous dispatch can finish after the
+                                # same root turn has already claimed resume.
+                                continue
                     break
                 payload = event.get("event") if event.get("type") == "service_event" else None
                 if isinstance(payload, dict):
@@ -700,13 +752,57 @@ async def resume_run(
     resume_subscriber = RuntimeTailSubscriber(
         stream_key=chat_event_stream_key(str(run_uuid)), redis_client=resume_redis,
     )
-    await resume_subscriber.subscribe()
-    await chat_runtime_runner.start(
-        command=command,
-        llm_client=resume_llm,
-        redis_client=resume_redis,
-        session_factory=get_session_factory(),
-    )
+    try:
+        await resume_subscriber.subscribe()
+        await chat_runtime_runner.start(
+            command=command,
+            llm_client=resume_llm,
+            redis_client=resume_redis,
+            session_factory=get_session_factory(),
+        )
+    except BaseException as exc:
+        failure_persisted = False
+        import anyio
+        with anyio.CancelScope(shield=True):
+            try:
+                await resume_subscriber.unsubscribe()
+            except Exception:
+                logger.warning("chat_resume_subscriber_cleanup_failed run_id=%s", run_uuid, exc_info=True)
+            # Startup failures before task creation must not strand the durable
+            # claim in `running`. If this process already owns a live task, leave
+            # lifecycle ownership to that runner instead.
+            if not chat_runtime_runner.is_running(run_uuid):
+                try:
+                    current_turn = await turn_service.get_by_id(turn.id)
+                    if current_turn is not None and current_turn.status in ACTIVE_STATUSES:
+                        failed_turn = await turn_service.fail_turn(
+                            turn.id, error_message="chat_runtime_start_failed",
+                        )
+                        if failed_turn is not None:
+                            await session.commit()
+                            failure_persisted = failed_turn.status == "failed"
+                except Exception:
+                    await session.rollback()
+                    logger.exception("chat_resume_start_failure_persist_failed run_id=%s", run_uuid)
+            if failure_persisted:
+                await _publish_resume_start_failure(
+                    redis=resume_redis,
+                    run_id=run_uuid,
+                    execution_id=command.execution_id,
+                    user_message_id=(str(turn.user_message_id) if getattr(turn, "user_message_id", None) else None),
+                )
+        if not isinstance(exc, Exception):
+            raise
+        logger.exception("chat_runtime_resume_start_failed run_id=%s", run_uuid)
+        if failure_persisted:
+            raise ChatRuntimeStartError(
+                "Не удалось продолжить выполнение. Отправьте запрос заново.",
+                details={"run_id": str(run_uuid), "status": "failed"},
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail="Не удалось начать продолжение. Попробуйте позже.",
+        ) from exc
     await session.close()
 
     async def _resume_gen() -> AsyncGenerator[str, None]:
@@ -715,6 +811,10 @@ async def resume_run(
                 "type": "run_started", "run_id": str(run_uuid), "status": "running",
             }) or ""
             async for event in resume_subscriber.listen():
+                # A root run is reused across pauses. Events queued while the
+                # previous owner finishes must not terminate this continuation.
+                if event.get("execution_id") != str(command.execution_id):
+                    continue
                 if event.get("type") == "done":
                     break
                 payload = event.get("event") if event.get("type") == "service_event" else None

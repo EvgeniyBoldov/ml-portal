@@ -5,6 +5,11 @@
 Accepted — implemented with the advisory policy contract in
 [`ADR_ROOT_ROUTE_RECOMMENDATION.md`](ADR_ROOT_ROUTE_RECOMMENDATION.md).
 
+The earlier direct-handoff behavior described in the historical context of
+that ADR is superseded. Current behavior evaluates `RootRoutePolicy` as an
+advisory recommendation and always routes a new implicit turn through
+TurnPreflight before planning.
+
 ## Decision
 
 Before invoking the TurnPreflight LLM, `RuntimePipeline` evaluates bounded
@@ -123,9 +128,11 @@ was submitted for verification, never that preflight persisted it.
 
 - Simple questions avoid planner and empty agent tasks but still use
   synthesizer for the final user-visible answer.
-- Explicit live NetBox inventory lookups can receive a policy recommendation
-  only when the RBAC-filtered planner catalog contains `inventory.netbox`;
-  TurnPreflight decides whether to accept it using the request and dialogue.
+- Explicit live NetBox inventory lookups can receive a policy recommendation.
+  When the RBAC-filtered planner catalog contains `inventory.netbox`, it may be
+  included as a source hint; when no eligible source exists, the recommendation
+  uses `source_not_available` and carries no source slug. TurnPreflight decides
+  the route from the request, dialogue and available capabilities.
 - Project-memory answers may require one additional TurnPreflight call after
   registered memory search; planning and agent work are still avoided.
 - TurnPreflight is the sole final root routing decision-maker. Planner remains

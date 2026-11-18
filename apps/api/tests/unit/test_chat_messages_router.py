@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -12,9 +14,11 @@ from starlette.requests import Request
 from app.api.deps import ChatContext
 from app.api.v1.routers.chat import messages as chat_messages
 from app.core.security import UserCtx
+from app.core.exceptions import ChatRuntimeStartError, app_error_handler
 from app.schemas.chats import ChatMessageStreamRequest
 from app.schemas.confirmations import ConfirmationIssueRequest
 from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeRequest
+from app.services import chat_turn_service as chat_turn_service_module
 
 
 class _Result:
@@ -160,6 +164,102 @@ async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_root_observer_ignores_obsolete_done_while_continuation_is_active(monkeypatch):
+    from app.services import chat_turn_service as turns_module
+
+    chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(chat_id=chat_id, user_id=user_id, runtime_run_id=run_id,
+                           status="running", pause_status=None, user_message_id=None)
+
+    class Subscriber(_TailSubscriber):
+        async def listen(self):
+            yield {"type": "done", "execution_id": "old-owner"}
+            yield {"type": "service_event", "execution_id": "new-owner", "event": {
+                "type": "state", "run_id": str(run_id), "status": "failed",
+            }}
+            yield {"type": "service_event", "execution_id": "new-owner", "event": {
+                "type": "error", "run_id": str(run_id), "code": "chat_runtime_start_failed",
+                "error": "Resume failed",
+            }}
+            yield {"type": "done", "execution_id": "new-owner"}
+
+    class FreshSession:
+        async def __aenter__(self):
+            return object()
+
+        async def __aexit__(self, *_args):
+            pass
+
+    states = iter(["running", "failed"])
+
+    class TurnService:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_runtime_run_id(self, requested_run):
+            assert requested_run == run_id
+            return SimpleNamespace(chat_id=chat_id, user_id=user_id, status=next(states))
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", Subscriber)
+    monkeypatch.setattr(chat_messages, "get_session_factory", lambda: FreshSession)
+    monkeypatch.setattr(turns_module, "ChatTurnService", TurnService)
+    monkeypatch.setattr(chat_messages, "read_chat_stage_snapshot", AsyncMock(return_value=None))
+    session = AsyncMock()
+    session.execute.return_value = _Result(turn)
+
+    response = await chat_messages.attach_chat_run_events(
+        chat_id=str(chat_id), run_id=str(run_id), session=session, redis=AsyncMock(),
+        chat_ctx=ChatContext(chat_id=str(chat_id), user_id=str(user_id), tenant_id=str(tenant_id)),
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert any('"status": "failed"' in chunk for chunk in chunks)
+    assert any('"code": "chat_runtime_start_failed"' in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
+async def test_resume_observer_ignores_terminal_events_from_previous_owner(monkeypatch):
+    chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(), chat_id=chat_id, user_id=user_id, status="paused",
+        pause_status="waiting_input", paused_action={"kind": "input", "pause_id": "pause-1"},
+        paused_context={"question": "Какая тема?"}, paused_at=datetime.now(timezone.utc),
+    )
+    captured: dict[str, object] = {}
+    _mock_runtime(monkeypatch, captured)
+
+    class QueuedSubscriber(_TailSubscriber):
+        async def listen(self):
+            # The observer subscribed before the old owner's handoff finished.
+            yield {"type": "done", "execution_id": "previous-dispatch"}
+            yield {"type": "service_event", "execution_id": "previous-dispatch",
+                   "event": {"type": "stop"}}
+            yield {"type": "service_event", "execution_id": str(captured["command"].execution_id),
+                   "event": {"type": "final", "message_id": "resumed-answer", "content": "Продолжение"}}
+            yield {"type": "done", "execution_id": str(captured["command"].execution_id)}
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", QueuedSubscriber)
+    monkeypatch.setattr(chat_messages, "resolve_chat_context", AsyncMock(return_value=ChatContext(
+        chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id),
+    )))
+    monkeypatch.setattr(chat_messages, "get_redis", lambda: AsyncMock())
+    monkeypatch.setattr(chat_messages, "get_llm_client", lambda: AsyncMock())
+    session = AsyncMock()
+    session.execute.side_effect = [_Result(turn), _Result(SimpleNamespace(goal="Original goal")), _Result(turn)]
+
+    response = await chat_messages.resume_run(
+        run_id=str(run_id), body=RuntimeResumeRequest(action=RuntimeResumeAction.INPUT,
+            input="Новая тема", pause_id="pause-1"), session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]), _rl=None,
+    )
+    chunks = [chunk async for chunk in response.body_iterator]
+
+    assert any("event: final" in chunk for chunk in chunks)
+    assert not any("event: stop" in chunk for chunk in chunks)
+
+
+@pytest.mark.asyncio
 async def test_resume_run_reuses_paused_chat_turn(monkeypatch):
     chat_id = uuid4()
     user_id = uuid4()
@@ -254,6 +354,196 @@ async def test_resume_run_rejects_stale_pause_id_before_resuming(monkeypatch):
     assert exc.value.status_code == 409
     assert turn.status == "paused"
     session.commit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cancel_start", "fail_compensation"),
+    [(False, False), (True, False), (False, True)],
+)
+async def test_resume_start_failure_fails_claim_and_closes_observer(
+    monkeypatch, cancel_start, fail_compensation,
+):
+    chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
+    turn = SimpleNamespace(
+        id=uuid4(), chat_id=chat_id, user_id=user_id, status="paused",
+        pause_status="waiting_input", paused_action={"kind": "input", "pause_id": "pause-1"},
+        paused_context={"question": "Что уточнить?"}, paused_at=datetime.now(timezone.utc),
+    )
+    subscriber_calls = {"subscribe": 0, "unsubscribe": 0}
+    published = []
+
+    class TailBus:
+        def __init__(self, *, redis_client):
+            self.redis = redis_client
+
+        async def publish(self, *, stream_key, payload):
+            published.append((stream_key, payload))
+
+    class Subscriber:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def subscribe(self):
+            subscriber_calls["subscribe"] += 1
+
+        async def unsubscribe(self):
+            subscriber_calls["unsubscribe"] += 1
+
+    class TurnService:
+        def __init__(self, _session):
+            pass
+
+        async def resume_turn(self, _turn_id):
+            turn.status = "running"
+            return turn
+
+        async def get_by_id(self, _turn_id):
+            return turn
+
+        async def fail_turn(self, _turn_id, *, error_message):
+            assert error_message == "chat_runtime_start_failed"
+            if fail_compensation:
+                return None
+            turn.status = "failed"
+            return turn
+
+    class Checkpoint:
+        async def resolve_original_goal(self, _run_id):
+            return "Исходный запрос"
+
+        @staticmethod
+        def source_context_snapshot(*, goal):
+            return {"inputs": {"goal": goal}}
+
+        def build(self, **_kwargs):
+            return {"original_goal": "Исходный запрос"}
+
+    session = AsyncMock()
+    session.execute.return_value = _Result(turn)
+    monkeypatch.setattr(chat_turn_service_module, "ChatTurnService", TurnService)
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", Subscriber)
+    monkeypatch.setattr(chat_messages, "RuntimeTailEventBus", TailBus)
+    monkeypatch.setattr(chat_messages.RuntimeResumeCheckpointService, "from_session", lambda _session: Checkpoint())
+    monkeypatch.setattr(
+        chat_messages,
+        "resolve_chat_context",
+        AsyncMock(return_value=ChatContext(chat_id=str(chat_id), tenant_id=str(tenant_id), user_id=str(user_id))),
+    )
+    monkeypatch.setattr(chat_messages, "get_redis", lambda: AsyncMock())
+    monkeypatch.setattr(chat_messages, "get_llm_client", lambda: AsyncMock())
+
+    async def fail_start(**_kwargs):
+        if cancel_start:
+            raise asyncio.CancelledError
+        raise OSError("Redis control setup failed")
+
+    monkeypatch.setattr(chat_messages.chat_runtime_runner, "start", fail_start)
+    monkeypatch.setattr(chat_messages.chat_runtime_runner, "is_running", lambda _run_id: False)
+
+    invoke = chat_messages.resume_run(
+        run_id=str(run_id),
+        body=RuntimeResumeRequest(action=RuntimeResumeAction.INPUT, input="ответ", pause_id="pause-1"),
+        session=session,
+        current_user=UserCtx(id=str(user_id), tenant_ids=[str(tenant_id)]),
+        _rl=None,
+    )
+    if cancel_start:
+        with pytest.raises(asyncio.CancelledError):
+            await invoke
+    elif fail_compensation:
+        with pytest.raises(HTTPException) as exc:
+            await invoke
+        assert exc.value.status_code == 503
+    else:
+        with pytest.raises(ChatRuntimeStartError) as exc:
+            await invoke
+        problem = await app_error_handler(_request_with_headers({}), exc.value)
+        body = json.loads(problem.body)
+        assert problem.status_code == 503
+        assert body["code"] == "CHAT_RUNTIME_START_FAILED"
+        assert body["details"] == {"run_id": str(run_id), "status": "failed"}
+
+    assert turn.status == ("running" if fail_compensation else "failed")
+    assert subscriber_calls == {"subscribe": 1, "unsubscribe": 1}
+    assert session.commit.await_count == (1 if fail_compensation else 2)
+    if not fail_compensation:
+        assert [item[1]["event"]["type"] if item[1]["type"] == "service_event" else item[1]["type"]
+                for item in published] == ["state", "error", "done"]
+        assert all(item[1]["execution_id"] for item in published)
+        assert published[-1][1]["execution_id"] == published[0][1]["execution_id"]
+        assert published[0][1]["event"]["status"] == "failed"
+        assert published[1][1]["event"]["code"] == "chat_runtime_start_failed"
+    else:
+        assert published == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_first", [False, True])
+async def test_resume_failure_notification_attempts_all_terminal_frames_with_bounded_publish(
+    monkeypatch, fail_first,
+):
+    calls = []
+
+    class TailBus:
+        def __init__(self, *, redis_client):
+            pass
+
+        async def publish(self, *, stream_key, payload):
+            calls.append(payload)
+            if len(calls) == 1 and fail_first:
+                raise OSError("Redis publish failed")
+            if len(calls) == 1 and not fail_first:
+                await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailEventBus", TailBus)
+    monkeypatch.setattr(
+        chat_messages, "get_settings",
+        lambda: SimpleNamespace(CHAT_RUNTIME_START_FAILURE_NOTIFY_TIMEOUT_SECONDS=0.005),
+    )
+    run_id, execution_id = uuid4(), uuid4()
+    await chat_messages._publish_resume_start_failure(
+        redis=object(), run_id=run_id, execution_id=execution_id, user_message_id=None,
+    )
+    assert len(calls) == 3
+    assert [item["event"]["type"] if item["type"] == "service_event" else item["type"]
+            for item in calls] == ["state", "error", "done"]
+    assert all(item["execution_id"] == str(execution_id) for item in calls)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fail_subscribe", [False, True])
+async def test_attach_chat_run_events_closes_subscriber_when_setup_fails(monkeypatch, fail_subscribe):
+    calls = {"unsubscribe": 0}
+
+    class Subscriber:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def subscribe(self):
+            if fail_subscribe:
+                raise OSError("subscription setup failed")
+
+        async def unsubscribe(self):
+            calls["unsubscribe"] += 1
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", Subscriber)
+    session = AsyncMock()
+    session.execute.side_effect = OSError("database unavailable")
+    chat_id = str(uuid4())
+
+    expected_error = "subscription setup failed" if fail_subscribe else "database unavailable"
+    with pytest.raises(OSError, match=expected_error):
+        await chat_messages.attach_chat_run_events(
+            chat_id=chat_id,
+            run_id=str(uuid4()),
+            chat_ctx=ChatContext(chat_id=chat_id, tenant_id=str(uuid4()), user_id=str(uuid4())),
+            session=session,
+            current_user=UserCtx(id=str(uuid4()), tenant_ids=[]),
+            redis=AsyncMock(),
+        )
+
+    assert calls["unsubscribe"] == 1
 
 
 @pytest.mark.asyncio

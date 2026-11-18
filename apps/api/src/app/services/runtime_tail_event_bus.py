@@ -38,11 +38,14 @@ class RuntimeTailEventBus:
 
     async def publish(self, *, stream_key: str, payload: dict[str, Any]) -> None:
         redis_client = self._redis_client()
+        owns_client = self._redis is None
         data = dict(payload)
         data.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
-        await redis_client.publish(_channel(stream_key), json.dumps(data, ensure_ascii=False, default=str))
-        if self._redis is None:
-            await redis_client.aclose()
+        try:
+            await redis_client.publish(_channel(stream_key), json.dumps(data, ensure_ascii=False, default=str))
+        finally:
+            if owns_client:
+                await redis_client.aclose()
 
 
 class RuntimeTailSubscriber:
@@ -83,13 +86,25 @@ class RuntimeTailSubscriber:
                 logger.warning("RuntimeTailSubscriber decode failed: %s", exc)
 
     async def unsubscribe(self) -> None:
+        cleanup_error: Exception | None = None
         if self._pubsub is not None:
-            await self._pubsub.unsubscribe(_channel(self._stream_key))
-            await self._pubsub.close()
+            try:
+                await self._pubsub.unsubscribe(_channel(self._stream_key))
+            except Exception as exc:
+                cleanup_error = exc
+            try:
+                await self._pubsub.close()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
             self._pubsub = None
         if self._owned_client is not None:
-            await self._owned_client.aclose()
+            try:
+                await self._owned_client.aclose()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
             self._owned_client = None
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 class RuntimeRunControlBus:
@@ -141,12 +156,27 @@ class RuntimeRunControlSubscriber:
                 return
 
     async def unsubscribe(self) -> None:
+        cleanup_error: Exception | None = None
         if self._pubsub is not None:
-            await self._pubsub.unsubscribe(_control_channel(self._run_id))
-            await self._pubsub.close()
+            try:
+                await self._pubsub.unsubscribe(_control_channel(self._run_id))
+            except Exception as exc:
+                cleanup_error = exc
+            try:
+                await self._pubsub.close()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
             self._pubsub = None
         if self._redis is not None:
             if self._persist_cancel_marker:
-                await self._redis.delete(_control_cancel_key(self._run_id))
-            await self._redis.aclose()
+                try:
+                    await self._redis.delete(_control_cancel_key(self._run_id))
+                except Exception as exc:
+                    cleanup_error = cleanup_error or exc
+            try:
+                await self._redis.aclose()
+            except Exception as exc:
+                cleanup_error = cleanup_error or exc
             self._redis = None
+        if cleanup_error is not None:
+            raise cleanup_error

@@ -77,6 +77,40 @@ Diagnostics may include operator-facing data:
 
 These fields are shown in admin run page and sandbox inspector, not mixed into chat answer text.
 
+Chat runtime error normalization preserves recognized machine codes and maps
+unknown codes to `unknown_runtime_error`; timeout classification is not inferred
+from incidental message text as a tool timeout unless the code identifies a
+tool timeout. Local operation-handler exceptions use
+`operation_execution_failed` and a generic model-facing failure result while
+exception details stay in operator logs.
+
+The runtime preserves recognized codes from its runtime and LLM error catalogs
+in chat error payloads, with role-appropriate safe user messages. A resume
+startup failure compensated before runner ownership uses
+`CHAT_RUNTIME_START_FAILED` in RFC 7807 `code`, with `{run_id, status:
+"failed"}` details and HTTP 503. The frontend preserves problem `code`,
+`details`, and `traceId`; this specific terminal startup code clears the pause
+and reloads persisted history, while other HTTP rejections keep the pause for
+retry. If a runner already owns the run, its lifecycle remains that runner's
+responsibility. Confirmed startup compensation also sends a bounded,
+best-effort failed state/error/done notification to observers; see
+[Chat Turn Lifecycle](CHAT_TURN_LIFECYCLE.md) for its execution correlation
+and per-frame timeout.
+
+An unexpected Redis run-control subscriber failure fails the active execution
+with `chat_runtime_failed`; it is not interpreted as the user's Stop command.
+The execution task is cancelled and awaited, and the persisted turn becomes
+`failed`. Explicit Stop remains `cancelled`. If resume startup fails before a
+runner task is created, the durable active turn is failed as
+`chat_runtime_start_failed` and the resume endpoint returns HTTP 503; an
+already-started owner retains responsibility for its lifecycle.
+
+Stage snapshot lookup and service-event delivery are auxiliary to the persisted
+turn lifecycle. A stage lookup failure omits the optional progress snapshot.
+After a terminal outcome is durably committed, a Redis service-event delivery
+or runner-tail failure does not change that outcome to failed/cancelled; the
+failure is logged and the runner still performs cleanup.
+
 LLM rejection events (`llm_response` and terminal `error`) also preserve optional
 `status_code`, `provider_type`, `provider_code`, `provider_message` and
 `provider_param`. These are operator diagnostics, propagated through agent

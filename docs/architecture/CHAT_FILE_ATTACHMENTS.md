@@ -119,6 +119,18 @@ terminal `done` event. `final` carries the complete answer plus `sources` and
 `delta` events. A `pause` includes the `run_id`, pause `reason`, `action`,
 `context`, and `contract_version`.
 
+The source projection preserves source kind/type, document and artifact IDs,
+artifact metadata, URL, page and chunk identifiers through synthesis and chat
+delivery. Source cards normalize source `excerpt` as display text when `text`
+is absent, and show an ellipsis when the excerpt is marked truncated. An
+artifact source links through its artifact ID; a URL source opens its URL.
+The legacy original/canonical document downloads are offered only when the
+source is identified as a RAG document, or has the legacy chunk/page shape and
+no URL or artifact reference. An opaque source ID alone is not treated as a
+RAG document ID. Direct evidence and planned synthesis preserve explicit
+whole-document references as well as chunk references. The chat does not infer
+a RAG document from a URL plus page number.
+
 The chat exposes the active clarification or confirmation in its header and
 restores it from `GET /api/v1/chats/{chat_id}/paused-run`. A continuation uses
 `POST /api/v1/chats/runs/{run_id}/resume` and returns the same SSE event stream.

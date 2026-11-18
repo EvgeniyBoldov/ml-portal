@@ -316,10 +316,14 @@ class SynthesisContextBuilder:
         for item in value:
             if not isinstance(item, dict):
                 continue
-            source_id = str(item.get("source_id") or item.get("id") or item.get("url") or "").strip()
+            source_id = str(item.get("source_id") or item.get("document_id") or item.get("id")
+                            or item.get("artifact_id") or item.get("url") or "").strip()
             if not source_id:
                 continue
             source = {"source_id": source_id}
+            for key in ("kind", "source_type", "document_id"):
+                if item.get(key) is not None:
+                    source[key] = item[key]
             if item.get("artifact_id"):
                 source["artifact_id"] = str(item["artifact_id"])
             if isinstance(item.get("artifact"), dict):

@@ -9,26 +9,15 @@ This decision supersedes the direct-handoff behavior in
 
 ## Context
 
-`RootRoutePolicy` currently evaluates the current request and the RBAC-filtered
-agent catalog before `TurnPreflight`. A match can bypass TurnPreflight and
-construct a `TaskBrief` directly for planner. The policy is therefore a
-second terminal router, despite its deterministic lexical rules having less
-conversational context than TurnPreflight.
-
-Run `e7ca9266-bfd3-4aee-b777-ba8081f6bbdd` shows the consequence. For
-«посмотри в инвентори какие у меня есть коммутаторы», policy events 3–5
-matched `live_netbox_inventory_lookup`; the next event was planner start.
-There was no `turn_preflight` entity. In the earlier run
-`e4701915-824d-4b02-aaa9-295b50233323`, TurnPreflight proposed `clarify` and
-runtime later rerouted to planner. The two paths give different authorities
-over the same routing decision, and the policy path cannot interpret a short
-follow-up such as «А в инвентори посмотри» against the preceding dialogue.
-
-The policy must remain a cheap, bounded signal layer. It can recognize likely
-intent and available source candidates; it cannot establish the user's full
-goal, decide that clarification is unnecessary, or launch planning. The
-existing invariant that root routing precedes planning remains: TurnPreflight
-is the only final root router before planner/synthesizer.
+Historical context (superseded): before this decision, a matched deterministic
+policy could bypass TurnPreflight and hand a `TaskBrief` directly to planner.
+Trace `e7ca9266-bfd3-4aee-b777-ba8081f6bbdd` shows the direct
+`live_netbox_inventory_lookup` handoff; earlier trace
+`e4701915-824d-4b02-aaa9-295b50233323` shows TurnPreflight proposing
+`clarify` before a later reroute. Those traces document the former split
+authority and are not the current route. The accepted implementation evaluates
+`RootRoutePolicy` as a bounded advisory signal, then lets TurnPreflight make
+the final root routing decision.
 
 ## Decision
 

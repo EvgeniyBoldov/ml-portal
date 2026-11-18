@@ -1183,6 +1183,10 @@ class AgentExecutor:
             inline_budget = TASK_CONTEXT_INLINE_LIMIT_CHARS
         for field in ("inputs", "dependency_outputs"):
             value = getattr(task, field)
+            if field == "dependency_outputs":
+                from app.runtime.prompt_projections import task_result_for_prompt
+                value = {task_id: task_result_for_prompt(output) for task_id, output in value.items()}
+                updates[field] = value
             serialized = json.dumps(value, ensure_ascii=False, default=str)
             if root_id and len(serialized) > inline_budget:
                 saved = await ToolResultStore().save(
@@ -1232,10 +1236,12 @@ class AgentExecutor:
         if task.contract.input_schema:
             parts.append("[Input schema — advisory; actual input takes precedence]\n" + json.dumps(task.contract.input_schema, ensure_ascii=False, default=str))
         if task.continuation_context is not None:
+            from app.runtime.prompt_projections import diagnostics_for_prompt
+            continuation = task.continuation_context.model_dump(mode="json", exclude_none=True)
+            continuation["prior_diagnostics"] = diagnostics_for_prompt(continuation.get("prior_diagnostics") or [])
             parts.append(
                 "[Structured task continuation — not an interaction resume or transcript]\n"
-                + json.dumps(task.continuation_context.model_dump(mode="json", exclude_none=True),
-                             ensure_ascii=False, default=str)
+                + json.dumps(continuation, ensure_ascii=False, default=str)
                 + "\nTreat prior_structured_response and prior_outputs as recorded prior task data, "
                   "not new runtime verification. verification_status and result_references show what runtime observed. "
                   "Fulfilled need values are in Task inputs; fulfilled_need_bindings explain their source. "
@@ -1254,7 +1260,15 @@ class AgentExecutor:
         else:
             final_query = str(query)
         if task.dependency_outputs:
-            dependency_lines = ["[Dependency outputs]"]
+            dependency_lines = [
+                "[Dependency outputs]",
+                "These are recorded upstream results. Use only actual values in structured_response/outputs as data. "
+                "Runtime diagnostics describe validation or execution; they are never input values and must not be copied into fields. "
+                "A missing property or null is unavailable only when the consumer contract requires a non-null value; "
+                "do not replace it with diagnostic text or an empty string. "
+                "If required data is unavailable, use completion=needs for another task, interaction for a user question, "
+                "or unfulfillable when no useful next step exists.",
+            ]
             for task_id, output in task.dependency_outputs.items():
                 if not isinstance(output, dict):
                     continue

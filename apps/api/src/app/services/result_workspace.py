@@ -69,10 +69,25 @@ def _json_pointer(value: Any, pointer: str) -> Any:
         raise ToolResultStoreError("path must be an RFC 6901 JSON Pointer")
     current = value
     for raw_segment in pointer[1:].split("/"):
-        segment = raw_segment.replace("~1", "/").replace("~0", "~")
+        decoded: list[str] = []
+        index = 0
+        while index < len(raw_segment):
+            char = raw_segment[index]
+            if char != "~":
+                decoded.append(char)
+                index += 1
+                continue
+            if index + 1 >= len(raw_segment) or raw_segment[index + 1] not in {"0", "1"}:
+                raise ToolResultStoreError("path must be an RFC 6901 JSON Pointer")
+            decoded.append("~" if raw_segment[index + 1] == "0" else "/")
+            index += 2
+        segment = "".join(decoded)
         if isinstance(current, dict) and segment in current:
             current = current[segment]
-        elif isinstance(current, list) and segment.isdigit() and int(segment) < len(current):
+        elif (isinstance(current, list)
+                and (segment == "0" or (segment and segment[0] in "123456789"
+                                        and all(char in "0123456789" for char in segment[1:])))
+                and int(segment) < len(current)):
             current = current[int(segment)]
         else:
             raise ToolResultStoreError(f"JSON Pointer path not found: {pointer}")

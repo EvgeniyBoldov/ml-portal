@@ -408,6 +408,7 @@ async def test_agent_runtime_recovers_oversized_direct_result_once_without_rerun
     assert save.await_args.kwargs["dataset_meta"]["recovery_reason"] == "batch_context_budget"
     outbound = json.dumps(runtime.llm.call.await_args_list[1].kwargs["messages"], ensure_ascii=False)
     assert "recovery-1" in outbound and "direct_overflow_saved" in outbound
+    assert "result_store_reference" in outbound
     assert "large direct evidence" not in outbound
 
 

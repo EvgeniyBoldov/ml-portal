@@ -110,7 +110,8 @@ def _sources_from_selected_evidence(run_context: dict[str, Any]) -> list[dict[st
             return
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         source_id = str(item.get("source_id") or item.get("document_id") or
-                        item.get("id") or metadata.get("source_id") or "").strip()
+                        item.get("id") or metadata.get("source_id") or
+                        item.get("artifact_id") or item.get("url") or "").strip()
         refs = item.get("source_references") or item.get("sources") or []
         if source_id:
             sources.setdefault(source_id, {
@@ -119,6 +120,10 @@ def _sources_from_selected_evidence(run_context: dict[str, Any]) -> list[dict[st
                    if item.get("title") or item.get("name") or metadata.get("document_title") else {}),
                 **({"url": item["url"]} if item.get("url") else {}),
                 **({"excerpt": str(item["text"])[:500]} if item.get("text") else {}),
+                **{key: item[key] for key in (
+                    "kind", "source_type", "document_id", "artifact_id", "artifact",
+                    "chunk_id", "page", "score", "representation_id", "start", "end",
+                ) if item.get(key) is not None},
             })
         if isinstance(refs, list):
             for ref in refs:

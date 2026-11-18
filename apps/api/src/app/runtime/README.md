@@ -114,7 +114,13 @@ Notes:
 
 ## Tunable Points
 
-- Policy limits: `platform_config.py` (`max_steps`, `max_wall_time_ms`).
+- Runtime limits: resolve the active limits and budgets through
+  `RuntimeLimitsService` / `BudgetResolver`; `platform_config.py` assembles the
+  per-turn platform snapshot and is not the source of runtime `max_steps` or
+  `max_wall_time_ms` policy values.
+- Implicit root routing: `RootRoutePolicy` supplies an advisory recommendation;
+  `TurnPreflight` makes the final route decision. See
+  `docs/architecture/ADR_ROOT_ROUTE_RECOMMENDATION.md`.
 - Stage behavior: `stages/*.py`.
 - Event contract/envelope: `events.py`, `envelope.py`.
 - Confirmation continuation behavior: `pipeline.py`, `orchestrator.py` and HITL protocol adapters.
@@ -171,9 +177,10 @@ Rules:
   `run_start/run_end`, `orchestrator_*`, `planner_iteration_*`,
   `agent_*`, `synthesis_*`.
 - `runtime_execution_events` is the only persisted runtime journal. Chat root
-  runs use level `none`; scoped agent executions persist according to the
-  configured agent level. `RuntimeProgressStreamer` projects safe progress
-  from the same logger admission point without creating a second trace.
+  runs and their scoped agent executions use level `full`; non-chat scoped
+  executions use their configured agent level. `RuntimeProgressStreamer`
+  projects safe progress from the same logger admission point without creating
+  a second trace.
 - LLM trace uses `llm_request` and `llm_response` for one stable `llm_call_id`.
 
 ## Tests

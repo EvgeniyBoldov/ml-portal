@@ -114,7 +114,10 @@ def _bounded_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(key, str) or len(key) > 80:
             continue
         if isinstance(value, str):
-            result[key] = value[:600]
+            # The discriminated Pydantic payload has already enforced the
+            # canonical per-field length; a second generic slice would
+            # silently narrow valid GoalPayload/RecentAnchorPayload values.
+            result[key] = value
         elif isinstance(value, (bool, int, float)):
             result[key] = value
         elif isinstance(value, list):

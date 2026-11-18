@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -41,7 +41,11 @@ def chat_stage_snapshot_key(run_id: str) -> str:
 
 
 async def read_chat_stage_snapshot(redis_client: Any, run_id: str) -> dict[str, Any] | None:
-    raw = await redis_client.get(chat_stage_snapshot_key(run_id))
+    try:
+        raw = await redis_client.get(chat_stage_snapshot_key(run_id))
+    except Exception:
+        logger.warning("chat_runtime_stage_snapshot_read_failed run_id=%s", run_id, exc_info=True)
+        return None
     if not raw:
         return None
     try:
@@ -64,6 +68,7 @@ class ChatRuntimeCommand:
     continuation_meta: Optional[dict[str, Any]] = None
     resumed_turn_id: Optional[uuid.UUID] = None
     persist_user_message: bool = True
+    execution_id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
 class ChatRuntimeRunner:
@@ -74,6 +79,11 @@ class ChatRuntimeRunner:
         self._lock = asyncio.Lock()
         self._event_bus = RuntimeTailEventBus()
 
+    def is_running(self, run_id: uuid.UUID) -> bool:
+        """Return whether this process currently owns a live execution task."""
+        task = self._tasks.get(run_id)
+        return task is not None and not task.done()
+
     async def start(
         self,
         *,
@@ -82,48 +92,76 @@ class ChatRuntimeRunner:
         redis_client: Any,
         session_factory: Any,
     ) -> asyncio.Task[None]:
+        previous_owner: asyncio.Task[None] | None = None
+        ready: asyncio.Event | None = None
+        task: asyncio.Task[None] | None = None
         async with self._lock:
             existing = self._tasks.get(command.run_id)
             if existing is not None and not existing.done():
-                return existing
-
-            # Subscribe before starting execution so a Stop request cannot be
-            # lost between returning the run id and beginning the pipeline.
-            control = RuntimeRunControlSubscriber(
-                run_id=str(command.run_id), persist_cancel_marker=True,
-            )
-            await control.subscribe()
-            try:
-                await redis_client.set(
-                    chat_run_owner_key(str(command.run_id)),
-                    json.dumps({
-                        "chat_id": str(command.chat_id),
-                        "user_id": str(command.user_id),
-                    }),
-                    ex=CHAT_RUN_OWNER_TTL_SECONDS,
+                if command.resumed_turn_id is None:
+                    return existing
+                # The previous owner may still be publishing a terminal pause
+                # and clearing this run's Redis owner key. A resume must not
+                # borrow that task or install a new owner before its cleanup.
+                previous_owner = existing
+            else:
+                # Subscribe before starting execution so a Stop request cannot
+                # be lost between returning the run id and beginning the pipeline.
+                control = RuntimeRunControlSubscriber(
+                    run_id=str(command.run_id), persist_cancel_marker=True,
                 )
-            except Exception:
-                await control.unsubscribe()
-                raise
-            ready = asyncio.Event()
-            task = asyncio.create_task(
-                self._run(
-                    command=command,
-                    llm_client=llm_client,
-                    redis_client=redis_client,
-                    session_factory=session_factory,
-                    control=control,
-                    ready=ready,
-                ),
-                name=f"chat-runtime:{command.run_id}",
+                try:
+                    await control.subscribe()
+                    await redis_client.set(
+                        chat_run_owner_key(str(command.run_id)),
+                        json.dumps({
+                            "chat_id": str(command.chat_id),
+                            "user_id": str(command.user_id),
+                        }),
+                        ex=CHAT_RUN_OWNER_TTL_SECONDS,
+                    )
+                except BaseException:
+                    import anyio
+                    with anyio.CancelScope(shield=True):
+                        try:
+                            await control.unsubscribe()
+                        except Exception:
+                            logger.warning(
+                                "chat_runtime_control_setup_cleanup_failed run_id=%s",
+                                command.run_id,
+                                exc_info=True,
+                            )
+                    raise
+                ready = asyncio.Event()
+                task = asyncio.create_task(
+                    self._run(
+                        command=command,
+                        llm_client=llm_client,
+                        redis_client=redis_client,
+                        session_factory=session_factory,
+                        control=control,
+                        ready=ready,
+                    ),
+                    name=f"chat-runtime:{command.run_id}",
+                )
+                self._tasks[command.run_id] = task
+
+                def clear_finished(finished: asyncio.Task[None]) -> None:
+                    if self._tasks.get(command.run_id) is finished:
+                        self._tasks.pop(command.run_id, None)
+
+                task.add_done_callback(clear_finished)
+        if previous_owner is not None:
+            await asyncio.gather(asyncio.shield(previous_owner), return_exceptions=True)
+            # Recheck under the lock: another owner may have won the handoff
+            # while this resume waited outside the global lock.
+            return await self.start(
+                command=command,
+                llm_client=llm_client,
+                redis_client=redis_client,
+                session_factory=session_factory,
             )
-            self._tasks[command.run_id] = task
-
-            def clear_finished(finished: asyncio.Task[None]) -> None:
-                if self._tasks.get(command.run_id) is finished:
-                    self._tasks.pop(command.run_id, None)
-
-            task.add_done_callback(clear_finished)
+        assert ready is not None and task is not None
         ready_wait = asyncio.create_task(ready.wait())
         await asyncio.wait({task, ready_wait}, return_when=asyncio.FIRST_COMPLETED)
         if not ready_wait.done():
@@ -145,7 +183,13 @@ class ChatRuntimeRunner:
         control: RuntimeRunControlSubscriber,
         ready: asyncio.Event,
     ) -> None:
+        terminal_result_produced = False
+
+        async def publish(payload: dict[str, Any]) -> None:
+            await self._publish(command.run_id, {**payload, "execution_id": str(command.execution_id)})
+
         async def execute() -> None:
+            nonlocal terminal_result_produced
             async with session_factory() as session:
                 repositories = AsyncRepositoryFactory(
                     session, command.tenant_id, command.user_id,
@@ -172,6 +216,17 @@ class ChatRuntimeRunner:
                     cancellation_reason="Cancelled by user",
                 ):
                     event = self._normalize_service_event(event, command.run_id)
+                    if event.get("type") in {"final", "cached", "stop", "run_paused"} or (
+                        event.get("type") == "state"
+                        and event.get("status") in {
+                            ChatTurnStatus.COMPLETED.value,
+                            ChatTurnStatus.FAILED.value,
+                            ChatTurnStatus.CANCELLED.value,
+                            ChatTurnStatus.WAITING_INPUT.value,
+                            ChatTurnStatus.WAITING_CONFIRMATION.value,
+                        }
+                    ):
+                        terminal_result_produced = True
                     if event.get("type") in {"user_message", "cached", "error", "state"} or (
                         event.get("type") == "stage"
                         and isinstance(event.get("activity"), dict)
@@ -195,10 +250,19 @@ class ChatRuntimeRunner:
                         activity = await read_chat_stage_snapshot(redis_client, str(command.run_id))
                         if activity:
                             event.setdefault("stage", activity.get("stage"))
-                    await self._event_bus.publish(
-                        stream_key=chat_event_stream_key(str(command.run_id)),
-                        payload={"type": "service_event", "event": event},
-                    )
+                    try:
+                        await self._event_bus.publish(
+                            stream_key=chat_event_stream_key(str(command.run_id)),
+                            payload={"type": "service_event", "event": event,
+                                     "execution_id": str(command.execution_id)},
+                        )
+                    except Exception:
+                        if not terminal_result_produced:
+                            raise
+                        # Persistence already owns the terminal outcome. A
+                        # transport failure must not turn it into a failed run.
+                        logger.warning("chat_runtime_terminal_event_publish_failed run_id=%s",
+                                       command.run_id, exc_info=True)
 
         execution = asyncio.create_task(execute(), name=f"chat-turn:{command.run_id}")
         cancel_wait = asyncio.create_task(control.wait_for_cancel())
@@ -207,37 +271,72 @@ class ChatRuntimeRunner:
             name=f"chat-turn-heartbeat:{command.run_id}",
         )
         cancelled = False
+        control_failed = False
         try:
             done, _ = await asyncio.wait(
                 {execution, cancel_wait}, return_when=asyncio.FIRST_COMPLETED,
             )
-            if cancel_wait in done and not execution.done():
-                cancelled = True
-                execution.cancel()
-                await asyncio.gather(execution, return_exceptions=True)
+            if cancel_wait in done:
+                try:
+                    cancel_wait.result()
+                except asyncio.CancelledError as exc:
+                    if execution.done() or terminal_result_produced:
+                        await execution
+                    else:
+                        control_failed = True
+                        execution.cancel("chat_runtime_control_failure")
+                        await asyncio.gather(execution, return_exceptions=True)
+                        raise RuntimeError("Chat run control waiter was cancelled unexpectedly") from exc
+                except Exception as exc:
+                    if execution.done() or terminal_result_produced:
+                        logger.warning(
+                            "chat_runtime_control_failed_after_terminal run_id=%s", command.run_id, exc_info=True,
+                        )
+                        await execution
+                    else:
+                        control_failed = True
+                        execution.cancel("chat_runtime_control_failure")
+                        await asyncio.gather(execution, return_exceptions=True)
+                        raise RuntimeError("Chat run control channel failed") from exc
+                if execution.done() or terminal_result_produced:
+                    await execution
+                else:
+                    cancelled = True
+                    execution.cancel()
+                    await asyncio.gather(execution, return_exceptions=True)
             else:
                 await execution
         except asyncio.CancelledError:
-            cancelled = True
+            cancelled = not terminal_result_produced
             execution.cancel()
             await asyncio.gather(execution, return_exceptions=True)
             raise
         except Exception:
-            logger.exception("chat_runtime_runner_failed run_id=%s", command.run_id)
-            await self._fail_turn(command, session_factory)
-            await self._publish(command.run_id, {
-                "type": "service_event", "event": {
-                    "type": "state", "run_id": str(command.run_id),
-                    "status": ChatTurnStatus.FAILED.value,
-                },
-            })
-            await self._publish(
-                command.run_id,
-                {"type": "service_event", "event": {
-                    "type": "error", "code": "chat_runtime_failed",
-                    "error": "Не удалось обработать запрос. Попробуйте позже.",
-                }},
-            )
+            if terminal_result_produced:
+                logger.warning("chat_runtime_terminal_tail_failed run_id=%s", command.run_id, exc_info=True)
+                if not execution.done():
+                    execution.cancel("chat_runtime_post_terminal_failure")
+                    await asyncio.gather(execution, return_exceptions=True)
+            else:
+                logger.exception("chat_runtime_runner_failed run_id=%s", command.run_id)
+                if not execution.done():
+                    execution.cancel("chat_runtime_control_failure" if control_failed else "chat_runtime_owner_failure")
+                    await asyncio.gather(execution, return_exceptions=True)
+                await self._fail_turn(
+                    command, session_factory, allow_cancelled=control_failed,
+                )
+                await publish({
+                    "type": "service_event", "event": {
+                        "type": "state", "run_id": str(command.run_id),
+                        "status": ChatTurnStatus.FAILED.value,
+                    },
+                })
+                await publish(
+                    {"type": "service_event", "event": {
+                        "type": "error", "code": "chat_runtime_failed",
+                        "error": "Не удалось обработать запрос. Попробуйте позже.",
+                    }},
+                )
         finally:
             ready.set()
             if not cancel_wait.done():
@@ -246,23 +345,28 @@ class ChatRuntimeRunner:
             if not heartbeat_task.done():
                 heartbeat_task.cancel()
             await asyncio.gather(heartbeat_task, return_exceptions=True)
-            await control.unsubscribe()
+            try:
+                await control.unsubscribe()
+            except Exception:
+                # Control-channel cleanup is best-effort; it must not prevent
+                # persistence and terminal delivery for the owned chat turn.
+                logger.warning("chat_runtime_control_unsubscribe_failed run_id=%s", command.run_id, exc_info=True)
             # The nested orchestrator persists cancellation when the explicit
             # control signal cancels its generator. Keep this fallback for a
             # cancellation during setup, before that handler owns the turn.
             if cancelled:
                 await self._cancel_turn_if_active(command, session_factory)
-                await self._publish(command.run_id, {
+                await publish({
                     "type": "service_event", "event": {
                         "type": "state", "run_id": str(command.run_id),
                         "status": ChatTurnStatus.CANCELLED.value,
                     },
                 })
-                await self._publish(command.run_id, {
+                await publish({
                     "type": "service_event",
                     "event": {"type": "cancelled", "run_id": str(command.run_id)},
                 })
-            await self._publish(command.run_id, {"type": "done"})
+            await publish({"type": "done"})
             try:
                 await redis_client.delete(chat_run_owner_key(str(command.run_id)))
                 await redis_client.delete(chat_stage_snapshot_key(str(command.run_id)))
@@ -278,12 +382,20 @@ class ChatRuntimeRunner:
             logger.warning("chat_runtime_event_publish_failed run_id=%s", run_id, exc_info=True)
 
     @staticmethod
-    async def _fail_turn(command: ChatRuntimeCommand, session_factory: Any) -> None:
+    async def _fail_turn(
+        command: ChatRuntimeCommand,
+        session_factory: Any,
+        *,
+        allow_cancelled: bool = False,
+    ) -> None:
         try:
             async with session_factory() as session:
                 turns = ChatTurnService(session)
                 turn = await turns.get_by_runtime_run_id(command.run_id)
-                if turn is not None and turn.status in ACTIVE_STATUSES:
+                if turn is not None and (
+                    turn.status in ACTIVE_STATUSES
+                    or (allow_cancelled and turn.status == ChatTurnStatus.CANCELLED.value)
+                ):
                     await turns.fail_turn(turn.id, error_message="chat_runtime_failed")
                     await session.commit()
         except Exception:

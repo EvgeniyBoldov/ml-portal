@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from app.runtime.orchestrator_contracts import TaskCompletionDeclaration, TaskOutputSpec, TaskRequest
@@ -22,12 +24,90 @@ def test_schema_deviation_preserves_data_and_agent_completion():
     assert result.diagnostics
 
 
+def test_completion_prompt_distinguishes_missing_null_from_diagnostic_text():
+    from app.runtime.task_completion_prompt import build_task_completion_prompt
+
+    task = TaskRequest(task_id="consume", executor="agent", intent="infer", instructions="infer",
+        response_spec={"mode": "structured", "schema": {"type": "object"}})
+    prompt = build_task_completion_prompt(task)
+    assert "диагностические сообщения runtime" in prompt.lower()
+    assert "контракт потребителя не допускает null" in prompt.lower()
+    assert "needs, interaction или unfulfillable" in prompt.lower()
+
+
+def test_planner_compile_rejects_known_dependency_output_placeholder_but_keeps_other_literals():
+    from app.runtime.orchestrator import GraphOrchestrator
+    from app.runtime.orchestrator_contracts import IterationProposal
+    from app.runtime.plan_store import PlanValidationError
+
+    base = {"terminal": "planner", "tasks": [
+        {"task_id": "producer", "executor": "agent", "intent": "get", "instructions": "get"},
+        {"task_id": "consumer", "executor": "agent", "intent": "use", "instructions": "use",
+         "depends_on": ["producer"], "inputs": {"value": "{{producer.outputs.description}}"}},
+    ]}
+    with pytest.raises(PlanValidationError, match="unresolved dependency reference"):
+        GraphOrchestrator._compile(IterationProposal.model_validate(base), [{"slug": "agent"}],
+                                   {"tasks": [], "needs": []})
+
+    base["tasks"][1]["inputs"] = {
+        "literal": "Keep {{producer.outputs.description}} as user text",
+        "unknown": "{{not_a_task.outputs.description}}",
+    }
+    compiled = GraphOrchestrator._compile(IterationProposal.model_validate(base), [{"slug": "agent"}],
+                                          {"tasks": [], "needs": []})
+    assert compiled.tasks[1].inputs == base["tasks"][1]["inputs"]
+
+
 def test_needs_survives_partial_data_schema_deviation():
     result = reduce({"completion": "needs", "structured_response": {"found": 1},
                      "needs": [{"ref": "n", "key": "target", "description": "Choose target"}]},
                     outputs=[TaskOutputSpec(key="found", description="Found", schema={"type": "array"})])
     assert result.outcome.value == "needs_dependency"
     assert result.needs[0].ref == "n"
+
+
+def test_bound_observed_text_is_not_reinterpreted_as_a_planner_placeholder():
+    from app.runtime.orchestrator_contracts import IterationProposal, SchedulerActionKind
+    from app.runtime.plan_store import InMemoryPlanStore
+
+    store = InMemoryPlanStore()
+    plan = store.create(goal="Read a template", root_run_id="r", tenant_id="t")
+    store.apply_iteration(plan["id"], IterationProposal.model_validate({
+        "terminal": "planner", "tasks": [{
+            "task_id": "requester", "executor": "agent", "intent": "read", "instructions": "read",
+        }],
+    }))
+    finish(store, plan["id"], "requester", {
+        "completion": "needs", "needs": [{
+            "ref": "template", "key": "template", "description": "Get the source template",
+        }],
+    })
+    store.claim_checkpoint(plan["id"], SchedulerActionKind.INVOKE_PLANNER)
+    store.apply_iteration(plan["id"], IterationProposal.model_validate({
+        "terminal": "planner", "tasks": [
+            {"task_id": "source", "executor": "agent", "intent": "read", "instructions": "read"},
+            {"task_id": "consumer", "executor": "agent", "intent": "use", "instructions": "use",
+             "depends_on": ["source"]},
+        ],
+        "bindings": [{
+            "need_task_id": "requester", "need_ref": "template", "producer_task_id": "source",
+            "output_key": "/structured_response/template", "consumer_task_id": "consumer",
+            "consumer_input_key": "template",
+        }],
+        "resolutions": [{
+            "task_id": "requester", "action": "continue_with_tasks",
+            "replacement_task_ids": ["consumer"], "reason": "Read the real source value",
+        }],
+    }))
+    observed = "{{source.outputs.example}}"
+    finish(store, plan["id"], "source", {
+        "completion": "fulfilled", "structured_response": {"template": observed},
+    })
+    claim = store.claim_task(plan["id"], "consumer")
+
+    request = store.task_request(plan["id"], "consumer", expected_attempt_number=claim["attempts"])
+
+    assert request["inputs"]["template"] == observed
 
 
 def test_runtime_artifact_needs_no_model_selection():
@@ -121,6 +201,35 @@ def test_registered_contract_is_advisory_and_remains_typed_for_persistence():
     assert compiled.tasks[0].inputs == {"id": None}
     assert compiled.tasks[0].contract.model_dump()["contract_id"] == "read"
     assert compiled.tasks[0].response_spec.json_schema == {"type": "unknown"}
+
+
+@pytest.mark.asyncio
+async def test_spilled_dependency_context_excludes_diagnostic_prose_and_preserves_null(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.runtime import agent_executor as module
+    from app.runtime.agent_executor import AgentExecutor
+
+    marker = "None is not of type 'string'"
+    save = AsyncMock(return_value={"result_id": "stored", "sql_ref": "result_stored"})
+    monkeypatch.setattr(module, "ToolResultStore", lambda: SimpleNamespace(save=save))
+    task = TaskRequest(task_id="consumer", executor="agent", intent="infer", instructions="infer",
+        dependency_outputs={"producer": {
+            "structured_response": {"description": None},
+            "diagnostics": [{"code": "schema_deviation", "path": "description",
+                             "message": marker, "severity": "warning"}],
+        }})
+    ctx = SimpleNamespace(extra={"runtime_root_run_id": "root", "task_input_inline_budget_chars": 1},
+                          tenant_id="tenant", user_id="user")
+
+    bounded = await AgentExecutor._prepare_task_context(task, ctx, "execution")
+    saved = next(call.kwargs["payload"]["value"] for call in save.await_args_list
+                 if call.kwargs["call_id"].endswith(":dependency_outputs"))
+
+    assert saved["producer"]["structured_response"]["description"] is None
+    assert marker not in json.dumps(saved)
+    assert task.dependency_outputs["producer"]["diagnostics"][0]["message"] == marker
+    assert bounded.dependency_outputs["saved_context"]["reader"] == "result.read"
 
 
 @pytest.mark.asyncio

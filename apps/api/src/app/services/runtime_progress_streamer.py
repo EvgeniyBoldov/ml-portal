@@ -32,6 +32,7 @@ class RuntimeProgressStreamer:
         RuntimeEventType.PLAN_COMPLETED: "Выполнение завершено",
         RuntimeEventType.AGENT_END: "Агент завершил работу",
         RuntimeEventType.ERROR: "Во время выполнения возникла ошибка",
+        RuntimeEventType.SYNTHESIS_START: "Собираю итоговый ответ",
     }
 
     _STAGE_BY_KIND = {
@@ -89,6 +90,15 @@ class RuntimeProgressStreamer:
         }[phase]
 
     def _description(self, event: RuntimeEvent) -> Optional[str]:
+        if event.type is RuntimeEventType.SYNTHESIS_END:
+            status = str(event.data.get("status") or "").lower()
+            if status in {"failed", "error"}:
+                return "Не удалось собрать итоговый ответ"
+            if status == "cancelled":
+                return "Сборка итогового ответа отменена"
+            if status == "completed":
+                return "Итоговый ответ собран"
+            return "Сборка итогового ответа завершена"
         if event.type is RuntimeEventType.PLANNER_ITERATION_START:
             mode = str(event.data.get("mode") or "").lower()
             iteration_type = str(event.data.get("iteration_type") or "").lower()

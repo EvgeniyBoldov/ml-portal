@@ -1,8 +1,29 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+from pathlib import Path
+
 import pytest
 
 from app.services.chat_context_contracts import ChatContextOperation, TopicScopePayload
+
+
+def test_context_contracts_import_in_fresh_process_and_keep_runtime_event_exports() -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", (
+            "from app.services.chat_context_contracts import ChatContextSnapshot; "
+            "from app.agents.runtime.result_context import ResultObservation; "
+            "from app.agents.runtime import RuntimeEvent; "
+            "assert ChatContextSnapshot and ResultObservation and RuntimeEvent"
+        )],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_context_operation_rejects_unknown_payload_fields() -> None:

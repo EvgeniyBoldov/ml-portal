@@ -36,3 +36,36 @@ def test_projection_keeps_shared_tail_envelope_and_adds_normalized_chat_stage() 
     assert progress["chat_stage"] == "executing"
     assert progress["action"] == "task_started"
     assert "private task detail" not in progress["description"]
+
+
+def test_synthesis_progress_has_descriptions_stage_and_terminal_outcome() -> None:
+    streamer = RuntimeProgressStreamer()
+    started = streamer.project(
+        RuntimeEvent.synthesis_start(synthesis_id="synth-1", run_id="run-1"),
+        run_id="run-1", phase=OrchestrationPhase.SYNTHESIS,
+    )
+    ended = streamer.project(
+        RuntimeEvent.synthesis_end(
+            synthesis_id="synth-1", run_id="run-1", status="failed", error_code="synthesis_failed",
+        ),
+        run_id="run-1", phase=OrchestrationPhase.SYNTHESIS,
+    )
+
+    assert started is not None
+    assert started["chat_stage"] == "synthesizing"
+    assert started["description"]
+    assert ended is not None
+    assert ended["chat_stage"] == "synthesizing"
+    assert ended["status"] == ended["outcome"] == "failed"
+    assert ended["description"] == "Не удалось собрать итоговый ответ"
+
+
+def test_synthesis_end_without_status_does_not_claim_success() -> None:
+    event = RuntimeEvent.synthesis_end(synthesis_id="synth-1", run_id="run-1", status="")
+    progress = RuntimeProgressStreamer().project(
+        event, run_id="run-1", phase=OrchestrationPhase.SYNTHESIS,
+    )
+
+    assert progress is not None
+    assert progress["outcome"] is None
+    assert "собран" not in progress["description"].lower()

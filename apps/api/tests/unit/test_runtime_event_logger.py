@@ -198,6 +198,8 @@ def test_chat_root_progress_is_visible_without_root_persistence() -> None:
     assert logger.should_log("run_start") is False
     assert logger.should_publish_progress("run_start") is True
     assert logger.should_publish_progress("tool_call") is False
+    assert logger.should_publish_progress("synthesis_start") is True
+    assert logger.should_publish_progress("synthesis_end") is True
 
 
 def test_sandbox_root_progress_exposes_call_lifecycle() -> None:

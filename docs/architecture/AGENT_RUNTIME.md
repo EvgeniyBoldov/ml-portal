@@ -549,7 +549,11 @@ chat root uses `full/false/true`, sandbox uses `full/true/true`. Chat persists
 the root execution journal for administrator review but exposes only the safe
 progress projection to the chat client. Agent observation levels continue to
 control their progress projection; the persisted chat journal remains complete.
-```
+
+Synthesis start/end events are admitted into the root progress projection, so
+the chat can display the synthesizing stage. Admission remains subject to the
+logger's safe event projection; the full journal and client progress are
+separate surfaces.
 
 ## Execution Modes
 
@@ -996,6 +1000,35 @@ selected model's `request_timeout_s`; `HTTP_TIMEOUT_SECONDS` is used only when
 that field is unset. A selected registry model cannot fall back to a different
 environment model. The request timeout is forwarded to the rerank worker, whose
 deadline includes queue time and inference.
+
+Each runtime HTTP MCP call passes its resolved per-call timeout to the HTTP
+client request, including when the client is reused for calls to the same URL.
+Local tool handler exceptions are logged for operators and returned to the
+agent as a typed `operation_execution_failed` result with a stable generic
+message; exception text is not passed as tool-result content. Chat-facing
+runtime failures retain normalized machine error codes and safe messages as
+defined in [Chat Runtime Error Contract](CHAT_RUNTIME_ERROR_CONTRACT.md).
+
+Task result schema deviations remain advisory: actual values, including null,
+are preserved and deviations are warning metadata. Prompt projections for
+downstream tasks omit diagnostic prose from diagnostic entries while retaining
+their structured code/path/severity fields. The planner does not interpolate
+text templates in task inputs. A whole-value unresolved reference to a known
+dependency output in planner-authored task inputs is rejected when compiling
+the iteration, before typed binding values are applied. Explicitly bound values
+remain literal data even if they resemble a reference. Consumers use structured
+dependency outputs or declared needs and bindings. This check does not reject
+arbitrary embedded prose or references to unknown task IDs. A missing or null
+producer value remains missing or null in task data; a consumer's schema and
+task contract determine whether it can proceed, request a need/interaction, or
+return an unfulfillable result. The runtime does not replace null with a
+diagnostic string.
+
+This filtering applies before task-result data is spilled into runtime task
+context and to continuation `prior_diagnostics`, as well as to dependency
+result prompt projections. Persisted task results and canonical runtime traces
+retain their original diagnostics; filtering is a model-facing projection, not
+a rewrite of recorded evidence.
 
 ## Turn files and shared context (0195)
 

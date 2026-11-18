@@ -52,11 +52,17 @@ export function toAttachments(value: unknown): ChatAttachmentRef[] {
 }
 
 export function toRagSources(value: unknown): ChatRagSource[] {
-  return Array.isArray(value)
-    ? value.filter(
-        (item): item is ChatRagSource => !!item && typeof item === 'object'
-      )
-    : [];
+  if (!Array.isArray(value)) return [];
+  return value.flatMap(item => {
+    if (!item || typeof item !== 'object') return [];
+    const raw = item as Record<string, unknown>;
+    return [{
+      ...raw,
+      excerpt: typeof raw.excerpt === 'string' ? raw.excerpt : undefined,
+      text: typeof raw.text === 'string' ? raw.text :
+        typeof raw.excerpt === 'string' ? raw.excerpt : undefined,
+    } as ChatRagSource];
+  });
 }
 
 function toMessageMeta(value: unknown): ChatMessageMeta | undefined {

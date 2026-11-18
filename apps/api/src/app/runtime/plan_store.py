@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime, timezone
+import re
 from typing import Any, Dict, Iterable, List, Optional
 from uuid import UUID, uuid4
 
@@ -233,6 +234,7 @@ def validate_iteration(proposal: IterationProposal) -> None:
     for task in proposal.tasks:
         if any(dep not in tasks for dep in task.depends_on):
             raise PlanValidationError(f"task {task.task_id} depends outside its iteration")
+        _validate_compiled_inputs(task.model_dump(mode="python"), task.inputs)
     visiting: set[str] = set()
     visited: set[str] = set()
 
@@ -310,7 +312,44 @@ def validate_iteration_semantics(proposal: IterationProposal, snapshot: Dict[str
 
 
 def _validate_compiled_inputs(task: Dict[str, Any], inputs: Dict[str, Any]) -> None:
-    return
+    dependencies = {str(item) for item in task.get("depends_on", []) if isinstance(item, str)}
+    if not dependencies:
+        return
+
+    reference_patterns = {
+        dependency: re.compile(
+            r"\{\{\s*" + re.escape(dependency)
+            + r"\.(?:outputs|structured_response)\.[^{}]+\s*\}\}"
+        )
+        for dependency in dependencies
+    }
+
+    def find_reference(value: Any) -> tuple[str, str] | None:
+        if isinstance(value, str):
+            for dependency, pattern in reference_patterns.items():
+                match = pattern.fullmatch(value.strip())
+                if match:
+                    return dependency, match.group(0)
+        elif isinstance(value, dict):
+            for child in value.values():
+                found = find_reference(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = find_reference(child)
+                if found:
+                    return found
+        return None
+
+    found = find_reference(inputs)
+    if found:
+        dependency, reference = found
+        raise PlanValidationError(
+            f"task {task.get('task_id')} contains unresolved dependency reference {reference} "
+            f"to {dependency}; omit deferred fields and use dependency_outputs, or declare a need "
+            "and binding when the value must be passed as a task input"
+        )
 
 
 def _is_terminal(status: str) -> bool:
@@ -599,13 +638,13 @@ class InMemoryPlanStore:
             raise TaskNotFoundError(task_id)
         _validate_memory_claim(plan, task, expected_attempt_number)
         inputs = deepcopy(task["inputs"])
+        _validate_compiled_inputs(task, inputs)
         for binding in plan["bindings"]:
             if binding["consumer_task_id"] == task_id:
                 source = plan["tasks"][binding["producer_task_id"]]["result"] or {}
                 value = _result_value(source, binding["output_key"])
                 need = next((item for item in plan["needs"] if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
-        _validate_compiled_inputs(task, inputs)
         dependencies = {dep: deepcopy(plan["tasks"][dep]["result"]) for dep in task["depends_on"]}
         # A bound output is already present under its consumer input key.
         # Keep the dependency identity and all other outputs, but avoid
@@ -1025,13 +1064,13 @@ class SqlPlanStore:
         if task["status"] != TaskStatus.RUNNING.value:
             raise PlanValidationError("task request requires a running claim")
         inputs = dict(task["inputs"])
+        _validate_compiled_inputs(task, inputs)
         for binding in snapshot.get("bindings", []):
             if binding["consumer_task_id"] == task_id:
                 source = snapshot["tasks"][binding["producer_task_id"]].get("result") or {}
                 value = _result_value(source, binding["output_key"])
                 need = next((item for item in snapshot.get("needs", []) if item.get("task_id") == binding["need_task_id"] and item.get("ref") == binding["need_ref"]), {})
                 inputs[binding["consumer_input_key"]] = _binding_value(value, need.get("schema") if isinstance(need, dict) else None)
-        _validate_compiled_inputs(task, inputs)
         dependencies = {dep: deepcopy(snapshot["tasks"][dep]["result"]) for dep in task["depends_on"]}
         for binding in snapshot.get("bindings", []):
             if binding["consumer_task_id"] != task_id:

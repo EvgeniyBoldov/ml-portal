@@ -301,6 +301,8 @@ def _compact_recoverable_result(
     value: dict[str, Any], *, reader_arguments: Any = None, operation: str | None = None,
 ) -> dict[str, Any]:
     """Build a compact receipt, retaining the exact page already observed."""
+    from app.agents.runtime.result_context import RESULT_STORE_REFERENCE, RESULT_STORE_REFERENCE_MESSAGE
+
     compact = {key: value[key] for key in (
         "status", "result_id", "revision", "source_coverage", "source_complete", "source_total",
         "query_complete", "page_may_have_more", "read_complete", "snapshot_only", "imported_from",
@@ -315,6 +317,15 @@ def _compact_recoverable_result(
         bounded_action = _fallback_action_from_current(operation, current)
     if bounded_action is not None:
         compact["next_action"] = bounded_action
+    if compact.get("result_id"):
+        compact["result_kind"] = RESULT_STORE_REFERENCE
+        compact["message"] = RESULT_STORE_REFERENCE_MESSAGE
+        if bounded_action is None:
+            compact["next_action"] = {
+                "tool": "result.read",
+                "arguments": {"result_id": compact["result_id"], "revision": compact.get("revision") or 1,
+                              "offset": 0, "limit": 5},
+            }
     for key in ("mcp_content", "warnings", "warning"):
         if key in value:
             summary = _bounded_distinct_summary(value[key], plain_text_items=key != "mcp_content")

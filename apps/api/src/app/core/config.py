@@ -44,6 +44,7 @@ class Settings(BaseSettings):
 
     # Redis
     REDIS_URL: str = Field(default="redis://localhost:6379/0")
+    CHAT_RUNTIME_START_FAILURE_NOTIFY_TIMEOUT_SECONDS: float = Field(default=1.0, ge=0.1, le=10.0)
 
     # JWT - Asymmetric (RSA) for production, symmetric (HS256) for dev
     JWT_SECRET: str = Field(default="change-me-in-production", description="Symmetric secret for HS256 (dev only)")
@@ -108,6 +109,7 @@ class Settings(BaseSettings):
     CHAT_CONTEXT_PRIOR_RESULT_RUN_LIMIT: int = Field(default=10, ge=1, le=20)
     CHAT_CONTEXT_PRIOR_RESULT_LIMIT: int = Field(default=30, ge=1, le=50)
     CHAT_CONTEXT_HISTORY_LIMIT: int = Field(default=12, ge=1, le=50)
+    CHAT_CONTEXT_COMPACTION_DISPATCH_LIMIT: int = Field(default=32, ge=1)
     CHAT_FILE_READ_MAX_CHARS: int = Field(default=32_000, ge=1)
     CHAT_FILE_READ_MAX_BYTES: int = Field(default=8 * 1024 * 1024, ge=1)
     CHAT_FILE_EXTRACTION_VERSION: int = Field(default=1, ge=1)

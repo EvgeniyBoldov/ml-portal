@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 ChatContextKind = Literal["scope", "goal", "term_binding", "artifact_ref", "open_loop", "decision", "recent_anchor", "task_result_ref"]
 ChatContextAction = Literal["add", "update", "supersede", "close", "expire", "touch"]
+CHAT_CONTEXT_UNCERTAINTY_LIMIT = 5
 
 
 class _Payload(BaseModel):
@@ -164,7 +165,7 @@ class ChatContextSnapshot(BaseModel):
     decisions: list[DecisionPayload] = Field(default_factory=list)
     recent_anchor: Optional[RecentAnchorPayload] = None
     task_result_refs: list[TaskResultPayload] = Field(default_factory=list)
-    uncertainties: list[dict[str, str]] = Field(default_factory=list, max_length=5)
+    uncertainties: list[dict[str, str]] = Field(default_factory=list, max_length=CHAT_CONTEXT_UNCERTAINTY_LIMIT)
 
 
 class ChatContextApplyReceipt(BaseModel):

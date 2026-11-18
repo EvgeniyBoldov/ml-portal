@@ -13,7 +13,7 @@ from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.repositories.chat_context_repository import ChatContextRepository
 from app.services.chat_context_contracts import (
     ArtifactPayload, DecisionPayload, OpenLoopPayload, TaskResultPayload, TermBindingPayload,
-    ChatContextApplyReceipt, ChatContextOperation, ChatContextSnapshot,
+    CHAT_CONTEXT_UNCERTAINTY_LIMIT, ChatContextApplyReceipt, ChatContextOperation, ChatContextSnapshot,
 )
 from app.services.chat_context_reconciler import ChatContextReconciler
 from app.runtime.context_outcome import RuntimeOutcomeProjection
@@ -23,6 +23,14 @@ from app.services.glossary_service import GlossaryService
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
+
+
+def _record_invalid_context_item(snapshot: ChatContextSnapshot) -> None:
+    if len(snapshot.uncertainties) < CHAT_CONTEXT_UNCERTAINTY_LIMIT:
+        snapshot.uncertainties.append({
+            "code": "invalid_context_item",
+            "message": "An outdated context item was ignored.",
+        })
 
 
 class ChatContextService:
@@ -108,10 +116,16 @@ class ChatContextService:
         items = await repository.active_items_by_kind(
             chat_id=chat_id, branch_id=branch_id, kind_limits=per_kind_limits,
         )
+        decoded_items: list[tuple[Any, dict[str, Any]]] = []
+        for item in items:
+            if not isinstance(item.payload, dict):
+                _record_invalid_context_item(snapshot)
+                continue
+            decoded_items.append((item, item.payload))
         resolved_artifacts = {}
         glossary_ids = [
-            str((item.payload or {}).get("glossary_term_id") or "")
-            for item in items if item.kind == "term_binding"
+            str(payload.get("glossary_term_id") or "")
+            for item, payload in decoded_items if item.kind == "term_binding"
         ]
         published_term_ids = set()
         if glossary_ids:
@@ -130,31 +144,30 @@ class ChatContextService:
                 )).scalars().all()}
         if owner_id and tenant_id:
             artifact_ids = [
-                str((item.payload or {}).get("artifact_id") or item.item_key)
-                for item in items if item.kind == "artifact_ref"
+                str(payload.get("artifact_id") or item.item_key)
+                for item, payload in decoded_items if item.kind == "artifact_ref"
             ]
             resolved_artifacts = await ChatArtifactReferenceService(self.session).resolve_many(
                 artifact_ids=artifact_ids, chat_id=chat_id, owner_id=owner_id, tenant_id=tenant_id,
             )
-        for item in items:
+        for item, raw_payload in decoded_items:
             count = counts.get(item.kind, 0)
             if count >= per_kind_limits.get(item.kind, 1):
                 continue
-            payload = dict(item.payload or {})
-            if item.kind == "term_binding" and str(payload.get("glossary_term_id") or "") not in published_term_ids:
-                continue
-            if item.kind == "artifact_ref":
-                if not owner_id or not tenant_id:
-                    continue
-                artifact_id = str(payload.get("artifact_id") or item.item_key)
-                resolved = resolved_artifacts.get(artifact_id)
-                if resolved is None:
-                    if len(snapshot.uncertainties) < 5:
-                        snapshot.uncertainties.append({"code": "unavailable_artifact", "message": "An unavailable artifact reference was omitted."})
-                    continue
-                payload.update({"artifact_id": artifact_id, "file_name": resolved.file_name, "content_type": resolved.content_type, "size_bytes": resolved.size_bytes})
-            counts[item.kind] = count + 1
             try:
+                payload = dict(raw_payload)
+                if item.kind == "term_binding" and str(payload.get("glossary_term_id") or "") not in published_term_ids:
+                    continue
+                if item.kind == "artifact_ref":
+                    if not owner_id or not tenant_id:
+                        continue
+                    artifact_id = str(payload.get("artifact_id") or item.item_key)
+                    resolved = resolved_artifacts.get(artifact_id)
+                    if resolved is None:
+                        if len(snapshot.uncertainties) < CHAT_CONTEXT_UNCERTAINTY_LIMIT:
+                            snapshot.uncertainties.append({"code": "unavailable_artifact", "message": "An unavailable artifact reference was omitted."})
+                        continue
+                    payload.update({"artifact_id": artifact_id, "file_name": resolved.file_name, "content_type": resolved.content_type, "size_bytes": resolved.size_bytes})
                 if item.kind == "scope": snapshot.focus = payload
                 elif item.kind == "goal": snapshot.active_goal = payload
                 elif item.kind == "recent_anchor": snapshot.recent_anchor = payload
@@ -163,9 +176,12 @@ class ChatContextService:
                 elif item.kind == "open_loop": snapshot.open_loops.append(OpenLoopPayload.model_validate(payload))
                 elif item.kind == "decision": snapshot.decisions.append(DecisionPayload.model_validate(payload))
                 elif item.kind == "task_result_ref": snapshot.task_result_refs.append(TaskResultPayload.model_validate(payload))
-            except ValueError:
-                # Historical/invalid rows are never copied into a prompt.
-                snapshot.uncertainties.append({"code": "invalid_context_item", "message": "An outdated context item was ignored."})
+                else:
+                    continue
+                counts[item.kind] = count + 1
+            except (TypeError, ValueError):
+                # Isolate malformed row data; database/repository failures still propagate.
+                _record_invalid_context_item(snapshot)
         # Readers do not take a write lock, so verify the revision after the
         # bounded projection. One retry prevents a mixed pre/post-write view
         # without holding locks while artifact ACL checks run.
@@ -177,7 +193,8 @@ class ChatContextService:
                 tenant_id=tenant_id, _attempt=1,
             )
         if final_revision != snapshot.revision:
-            snapshot.uncertainties.append({"code": "context_changed_during_read", "message": "Context changed; next turn will refresh it."})
+            if len(snapshot.uncertainties) < CHAT_CONTEXT_UNCERTAINTY_LIMIT:
+                snapshot.uncertainties.append({"code": "context_changed_during_read", "message": "Context changed; next turn will refresh it."})
         from app.core.prometheus_metrics import chat_context_snapshot_load_total
         chat_context_snapshot_load_total.labels(status="loaded").inc()
         return snapshot

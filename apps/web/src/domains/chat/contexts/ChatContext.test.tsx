@@ -11,6 +11,8 @@ import { fetchStreamWithAuth } from '@/shared/api/streamAuth';
 import {
   generateChatTitle,
   listMessages,
+  getActiveChatRun,
+  attachChatRun,
   resumeRunStream,
 } from '@/shared/api/chats';
 
@@ -19,6 +21,8 @@ vi.mock('@/shared/api/chats', () => ({
   listMessages: vi.fn(),
   generateChatTitle: vi.fn(),
   resumeRunStream: vi.fn(),
+  getActiveChatRun: vi.fn(),
+  attachChatRun: vi.fn(),
   getPausedRun: vi.fn(),
 }));
 
@@ -109,6 +113,20 @@ describe('chat streaming', () => {
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Самый свежий ответ'
     );
+  });
+
+  it('lets canonical history replace duplicate rows and keeps older pages', async () => {
+    const { result } = setup();
+    vi.mocked(listMessages).mockResolvedValueOnce({ items: [
+      { id: 'older', chat_id: 'chat', role: 'user', content: 'старое' },
+      { id: 'same', chat_id: 'chat', role: 'assistant', content: 'old' },
+    ], next_cursor: null, limit: 100 });
+    await act(async () => { await result.current.actions.loadMessages('chat'); });
+    vi.mocked(listMessages).mockResolvedValueOnce({ items: [
+      { id: 'same', chat_id: 'chat', role: 'assistant', content: 'canonical' },
+    ], next_cursor: null, limit: 100 });
+    await act(async () => { await result.current.actions.loadMessages('chat'); });
+    expect(result.current.state.messagesByChat.chat.items.map(item => item.content)).toEqual(['старое', 'canonical']);
   });
 
   it('does not loop when loading the history tail', async () => {
@@ -251,6 +269,38 @@ describe('chat streaming', () => {
     expect(result.current.state.activeRun?.status).toBe('waiting_input');
   });
 
+  it('keeps one assistant anchor through repeated pause reloads and continuation', async () => {
+    const { result } = setup();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(completedResponse('pause', pause));
+    await act(async () => {
+      await result.current.actions.sendMessageStream('chat', 'Запрос', vi.fn(), vi.fn());
+    });
+    vi.mocked(resumeRunStream).mockResolvedValue(completedResponse('pause', pause));
+    await act(async () => {
+      await result.current.actions.resumeStream('run-1', 'input', 'Первый', vi.fn(), vi.fn());
+    });
+    const anchorId = result.current.state.activeRun?.assistantMessageId;
+    vi.mocked(listMessages).mockResolvedValue({ items: [
+      { id: 'old-answer', chat_id: 'chat', role: 'assistant', content: 'Старый ответ' },
+    ], next_cursor: null, limit: 100 });
+    await act(async () => { await result.current.actions.loadMessages('chat'); });
+    expect(result.current.state.messagesByChat.chat.items.some(item => item.id === anchorId)).toBe(true);
+    const source = stream();
+    vi.mocked(resumeRunStream).mockResolvedValue(source.response);
+    let continuation: Promise<boolean>;
+    act(() => {
+      continuation = result.current.actions.resumeStream('run-1', 'input', 'Второй', vi.fn(), vi.fn());
+    });
+    await act(async () => { source.write('delta', 'Продолжение'); });
+    await waitFor(() => expect(result.current.state.messagesByChat.chat.items.find(item => item.id === anchorId)?.content).toBe('Продолжение'));
+    await act(async () => {
+      source.write('pause', pause);
+      source.close();
+      await continuation;
+    });
+    expect(result.current.state.messagesByChat.chat.items.filter(item => item.id === anchorId)).toHaveLength(1);
+  });
+
   it('keeps a rejected continuation available to retry', async () => {
     const { result } = setup();
     vi.mocked(fetchStreamWithAuth).mockResolvedValue(
@@ -285,6 +335,42 @@ describe('chat streaming', () => {
     expect(result.current.state.pausedRunId).toBe('run-1');
     expect(result.current.state.pendingInput?.question).toBe('Какой проект?');
     expect(result.current.state.activeRun?.status).toBe('waiting_input');
+  });
+
+  it('clears a terminal startup failure pause and allows a fresh message', async () => {
+    const { result } = setup();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(completedResponse('pause', pause));
+    await act(async () => {
+      await result.current.actions.sendMessageStream('chat', 'Запрос', vi.fn(), vi.fn());
+    });
+    vi.mocked(listMessages).mockResolvedValue({ items: [
+      { id: 'user-1', chat_id: 'chat', role: 'user', content: 'Запрос' },
+    ], next_cursor: null, limit: 100 });
+    const message = 'Не удалось продолжить выполнение. Отправьте запрос заново.';
+    vi.mocked(resumeRunStream).mockResolvedValue(new Response(JSON.stringify({
+      type: 'about:blank', status: 503, title: message, detail: message,
+      code: 'CHAT_RUNTIME_START_FAILED', details: { run_id: 'run-1', status: 'failed' },
+    }), { status: 503, headers: { 'Content-Type': 'application/problem+json' } }));
+    const onError = vi.fn();
+
+    await act(async () => {
+      expect(await result.current.actions.resumeStream('run-1', 'input', 'Ответ', vi.fn(), onError)).toBe(false);
+    });
+
+    expect(onError).toHaveBeenCalledWith(message);
+    expect(result.current.state.pausedRunId).toBeNull();
+    expect(result.current.state.pendingInput).toBeNull();
+    expect(result.current.state.pendingConfirmations).toEqual([]);
+    expect(result.current.state.activeRun).toBeNull();
+    expect(result.current.state.isStreaming).toBe(false);
+    expect(result.current.state.messagesByChat.chat.items.map(item => item.id)).toEqual(['user-1']);
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(completedResponse('final', {
+      message_id: 'new-answer', content: 'Новый ответ',
+    }));
+    await act(async () => {
+      expect(await result.current.actions.sendMessageStream('chat', 'Новый запрос', vi.fn(), vi.fn())).toBe(true);
+    });
+    expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe('Новый ответ');
   });
 
   it('keeps partial text on unexpected EOF and reports interruption', async () => {
@@ -429,6 +515,98 @@ describe('chat streaming', () => {
     expect(result.current.state.messagesByChat.chat.items.at(-1)?.content).toBe(
       'Ответ'
     );
+  });
+
+  it('keeps a new optimistic answer when an older page resolves before stream events', async () => {
+    const { result } = setup();
+    vi.mocked(listMessages).mockResolvedValueOnce({ items: [
+      { id: 'old-answer', chat_id: 'chat', role: 'assistant', content: 'Предыдущий ответ' },
+    ], next_cursor: null, limit: 100 });
+    await act(async () => { await result.current.actions.loadMessages('chat'); });
+    let resolveHistory!: (value: Awaited<ReturnType<typeof listMessages>>) => void;
+    vi.mocked(listMessages).mockImplementationOnce(() => new Promise(resolve => { resolveHistory = resolve; }));
+    let history!: Promise<void>;
+    act(() => { history = result.current.actions.loadMessages('chat'); });
+    await waitFor(() => expect(listMessages).toHaveBeenCalledTimes(2));
+    const source = stream();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
+    let send!: Promise<boolean>;
+    act(() => { send = result.current.actions.sendMessageStream('chat', 'новый вопрос', vi.fn(), vi.fn()); });
+    const assistantId = result.current.state.activeRun?.assistantMessageId;
+    await act(async () => {
+      resolveHistory({ items: [{ id: 'old-answer', chat_id: 'chat', role: 'assistant', content: 'Канонический старый ответ' }], next_cursor: null, limit: 100 });
+      await history;
+    });
+    expect(result.current.state.messagesByChat.chat.items.some(item => item.id === assistantId)).toBe(true);
+    await act(async () => {
+      source.write('delta', 'Новый ответ');
+      source.write('final', { message_id: 'new-answer', content: 'Новый ответ' });
+      source.close();
+      await send;
+    });
+    expect(result.current.state.messagesByChat.chat.items.find(item => item.id === 'new-answer')?.content).toBe('Новый ответ');
+  });
+
+  it('keeps active-run restoration stable while stream progress updates', async () => {
+    const { result } = setup();
+    const loadActiveRun = result.current.actions.loadActiveRun;
+    const source = stream();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
+    let send!: Promise<boolean>;
+    act(() => { send = result.current.actions.sendMessageStream('chat', 'Запрос', vi.fn(), vi.fn()); });
+    await act(async () => {
+      source.write('stage', { activity: { run_id: 'run', stage: 'executing', action: 'intent', description: 'Ищу' } });
+    });
+    expect(result.current.actions.loadActiveRun).toBe(loadActiveRun);
+    act(() => { result.current.actions.abortStream(); });
+    await act(async () => { source.close(); await send; });
+  });
+
+  it('ignores delayed active-run restoration after navigation and a new send', async () => {
+    const { result } = setup();
+    let resolveRun: (value: Awaited<ReturnType<typeof getActiveChatRun>>) => void;
+    vi.mocked(getActiveChatRun).mockImplementation(() => new Promise(resolve => { resolveRun = resolve; }));
+    vi.mocked(listMessages).mockResolvedValue({ items: [], next_cursor: null, limit: 100 });
+    act(() => { result.current.actions.setCurrentChat('chat-a'); });
+    let restore: Promise<void>;
+    act(() => { restore = result.current.actions.loadActiveRun('chat-a'); });
+    await waitFor(() => expect(getActiveChatRun).toHaveBeenCalledWith('chat-a'));
+    act(() => { result.current.actions.setCurrentChat('chat-b'); });
+    const source = stream();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
+    let send: Promise<boolean>;
+    act(() => { send = result.current.actions.sendMessageStream('chat-b', 'новый', vi.fn(), vi.fn()); });
+    await act(async () => {
+      resolveRun({ run: { run_id: 'old-run', user_message_id: 'old-user', turn_id: 'turn-old', status: 'running' } });
+      await restore;
+    });
+    expect(attachChatRun).not.toHaveBeenCalled();
+    expect(result.current.state.activeRun?.userMessageId).not.toBe('old-user');
+    act(() => { result.current.actions.abortStream(); });
+    await act(async () => { source.close(); await send; });
+  });
+
+  it('ignores a delayed active-run lookup when a send starts in the same chat', async () => {
+    const { result } = setup();
+    let resolveRun!: (value: Awaited<ReturnType<typeof getActiveChatRun>>) => void;
+    vi.mocked(getActiveChatRun).mockImplementation(() => new Promise(resolve => { resolveRun = resolve; }));
+    vi.mocked(listMessages).mockResolvedValue({ items: [], next_cursor: null, limit: 100 });
+    act(() => { result.current.actions.setCurrentChat('chat'); });
+    let restore!: Promise<void>;
+    act(() => { restore = result.current.actions.loadActiveRun('chat'); });
+    await waitFor(() => expect(getActiveChatRun).toHaveBeenCalledWith('chat'));
+    const source = stream();
+    vi.mocked(fetchStreamWithAuth).mockResolvedValue(source.response);
+    let send!: Promise<boolean>;
+    act(() => { send = result.current.actions.sendMessageStream('chat', 'новый запрос', vi.fn(), vi.fn()); });
+    await act(async () => {
+      resolveRun({ run: { run_id: 'old-run', user_message_id: 'old-user', turn_id: 'turn-old', status: 'running' } });
+      await restore;
+    });
+    expect(attachChatRun).not.toHaveBeenCalled();
+    expect(result.current.state.activeRun?.userMessageId).not.toBe('old-user');
+    act(() => { result.current.actions.abortStream(); });
+    await act(async () => { source.close(); await send; });
   });
 
   it('replaces optimistic placeholders when a cached answer reloads persisted history', async () => {

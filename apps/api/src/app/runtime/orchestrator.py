@@ -19,7 +19,7 @@ from app.runtime.orchestrator_contracts import (
     FreshnessPolicy, ResponseSpec, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
 )
 from app.runtime.interaction import InteractionRequired, RuntimeInteraction, InteractionQuestion, InteractionRequester, interaction_history
-from app.runtime.plan_store import PlanValidationError, StaleTaskClaimError
+from app.runtime.plan_store import PlanValidationError, StaleTaskClaimError, _validate_compiled_inputs
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
@@ -673,6 +673,7 @@ class GraphOrchestrator:
         compiled_tasks = []
         effective_scope = EffectiveScopeContext.model_validate(scope_context or {})
         for task in proposal.tasks:
+            _validate_compiled_inputs(task.model_dump(mode="python"), task.inputs)
             if scope_selection_changes(effective_scope, ScopeSelection(keys=task.scope_keys, mode=task.scope_mode)) and not task.scope_reason.strip():
                 raise PlanValidationError(f"task {task.task_id} must explain its scope selection")
             try:

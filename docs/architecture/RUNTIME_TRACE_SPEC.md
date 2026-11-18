@@ -306,6 +306,34 @@ and maps only safe activity to typed `stage` SSE. Chat stage keys are `preparing
 is not the chat lifecycle status. Chat does not replay progress after reconnect
 and does not expose raw tail messages to chat.
 
+Synthesis start and end events are admitted to the root chat progress
+projection. The end projection carries the available execution outcome and
+does not imply success when the status is absent.
+
+If the run-control subscriber fails while execution is active, the runner
+cancels and awaits the execution, records the run as failed, and emits its
+terminal failure event; it does not report an explicit user cancellation. A
+control failure arriving after a terminal event or completed execution is
+consumed without reclassifying that result. Cleanup attempts continue through
+unsubscribe failures so terminal publication and owner-key cleanup are not
+skipped.
+
+Chat Redis service-event envelopes and the `done` marker carry a per-execution
+correlation ID in addition to the stable root run ID. Resume observers filter
+by the exact execution ID; generic attach validates a tagged `done` against
+current persisted lifecycle state before closing. This transport correlation
+is not added to the public SSE lifecycle contract or substituted for `run_id`.
+
+Stage snapshot reads are best-effort and may omit the optional stage projection
+on failure. A service-event publish or runner-tail exception after a terminal
+result has been produced is logged and cleaned up without changing the already
+durable lifecycle outcome. When resume startup compensation has durably marked
+the turn failed, the endpoint separately attempts tagged `state(failed)`,
+`error(chat_runtime_start_failed)`, and `done` envelopes for attached observers;
+each publish has a configured timeout and failures do not block attempts for
+the other terminal envelopes. These notifications are absent when persistence
+of the failed compensation is uncertain or a live runner owns the lifecycle.
+
 ## Public API transport
 
 There is no public `/runtime` plan, event, or timeline read surface. Persisted

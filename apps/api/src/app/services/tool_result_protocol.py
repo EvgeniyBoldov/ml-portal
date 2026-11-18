@@ -23,6 +23,8 @@ class ResultPage(BaseModel):
 
     @model_validator(mode="after")
     def validate_coverage(self) -> "ResultPage":
+        if self.meta.has_next is True and not self.meta.next_arguments:
+            raise ValueError("next page requires executable continuation arguments")
         if self.meta.complete is True and (self.meta.has_next is True or
                 (self.meta.total is not None and len(self.value) < self.meta.total)):
             raise ValueError("complete source coverage conflicts with pagination or total")

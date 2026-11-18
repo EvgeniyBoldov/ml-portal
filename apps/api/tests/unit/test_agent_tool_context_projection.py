@@ -1,10 +1,13 @@
 import json
 
+import pytest
+
 from app.agents.context import ToolResult
 from app.agents.runtime.tools import OperationExecutionFacade
 
 
-def test_collection_info_context_projection_keeps_schema_diagnostics():
+@pytest.mark.parametrize("delivery", ["direct", "stored"])
+def test_collection_info_context_projection_keeps_schema_diagnostics(delivery):
     result = ToolResult.ok(
         {
             "collection": {
@@ -34,7 +37,8 @@ def test_collection_info_context_projection_keeps_schema_diagnostics():
             "contracts": {"workflow": ["type-derived guidance"]},
             "schema": {"fields": [{"name": "priority", "data_type": "string", "filterable": True}]},
             "filter_hints": {"fields": {"priority": {"coverage": "complete", "choices": ["urgent"]}}},
-        }
+        },
+        delivery=delivery,
     )
 
     context = OperationExecutionFacade.format_result_for_context(
@@ -207,3 +211,41 @@ def test_template_compact_projections_keep_runtime_evidence_call_id():
     )
 
     assert json.loads(context)["evidence_call_id"] == "runtime-template-search-1"
+
+
+@pytest.mark.parametrize("name,candidates_key", [("search", "hits"), ("list", "templates")])
+def test_direct_template_candidates_fit_without_storing_the_full_result(name, candidates_key):
+    row_id = "20e80f3f-7c59-40eb-b143-2b68f203e256"
+    title = "Заявка на сетевую связность с системой Ngate"
+    large_description = "Правила заполнения полей заявки. " * 4000
+    fields = {"title": title, "description": large_description}
+    candidate = {"row_id": row_id, "row_data": fields} if name == "search" else {"row_id": row_id, **fields}
+    data = {candidates_key: [candidate], "total": 1}
+
+    output = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(data, delivery="direct"),
+        operation_slug=f"collection.template.{name}",
+        context_budget_tokens=250,
+        context_model="gpt-4o-mini",
+    ))
+
+    assert output[candidates_key] == [{"row_id": row_id, "title": title}]
+    assert "result_id" not in output
+    assert data[candidates_key] == [candidate]
+
+
+def test_reused_direct_overflow_returns_a_reference_instead_of_null():
+    recovery = {"result_id": "saved-result", "revision": 2, "reason": "batch_context_budget"}
+    output = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(None, delivery="direct", reused=True, direct_recovery=recovery),
+        operation_slug="collection.template.search",
+        stored_result=recovery,
+    ))
+
+    assert output["status"] == "already_completed"
+    assert output["result_kind"] == "result_store_reference"
+    assert output["next_action"]["tool"] == "result.read"
+    assert output["next_action"]["arguments"] == {
+        "result_id": "saved-result", "revision": 2, "offset": 0, "limit": 5,
+    }
+    assert "value" not in output

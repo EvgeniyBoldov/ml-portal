@@ -178,6 +178,12 @@ class UnavailableError(AppError):
     code = "SERVICE_UNAVAILABLE"
 
 
+class ChatRuntimeStartError(UnavailableError):
+    """A chat continuation could not start and its turn was terminalized."""
+
+    code = "CHAT_RUNTIME_START_FAILED"
+
+
 class AgentRuntimeError(AppError):
     """Agent / planner runtime failure — HTTP 500."""
 

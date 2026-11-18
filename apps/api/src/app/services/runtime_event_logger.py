@@ -228,7 +228,8 @@ class RuntimeEventLogger:
             root_events = {
                 "run_start", "orchestrator_start", "planner_iteration_start",
                 "plan_created", "plan_iteration_applied", "task_started",
-                "task_completed", "plan_completed", "confirmation_required",
+                "task_completed", "plan_completed", "synthesis_start", "synthesis_end",
+                "confirmation_required",
                 "waiting_input", "error",
             }
             if self.context.origin == "sandbox":

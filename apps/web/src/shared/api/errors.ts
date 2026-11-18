@@ -51,14 +51,27 @@ export async function toApiError(resp: Response): Promise<ApiError> {
             })
             .join('; ');
         }
-        code = `http_${resp.status}`;
+        code = typeof record.code === 'string' ? record.code : `http_${resp.status}`;
+        details = record.details;
+        if (typeof record.trace_id === 'string') requestId = record.trace_id;
+        else if (typeof record.request_id === 'string') requestId = record.request_id;
+      }
+      // RFC 7807 problem documents can carry a stable application code and
+      // structured details alongside the human-readable detail.
+      else if (typeof record.code === 'string') {
+        code = record.code;
+        details = record.details;
+        if (typeof record.detail === 'string') msg = record.detail;
+        else if (typeof record.title === 'string') msg = record.title;
+        if (typeof record.trace_id === 'string') requestId = record.trace_id;
       }
       // Custom format: {error: {...}}
       else if ('error' in record && record.error && typeof record.error === 'object') {
         const err = record.error as Record<string, unknown>;
         if (typeof err.message === 'string') msg = err.message;
         if (typeof err.code === 'string') code = err.code;
-        if (typeof record.request_id === 'string') requestId = record.request_id;
+        if (typeof record.trace_id === 'string') requestId = record.trace_id;
+        else if (typeof record.request_id === 'string') requestId = record.request_id;
         details = err.details;
       }
     }

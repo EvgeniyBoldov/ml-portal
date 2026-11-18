@@ -15,15 +15,31 @@ def test_compactor_uses_stable_singleton_keys() -> None:
 
 
 def test_compactor_bounds_payload_and_canonicalizes_decision_key() -> None:
-    payload = _bounded_payload({"text": "x" * 700, "items": list(range(20)), "nested": {"not": "allowed"}})
+    payload = _bounded_payload({"text": "x" * 1100, "items": list(range(20)), "nested": {"not": "allowed"}})
 
     key, action = _canonical_key("decision", "update", ["turn:1"], payload)
 
-    assert len(payload["text"]) == 600
+    assert len(payload["text"]) == 1100
     assert len(payload["items"]) == 10
     assert "nested" not in payload
     assert key.startswith("decision:")
     assert action == "add"
+
+
+def test_compactor_preserves_maximum_valid_goal_and_anchor_fields() -> None:
+    from app.services.chat_context_contracts import GoalPayload, RecentAnchorPayload
+
+    goal = GoalPayload(text="g" * 1100).model_dump(mode="json")
+    anchor = RecentAnchorPayload(
+        user_intent="u" * 1100,
+        assistant_outcome="a" * 1100,
+        terminal_state="completed",
+    ).model_dump(mode="json")
+
+    assert _bounded_payload(goal)["text"] == "g" * 1100
+    bounded_anchor = _bounded_payload(anchor)
+    assert bounded_anchor["user_intent"] == "u" * 1100
+    assert bounded_anchor["assistant_outcome"] == "a" * 1100
 
 
 def test_compactor_replaces_flat_scope_set_and_can_explicitly_clear_it() -> None:

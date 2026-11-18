@@ -93,6 +93,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     Record<string, ChatHistory>
   >({});
   const [activeRun, setActiveRun] = useState<ActiveChatRun | null>(null);
+  const activeRunRef = useRef(activeRun);
+  activeRunRef.current = activeRun;
   const [pendingConfirmations, setPendingConfirmations] = useState<
     PendingConfirmation[]
   >([]);
@@ -103,16 +105,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const [hasInteraction, setHasInteraction] = useState(false);
   const [pausedRunId, setPausedRunId] = useState<string | null>(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const messagesByChatRef = useRef(messagesByChat);
+  messagesByChatRef.current = messagesByChat;
   const pauseLookupVersionRef = useRef(0);
-  const historyVersionsRef = useRef<Record<string, number>>({});
   const historyRequestsRef = useRef<Record<string, number>>({});
-  const invalidateHistory = useCallback((chatId: string) => {
-    historyVersionsRef.current[chatId] =
-      (historyVersionsRef.current[chatId] || 0) + 1;
-  }, []);
 
   const loadMessages = useCallback(async (chatId: string) => {
-    const streamVersion = historyVersionsRef.current[chatId] || 0;
+    const snapshot = messagesByChatRef.current[chatId]?.items || [];
     const requestVersion = (historyRequestsRef.current[chatId] || 0) + 1;
     historyRequestsRef.current[chatId] = requestVersion;
     setMessagesByChat(prev => ({
@@ -132,21 +131,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         .map(item => toRenderableMessage(item))
         .filter((item): item is Message => item !== null);
       setMessagesByChat(prev => {
-        // Restore older history while retaining messages received since this
-        // request started. A later canonical reload replaces optimistic rows.
-        const hasNewStream =
-          (historyVersionsRef.current[chatId] || 0) !== streamVersion;
-        const priorItems = (prev[chatId]?.items || []).filter(item => !item.isOptimistic);
-        const merged = hasNewStream || priorItems.length
-          ? [
-              ...new Map(
-                [...items, ...(hasNewStream ? (prev[chatId]?.items || []) : priorItems)].map(item => [
-                  item.id,
-                  item,
-                ])
-              ).values(),
-            ]
-          : items;
+        const previous = prev[chatId]?.items || [];
+        const snapshotById = new Map(snapshot.map(item => [item.id, item]));
+        const serverIds = new Set(items.map(item => item.id));
+        const changedDuringRequest = previous.filter(item => {
+          const atStart = snapshotById.get(item.id);
+          const run = activeRunRef.current;
+          const belongsToLiveRun = item.isOptimistic && run &&
+            (item.id === run.assistantMessageId || item.id === run.userMessageId);
+          return Boolean(belongsToLiveRun) || (!item.isOptimistic && (atStart === undefined || atStart !== item));
+        });
+        const older = previous.filter(item =>
+          !serverIds.has(item.id) && snapshotById.has(item.id) && !item.isOptimistic
+        );
+        const receivedAfterRequest = previous.filter(item =>
+          !serverIds.has(item.id) && !snapshotById.has(item.id) && !item.isOptimistic
+        );
+        const currentActiveRun = activeRunRef.current;
+        const liveAnchor = currentActiveRun &&
+          (currentActiveRun.status === 'running' || currentActiveRun.status === 'waiting_input' || currentActiveRun.status === 'waiting_confirmation')
+          ? previous.find(item => item.id === currentActiveRun.assistantMessageId && item.isOptimistic)
+          : undefined;
+        const retained = changedDuringRequest;
+        const combined = [...older, ...items, ...receivedAfterRequest, ...retained];
+        if (liveAnchor && !combined.some(item => item.id === liveAnchor.id)) combined.push(liveAnchor);
+        const merged = [...new Map(combined.map(item => [item.id, item])).values()];
         return {
           ...prev,
           [chatId]: { items: merged, loading: false, loaded: true,
@@ -205,6 +214,9 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
   const clearPendingState = useCallback(() => {
     clearPausedInteraction();
+    // A canonical reload can finish before React commits the state update.
+    // Do not retain rows from the terminal run during that reconciliation.
+    activeRunRef.current = null;
     setActiveRun(null);
   }, [clearPausedInteraction]);
 
@@ -320,6 +332,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   const {
     abortStream,
     setCurrentChat,
+    getRestoreGeneration,
     sendMessageStream,
     resumeStream,
     attachRun,
@@ -335,15 +348,16 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     clearPausedInteraction,
     applyPausedState,
     loadMessages,
-    invalidateHistory,
   });
 
   const loadActiveRun = useCallback(
     async (chatId: string) => {
+      const generation = getRestoreGeneration();
       try {
         await loadMessages(chatId);
         const { getActiveChatRun } = await import('@shared/api/chats');
         const { run } = await getActiveChatRun(chatId);
+        if (generation !== getRestoreGeneration()) return;
         if (run) {
           const activity = run.activity
             ? {
@@ -354,15 +368,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
                 outcome: run.activity.outcome,
               }
             : undefined;
-          const attached = await attachRun(chatId, run.run_id, run.user_message_id, activity);
+          const attached = await attachRun(chatId, run.run_id, run.user_message_id, activity, generation);
           if (!attached) await loadMessages(chatId);
         }
       } catch (err) {
         console.warn('Failed to restore active chat run', err);
-        await loadMessages(chatId);
+        if (generation === getRestoreGeneration()) await loadMessages(chatId);
       }
     },
-    [attachRun, loadMessages]
+    [attachRun, getRestoreGeneration, loadMessages]
   );
 
   const actionsValue = useMemo<ChatActions>(

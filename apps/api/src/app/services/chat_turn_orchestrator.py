@@ -5,16 +5,151 @@ from typing import Any, AsyncGenerator, Dict, Optional
 import uuid
 
 from app.agents import ToolContext
-from app.core.logging import get_logger
 from app.core.config import get_settings
+from app.core.logging import get_logger
+from app.adapters.interfaces.llm import LLMErrorCode
+from app.runtime.operation_errors import RuntimeErrorCode
 from app.services.chat_context_service import ChatContextService
 from app.services.chat_context_contracts import ChatContextSnapshot
 from app.services.chat_persistence_service import ChatPersistenceService
 from app.services.chat_turn_service import ChatTurnService
 from app.services.chat_turn_state import ChatTurnState, TurnPhase
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+from app.repositories.chat_context_repository import ChatContextRepository
 
 logger = get_logger(__name__)
+_COMPACTION_DISPATCH_TASKS: set[asyncio.Task[Any]] = set()
+
+
+def _compaction_dispatch_finished(task: asyncio.Task[Any]) -> None:
+    _COMPACTION_DISPATCH_TASKS.discard(task)
+    try:
+        task.result()
+    except asyncio.CancelledError:
+        logger.info("chat_context_compaction_dispatch_cancelled")
+    except Exception:
+        logger.warning("chat_context_compaction_dispatch_failed", exc_info=True)
+
+
+def _compaction_dispatch_saturated(
+    *, limit: int, chat_id: str, turn_id: str, pending_count: int | None = None,
+) -> bool:
+    pending = len(_COMPACTION_DISPATCH_TASKS) if pending_count is None else pending_count
+    if pending < limit:
+        return False
+    logger.warning("chat_context_compaction_dispatch_limit_reached", extra={"chat_id": chat_id, "turn_id": turn_id})
+    return True
+
+
+async def _prepare_and_enqueue_context_compaction(
+    *, dispatch: dict[str, Any], dispatch_limit: int,
+) -> None:
+    """Load the committed snapshot in a fresh session, then queue optional work."""
+    chat_id = str(dispatch["chat_id"])
+    turn_id = str(dispatch["chat_turn_id"])
+    user_id = str(dispatch["user_id"])
+    tenant_id = str(dispatch["tenant_id"])
+    try:
+        from app.core.db import get_session_factory
+
+        session_factory = get_session_factory()
+        async with session_factory() as session:
+            snapshot = await ChatContextService(session, None, None).load_snapshot(
+                chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
+            )
+        if not isinstance(snapshot, ChatContextSnapshot):
+            return
+        if (snapshot.revision != dispatch["expected_revision"]
+                or snapshot.updated_through_turn_id != turn_id):
+            logger.info("chat_context_compaction_origin_stale", extra={
+                "chat_id": chat_id, "turn_id": turn_id,
+                "expected_revision": dispatch["expected_revision"], "revision": snapshot.revision,
+            })
+            return
+        if _compaction_dispatch_saturated(
+            limit=dispatch_limit,
+            chat_id=chat_id,
+            turn_id=turn_id,
+            pending_count=len(_COMPACTION_DISPATCH_TASKS) - 1,
+        ):
+            return
+        from app.runtime.redactor import RuntimeRedactor
+
+        redactor = RuntimeRedactor()
+        dialogue = [
+            {"role": item["role"], "content": str(redactor.redact(item["content"]))[:1200]}
+            for item in dispatch["dialogue"]
+        ]
+        from app.workers.tasks_memory import compact_chat_context
+
+        payload = {
+            "chat_id": chat_id,
+            "chat_turn_id": turn_id,
+            "user_id": user_id,
+            "tenant_id": tenant_id,
+            "expected_revision": dispatch["expected_revision"],
+            "snapshot": snapshot.model_dump(mode="json"),
+            "recent_dialogue": dialogue[-8:],
+            "outcome": dispatch["outcome"],
+            "valid_source_ids": dispatch["valid_source_ids"],
+        }
+        await asyncio.to_thread(compact_chat_context.delay, payload)
+    except Exception:
+        logger.warning(
+            "chat_context_compaction_dispatch_failed",
+            exc_info=True,
+            extra={"chat_id": chat_id, "turn_id": turn_id},
+        )
+
+
+_CHAT_ERROR_MESSAGES: dict[str, str] = {
+    "budget_exceeded": "Достигнут лимит выполнения запроса. Попробуйте сузить запрос.",
+    "max_retries_exceeded": "Не удалось завершить запрос после нескольких попыток. Попробуйте позже.",
+    "planner_failed": "Не удалось построить план выполнения запроса. Попробуйте переформулировать вопрос.",
+    "tool_unavailable": "Один из инструментов сейчас недоступен. Попробуйте позже.",
+    "tool_timeout": "Превышено время ожидания инструмента. Попробуйте позже.",
+    "policy_blocked": "Запрос заблокирован политикой доступа.",
+    "agent_failed": "Не удалось завершить выполнение агентом. Попробуйте позже.",
+    "llm_rate_limited": "Модель временно ограничила число запросов. Попробуйте позже.",
+    "llm_context_window_exceeded": "Запрос содержит слишком много контекста. Сократите его и попробуйте снова.",
+    "llm_input_limit_exceeded": "Запрос слишком велик для обработки. Сократите его и попробуйте снова.",
+    "llm_output_limit_exceeded": "Ответ превысил допустимый размер. Попробуйте задать более узкий вопрос.",
+    "llm_invalid_request": "Не удалось отправить запрос модели. Попробуйте позже.",
+    "llm_timeout": "Модель не ответила вовремя. Попробуйте позже.",
+    "orchestrator_phase_timeout": "Этап обработки запроса превысил допустимое время. Попробуйте позже.",
+    "synthesizer_phase_timeout": "Не удалось подготовить ответ вовремя. Попробуйте позже.",
+    "synthesis_file_failed": "Не удалось подготовить файл ответа. Попробуйте позже.",
+    "file_generation_failed": "Не удалось подготовить файл ответа. Попробуйте позже.",
+    "runtime_execution_failed": "Не удалось завершить выполнение запроса. Попробуйте позже.",
+    "agent_not_found": "Не удалось найти подходящего исполнителя запроса. Попробуйте позже.",
+    "agent_task_completion_missing": "Не удалось завершить выполнение запроса. Попробуйте позже.",
+    "cancelled": "Выполнение запроса остановлено.",
+    "execution_guard_unavailable": "Выполнение запроса временно недоступно. Попробуйте позже.",
+    "initial_planning_failed": "Не удалось построить план выполнения запроса. Попробуйте позже.",
+    "llm_cancelled": "Запрос к модели был остановлен.",
+    "memory_component_error": "Не удалось загрузить контекст запроса. Попробуйте позже.",
+    "memory_helpers_skipped": "Не удалось загрузить часть контекста запроса.",
+    "missing_credentials": "Для выполнения запроса не настроены необходимые учетные данные.",
+    "planner_checkpoint_failed": "Не удалось сохранить состояние планирования. Попробуйте позже.",
+    "synthesis_context_invalid": "Не удалось подготовить контекст для ответа. Попробуйте сузить запрос.",
+    "synthesis_failed": "Не удалось подготовить ответ. Попробуйте позже.",
+    "synthesizer_empty_response": "Не удалось подготовить ответ. Попробуйте позже.",
+    "synthesizer_missing": "Не удалось подготовить ответ. Попробуйте позже.",
+    "synthesizer_partial_response": "Ответ подготовлен не полностью. Попробуйте уточнить запрос.",
+    "turn_preflight_unavailable": "Не удалось проверить запрос перед выполнением. Попробуйте позже.",
+    "iteration_limit_exceeded": "Запрос превысил лимит этапов выполнения. Попробуйте сузить запрос.",
+    "scheduler_action_limit_exceeded": "Запрос превысил лимит действий. Попробуйте сузить запрос.",
+    "task_execution_limit_exceeded": "Запрос превысил лимит выполнения. Попробуйте сузить запрос.",
+    "sandbox_persist_skipped": "Не удалось сохранить результат выполнения.",
+    "shadow_agent_not_routable": "Не удалось выбрать исполнителя запроса. Попробуйте позже.",
+    "unknown_runtime_error": "Произошла внутренняя ошибка выполнения. Попробуйте позже.",
+}
+_KNOWN_CHAT_ERROR_CODES = (
+    frozenset(_CHAT_ERROR_MESSAGES)
+    | frozenset(code.value for code in RuntimeErrorCode)
+    | frozenset(code.value for code in LLMErrorCode)
+)
+
 
 class ChatTurnOrchestrator:
     """Orchestrates a single chat turn while preserving current chat contract."""
@@ -240,20 +375,37 @@ class ChatTurnOrchestrator:
 
                 if event_data.get("type") not in ("final_content", "run_paused", "error"):
                     yield event_data
-        except (asyncio.CancelledError, GeneratorExit):
-            # The execution owner cancels this generator only after an explicit
-            # Stop. Persist the terminal turn under a shield before unwinding.
-            turn.force_cancel()
+        except (asyncio.CancelledError, GeneratorExit) as cancel_exc:
+            # Persist explicit Stop as cancelled; runner/control failures carry
+            # a distinct cancellation message and become failed outcomes.
+            owner_failure = (
+                isinstance(cancel_exc, asyncio.CancelledError)
+                and bool(cancel_exc.args)
+                and str(cancel_exc.args[0]) in {
+                    "chat_runtime_control_failure", "chat_runtime_owner_failure",
+                }
+            )
+            if owner_failure:
+                turn.force_error()
+            else:
+                turn.force_cancel()
             import anyio
             with anyio.CancelScope(shield=True):
                 await self.turn_service.session.rollback()
                 if assistant_content.strip():
                     partial = await self.persistence_service.create_assistant_message(
                         chat_id=chat_id, content=assistant_content,
-                        extra_meta={"runtime_status": "cancelled", "runtime_run_id": last_run_id},
+                        extra_meta={
+                            "runtime_status": "failed" if owner_failure else "cancelled",
+                            **({"runtime_error_code": "chat_runtime_failed"} if owner_failure else {}),
+                            "runtime_run_id": last_run_id,
+                        },
                     )
                     await self.turn_service.attach_assistant_message(turn_id, partial.message_id)
-                await self.turn_service.cancel_turn(turn_id, error_message=cancellation_reason)
+                if owner_failure:
+                    await self.turn_service.fail_turn(turn_id, error_message="chat_runtime_failed")
+                else:
+                    await self.turn_service.cancel_turn(turn_id, error_message=cancellation_reason)
                 await self.turn_service.session.commit()
             raise
         except Exception as runtime_exc:
@@ -304,6 +456,7 @@ class ChatTurnOrchestrator:
                     )
                 # The optional worker must observe the same committed deterministic
                 # context and assistant message as the immediately following turn.
+                compaction_revision = await self._compaction_origin_revision(chat_id=chat_id, turn_id=str(turn_id))
                 await self.turn_service.session.commit()
             except asyncio.CancelledError:
                 turn.force_cancel()
@@ -337,12 +490,6 @@ class ChatTurnOrchestrator:
                     logger.warning("chat_idempotency_cache_write_failed", exc_info=True,
                                    extra={"chat_id": chat_id, "turn_id": str(turn_id)})
             post_final_tail_ready.set()
-            await self._dispatch_context_compaction(
-                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
-                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,
-                assistant_message_id=str(assistant_message.message_id), run_id=last_run_id,
-                terminal_state="failed" if execution_failed else "completed",
-            )
             turn.transition(TurnPhase.FINAL_PERSISTED)
             yield {"type": "state", "run_id": runtime_run_id,
                    "status": "failed" if execution_failed else "completed"}
@@ -360,6 +507,13 @@ class ChatTurnOrchestrator:
             else:
                 turn.transition(TurnPhase.COMPLETED)
             terminal_event_emitted = True
+            await self._dispatch_context_compaction(
+                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
+                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,
+                assistant_message_id=str(assistant_message.message_id), run_id=last_run_id,
+                terminal_state="failed" if execution_failed else "completed",
+                expected_revision=compaction_revision,
+            )
         elif not llm_error and not run_paused:
             turn.force_error()
             logger.error(
@@ -394,6 +548,7 @@ class ChatTurnOrchestrator:
             # new HTTP request. Persist the checkpoint before emitting that
             # frame; a flush alone is rolled back when the streaming request
             # dependency closes its session.
+            compaction_revision = await self._compaction_origin_revision(chat_id=chat_id, turn_id=str(turn_id))
             await self.turn_service.session.commit()
             yield {"type": "state", "run_id": runtime_run_id,
                    "status": paused_reason if paused_reason in {"waiting_input", "waiting_confirmation"} else "waiting_input",
@@ -407,12 +562,6 @@ class ChatTurnOrchestrator:
                 question = str(paused_action.get("question") or "").strip()
             if not message and isinstance(paused_action, dict):
                 message = str(paused_action.get("message") or "").strip()
-            await self._dispatch_context_compaction(
-                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
-                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=message or question,
-                assistant_message_id=None, run_id=paused_run_id,
-                terminal_state=str(paused_reason or "waiting_input"),
-            )
             # Emit stop with run_id so UI can resume paused run.
             yield {
                 "type": "stop",
@@ -425,6 +574,13 @@ class ChatTurnOrchestrator:
                 "contract_version": RuntimeHitlProtocolService.CONTRACT_VERSION,
             }
             terminal_event_emitted = True
+            await self._dispatch_context_compaction(
+                chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
+                recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=message or question,
+                assistant_message_id=None, run_id=paused_run_id,
+                terminal_state=str(paused_reason or "waiting_input"),
+                expected_revision=compaction_revision,
+            )
         elif llm_error:
             turn.force_error()
             yield {"type": "stage", "activity": {
@@ -467,35 +623,52 @@ class ChatTurnOrchestrator:
     def _normalize_runtime_error(*, code: str, raw_message: str) -> dict[str, str]:
         normalized_code = (code or "unknown_runtime_error").strip().lower()
         message_lc = (raw_message or "").lower()
-        if "budget" in normalized_code or "budget" in message_lc:
+        if normalized_code in _KNOWN_CHAT_ERROR_CODES:
+            user_message = _CHAT_ERROR_MESSAGES.get(
+                normalized_code,
+                "Не удалось завершить выполнение запроса. Попробуйте позже.",
+            )
+        elif "budget" in normalized_code or "budget" in message_lc:
             normalized_code = "budget_exceeded"
-            user_message = "Достигнут лимит выполнения запроса. Попробуйте сузить запрос."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         elif "retry" in normalized_code or "retry" in message_lc:
             normalized_code = "max_retries_exceeded"
-            user_message = "Не удалось завершить запрос после нескольких попыток. Попробуйте позже."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         elif "tool" in normalized_code and "unavailable" in message_lc:
             normalized_code = "tool_unavailable"
-            user_message = "Один из инструментов сейчас недоступен. Попробуйте позже."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         elif "timeout" in normalized_code or "timeout" in message_lc:
-            normalized_code = "tool_timeout"
-            user_message = "Превышено время ожидания инструмента. Попробуйте позже."
+            normalized_code = "tool_timeout" if "tool" in normalized_code else "unknown_runtime_error"
+            user_message = _CHAT_ERROR_MESSAGES.get(normalized_code, _CHAT_ERROR_MESSAGES["unknown_runtime_error"])
         elif "planner" in normalized_code or "planner" in message_lc:
             normalized_code = "planner_failed"
-            user_message = "Не удалось построить план выполнения запроса. Попробуйте переформулировать вопрос."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         elif "policy" in normalized_code or "denied" in message_lc:
             normalized_code = "policy_blocked"
-            user_message = "Запрос заблокирован политикой доступа."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         elif "agent" in normalized_code or "runtime_failed" in normalized_code:
             normalized_code = "agent_failed"
-            user_message = "Не удалось завершить выполнение агентом. Попробуйте позже."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         else:
             normalized_code = "unknown_runtime_error"
-            user_message = "Произошла внутренняя ошибка выполнения. Попробуйте позже."
+            user_message = _CHAT_ERROR_MESSAGES[normalized_code]
         return {
             "code": normalized_code,
             "user_message": user_message,
             "operator_message": raw_message or normalized_code,
         }
+
+    async def _compaction_origin_revision(self, *, chat_id: str, turn_id: str) -> int | None:
+        """Capture provenance in the transaction that persists this outcome."""
+        try:
+            head = await ChatContextRepository(self.turn_service.session).get_head(chat_id=chat_id, branch_id=None)
+            if (head is not None and str(head.updated_through_turn_id) == turn_id
+                    and isinstance(head.revision, int)):
+                return head.revision
+        except Exception:
+            logger.warning("chat_context_compaction_origin_unavailable", exc_info=True,
+                           extra={"chat_id": chat_id, "turn_id": turn_id})
+        return None
 
     async def _dispatch_context_compaction(
         self,
@@ -510,17 +683,17 @@ class ChatTurnOrchestrator:
         assistant_message_id: Optional[str],
         run_id: Optional[str],
         terminal_state: str,
+        expected_revision: int | None = None,
     ) -> None:
-        """Queue optional semantic compaction after deterministic state exists."""
-        if not tenant_id:
+        """Schedule optional compaction without retaining the request DB session."""
+        if not tenant_id or expected_revision is None:
             return
         try:
-            snapshot = await self.context_service.load_snapshot(
-                chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
-            )
-            if not isinstance(snapshot, ChatContextSnapshot):
+            dispatch_limit = get_settings().CHAT_CONTEXT_COMPACTION_DISPATCH_LIMIT
+            if _compaction_dispatch_saturated(limit=dispatch_limit, chat_id=chat_id, turn_id=turn_id):
                 return
             from app.runtime.redactor import RuntimeRedactor
+
             redactor = RuntimeRedactor()
             dialogue = [
                 {"role": str(item.get("role")), "content": str(redactor.redact(item.get("content") or ""))[:1200]}
@@ -539,14 +712,25 @@ class ChatTurnOrchestrator:
             for item in recent_dialogue[-7:]:
                 if isinstance(item, dict) and item.get("message_id"):
                     sources.append(f"message:{item['message_id']}")
-            from app.workers.tasks_memory import compact_chat_context
-
-            compact_chat_context.delay({
-                "chat_id": chat_id, "chat_turn_id": turn_id, "user_id": user_id, "tenant_id": tenant_id,
-                "expected_revision": snapshot.revision, "snapshot": snapshot.model_dump(mode="json"),
-                "recent_dialogue": dialogue[-8:],
+            dispatch = {
+                "chat_id": chat_id,
+                "chat_turn_id": turn_id,
+                "user_id": user_id,
+                "tenant_id": tenant_id,
+                "expected_revision": expected_revision,
+                "dialogue": dialogue[-8:],
                 "outcome": {"terminal_state": terminal_state, "assistant_summary": assistant_content[:600]},
                 "valid_source_ids": list(dict.fromkeys(sources))[:20],
-            })
+            }
+            # This task captures only bounded DTOs; snapshot reads use their
+            # own short-lived session after the terminal event is delivered.
+            task = asyncio.create_task(
+                _prepare_and_enqueue_context_compaction(
+                    dispatch=dispatch, dispatch_limit=dispatch_limit,
+                ),
+                name=f"chat-compaction-dispatch:{turn_id}",
+            )
+            _COMPACTION_DISPATCH_TASKS.add(task)
+            task.add_done_callback(_compaction_dispatch_finished)
         except Exception:
             logger.warning("chat_context_compaction_dispatch_failed", exc_info=True, extra={"chat_id": chat_id, "turn_id": turn_id})

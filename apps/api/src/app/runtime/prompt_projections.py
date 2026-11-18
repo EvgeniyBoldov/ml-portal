@@ -5,8 +5,22 @@ from copy import deepcopy
 from typing import Any
 
 
+def diagnostics_for_prompt(diagnostics: list[Any]) -> list[dict[str, Any]]:
+    """Expose operational identities, never diagnostic prose as source data."""
+    return [
+        {key: diagnostic[key] for key in ("code", "path", "severity") if key in diagnostic}
+        for diagnostic in diagnostics if isinstance(diagnostic, dict)
+    ]
+
+
 def task_result_for_prompt(result: dict[str, Any]) -> dict[str, Any]:
     value = deepcopy(result)
+    diagnostics = value.get("diagnostics")
+    if isinstance(diagnostics, list):
+        # Diagnostic prose is runtime validation/operation metadata, not source
+        # data. Keep codes/paths/severity for context while preventing a model
+        # from copying diagnostic messages into a downstream value.
+        value["diagnostics"] = diagnostics_for_prompt(diagnostics)
     if not value.get("answer") and value.get("description"):
         value["answer"] = value["description"]
     if value.get("description") == value.get("answer"):

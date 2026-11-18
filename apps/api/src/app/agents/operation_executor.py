@@ -199,7 +199,16 @@ class DirectOperationExecutor:
                 from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
                 if isinstance(exc, RuntimeExecutionGuardError):
                     raise
-                return ToolResult.fail(str(exc))
+                logger.exception(
+                    "runtime_local_tool_handler_failed operation=%s error_type=%s",
+                    operation_call.tool_name,
+                    type(exc).__name__,
+                )
+                return ToolResult.fail(
+                    "The operation failed during execution. Try again later or refine the request.",
+                    error_code="operation_execution_failed",
+                    error_type=type(exc).__name__,
+                )
 
         if target.provider_type == "mcp":
             try:
@@ -1038,7 +1047,9 @@ class DirectOperationExecutor:
                     attempt,
                     max_attempts,
                 )
-                response = await client.post(provider_url, headers=headers, json=payload)
+                response = await client.post(
+                    provider_url, headers=headers, json=payload, timeout=timeout_s,
+                )
                 last_response = response
                 logger.info(
                     "runtime_mcp_http_attempt_response request_id=%s stage=%s target=%s attempt=%s/%s "

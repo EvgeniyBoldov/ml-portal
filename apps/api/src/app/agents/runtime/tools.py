@@ -30,7 +30,13 @@ from app.agents.runtime.confirmation import (
     get_confirmation_service,
 )
 from app.agents.runtime.prompt_contract import build_prompt_input_schema
-from app.agents.runtime.result_context import ModelResultView, ResultNextAction, ResultUnavailable, SourceCoverage
+from app.agents.runtime.result_context import (
+    DirectResultReference,
+    ModelResultView,
+    ResultNextAction,
+    ResultUnavailable,
+    SourceCoverage,
+)
 from app.agents.runtime.tool_reuse_policy import ToolCallReusePolicy
 from app.core.logging import get_logger
 from app.runtime.error_payloads import build_debug_payload, build_error_metadata
@@ -47,7 +53,6 @@ logger = get_logger(__name__)
 # Tool results are stored separately; this bounds only prompt projections.
 MAX_COLLECTION_INFO_TEXT_CHARS = 320
 MAX_COLLECTION_INFO_RULES_CHARS = 1_200
-MAX_TEMPLATE_SEARCH_HITS = 8
 MAX_TEMPLATE_SEARCH_TITLE_CHARS = 240
 MAX_TEMPLATE_SEARCH_FRAGMENT_CHARS = 320
 
@@ -879,10 +884,9 @@ class OperationExecutionFacade:
         """Format a bounded, action-oriented tool result for the next LLM turn.
 
         Dataset operation payloads live in the dedicated result store. Inline
-        output is preserved only when complete; otherwise the model gets a
-        pointer and must call result.analyze instead of receiving a clipped,
-        misleading prefix. Explicit direct results preserve their complete
-        domain payload and bypass dataset presentation limits.
+        output is preserved when it fits; otherwise the model gets a Result
+        Store reference. Direct results may use a compact domain projection
+        that preserves the values needed by the next tool call.
         """
         from app.services.tool_result_store import _json_dumps_exact
 
@@ -917,20 +921,53 @@ class OperationExecutionFacade:
                     next_action=ResultNextAction(arguments={"result_id": str(stored_result.get("result_id") or ""),
                         "revision": int(stored_result.get("revision") or 1), "offset": 0, "limit": 5},
                         message="Read a smaller page with result.read."),
-                ).model_dump(exclude_none=True)
+                ).context_payload()
             else:
                 limitation = ResultUnavailable(reason="context_budget_exceeded",
                     message="The complete response exceeds the available context; retry with a narrower request.").model_dump()
             return _json_dumps_exact(limitation, ensure_ascii=False)
 
+        def render_collection_info(output: Dict[str, Any]) -> str:
+            rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
+            # Trim diagnostics before removing the collection identity.
+            sections = [output[key] for key in ("field_profiles", "filter_hints", "fields", "remote_objects")]
+            while not fits_budget(rendered):
+                populated = [section for section in sections if section]
+                if not populated:
+                    output["collection"].pop("usage_rules", None)
+                    return _json_dumps_exact(output, ensure_ascii=False, default=str)
+                max(populated, key=len).pop()
+                rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
+            return rendered
+
         if result.success:
+            canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if result.delivery == "direct":
-                # Domain tools bound their own payloads. Preserve complete JSON
-                # rather than applying dataset/pointer or character truncation.
+                recovery = result.metadata.get("direct_recovery")
+                if isinstance(recovery, dict):
+                    reference = DirectResultReference.from_recovery(recovery, reused=bool(result.metadata.get("reused")))
+                    return _json_dumps_exact(reference.model_dump(), ensure_ascii=False)
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
+                compact_info = False
+                if canonical_operation == "collection.template.search":
+                    output = OperationExecutionFacade._compact_template_search_for_context(output)
+                elif canonical_operation == "collection.template.list":
+                    output = OperationExecutionFacade._compact_template_list_for_context(output)
+                elif canonical_operation == "collection.template.get_schema":
+                    output = OperationExecutionFacade._compact_template_schema_for_context(output)
+                elif canonical_operation == "collection.info":
+                    collection = output.get("collection")
+                    if isinstance(collection, dict) and collection.get("type") == "template":
+                        output = OperationExecutionFacade._compact_collection_info_for_context(output)
+                        compact_info = True
                 if evidence_call_id:
                     output["evidence_call_id"] = evidence_call_id
-                rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
+                rendered = (render_collection_info(output) if compact_info
+                            else _json_dumps_exact(output, ensure_ascii=False, default=str))
+                if canonical_operation == "collection.template.search" and not fits_budget(rendered):
+                    for hit in output["hits"]:
+                        hit.pop("match", None)
+                    rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
                 return rendered if fits_budget(rendered) else limited_result()
             if result.metadata.get("workspace_view") and not stored_result:
                 output = dict(result.data) if isinstance(result.data, dict) else {"value": result.data}
@@ -990,16 +1027,14 @@ class OperationExecutionFacade:
                     if output.get("record_too_large"):
                         view.next_action = ResultNextAction(tool="result.describe", arguments={"result_id": result_id},
                             message="Inspect available fields, then read a smaller projection.")
-                    view_data = view.model_dump(exclude_none=True)
-                    if preserve_records:
-                        view_data["records"] = view.records
+                    view_data = view.context_payload(preserve_null_records=preserve_records)
                     rendered = _json_dumps_exact(view_data, ensure_ascii=False, default=str)
                     if _fits_result_budget(rendered):
                         return rendered
                     view.records = None
                     view.next_action = ResultNextAction(tool="result.describe", arguments={"result_id": result_id},
                         message="Inspect available fields, then read a smaller projection.")
-                    rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                    rendered = _json_dumps_exact(view.context_payload(), ensure_ascii=False, default=str)
                     return rendered if _fits_result_budget(rendered) else limited_result()
                 from app.core.config import get_settings
                 budget = max(256, (context_budget_tokens or get_settings().TOOL_RESULTS_CONTEXT_TOKENS) * 3)
@@ -1112,18 +1147,17 @@ class OperationExecutionFacade:
                                    **({key: payload[key] for key in ("limit", "columns", "q") if key in payload})},
                         message="Continue the same query at the next offset; restart if input_revision is stale.",
                     ) if more else None)
-                rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                rendered = _json_dumps_exact(view.context_payload(), ensure_ascii=False, default=str)
                 if _fits_result_budget(rendered):
                     return rendered
                 view.records = None
                 view.next_action = ResultNextAction(tool="result.describe", arguments={
                     "result_id": view.result_id,
                 }, message="Inspect available fields, then read a smaller projection.")
-                rendered = _json_dumps_exact(view.model_dump(exclude_none=True), ensure_ascii=False, default=str)
+                rendered = _json_dumps_exact(view.context_payload(), ensure_ascii=False, default=str)
                 return rendered if _fits_result_budget(rendered) else limited_result()
 
             raw_output = result.data
-            canonical_operation = OperationExecutionFacade._canonical_operation_name(operation_slug)
             if isinstance(raw_output, dict):
                 # This ID is projected only into the follow-up LLM context as
                 # bounded evidence metadata.
@@ -1134,6 +1168,8 @@ class OperationExecutionFacade:
                     )
                 elif canonical_operation == "collection.template.search":
                     raw_output = OperationExecutionFacade._compact_template_search_for_context(raw_output)
+                elif canonical_operation == "collection.template.list":
+                    raw_output = OperationExecutionFacade._compact_template_list_for_context(raw_output)
                 elif canonical_operation == "collection.template.get_schema":
                     raw_output = OperationExecutionFacade._compact_template_schema_for_context(raw_output)
                 elif canonical_operation == "collection.template.fill":
@@ -1143,29 +1179,9 @@ class OperationExecutionFacade:
                 if evidence_call_id:
                     raw_output["evidence_call_id"] = evidence_call_id
             try:
-                rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
-                if canonical_operation == "collection.info":
-                    # Keep this diagnostic response parseable when a schema is large.
-                    while not fits_budget(rendered):
-                        sections = [
-                            raw_output.get("field_profiles"),
-                            raw_output.get("filter_hints"),
-                            raw_output.get("fields"),
-                            raw_output.get("remote_objects"),
-                        ]
-                        populated = [section for section in sections if isinstance(section, list) and section]
-                        if not populated:
-                            raw_output.pop("field_profiles", None)
-                            raw_output.pop("filter_hints", None)
-                            raw_output.pop("fields", None)
-                            raw_output.pop("remote_objects", None)
-                            collection = raw_output.get("collection") or {}
-                            collection.pop("usage_rules", None)
-                            rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
-                            break
-                        max(populated, key=len).pop()
-                        rendered = _json_dumps_exact(raw_output, ensure_ascii=False, default=str)
-                    return rendered if fits_budget(rendered) else limited_result()
+                rendered = (render_collection_info(raw_output)
+                            if canonical_operation == "collection.info" and isinstance(raw_output, dict)
+                            else _json_dumps_exact(raw_output, ensure_ascii=False, default=str))
                 return rendered if fits_budget(rendered) else limited_result()
             except Exception:
                 rendered = str(raw_output)
@@ -1268,7 +1284,7 @@ class OperationExecutionFacade:
     def _compact_template_search_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
         """Publish template identities, not their repeated row schemas."""
         hits: List[Dict[str, Any]] = []
-        for item in (raw_output.get("hits") or [])[:MAX_TEMPLATE_SEARCH_HITS]:
+        for item in raw_output.get("hits") or []:
             if not isinstance(item, dict):
                 continue
             row_data = item.get("row_data") if isinstance(item.get("row_data"), dict) else {}
@@ -1288,8 +1304,17 @@ class OperationExecutionFacade:
         return {
             "collection": raw_output.get("collection"),
             "hits": hits,
-            "total": len(hits),
+            "total": raw_output.get("total", len(hits)),
         }
+
+    @staticmethod
+    def _compact_template_list_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:
+        templates = [
+            {key: item[key] for key in ("row_id", "title", "template_version", "artifact_id") if key in item}
+            for item in (raw_output.get("templates") or [])
+            if isinstance(item, dict) and item.get("row_id")
+        ]
+        return {"templates": templates, "total": raw_output.get("total", len(templates))}
 
     @staticmethod
     def _compact_template_schema_for_context(raw_output: Dict[str, Any]) -> Dict[str, Any]:

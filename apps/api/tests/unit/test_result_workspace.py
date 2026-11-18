@@ -44,6 +44,25 @@ def test_empty_and_arbitrary_objects_are_not_guessed():
     assert page.value == [unknown] and page.meta.has_next is None
 
 
+def test_json_pointer_rejects_noncanonical_array_index_and_invalid_tilde_escape():
+    from app.services.result_workspace import _json_pointer
+    from app.services.tool_result_store import ToolResultStoreError
+
+    with pytest.raises(ToolResultStoreError):
+        _json_pointer(["zero", "one"], "/01")
+    with pytest.raises(ToolResultStoreError):
+        _json_pointer({"~2": "literal"}, "/~2")
+    assert _json_pointer(["zero", "one"], "/1") == "one"
+    assert _json_pointer({"a/b": "value"}, "/a~1b") == "value"
+
+
+def test_source_page_cannot_claim_next_page_without_continuation_arguments():
+    with pytest.raises(ValueError, match="continuation"):
+        normalize_result({"value": [{"id": 1}], "meta": {"has_next": True}}, "custom_source", {})
+    unknown = normalize_result({"value": [{"id": 1}], "meta": {"has_next": None}}, "custom_source", {})
+    assert unknown.meta.has_next is None
+
+
 @pytest.mark.parametrize("value", [None, False, 0, [], ""])
 def test_mcp_and_prompt_preserve_falsy_values(value):
     result = DirectOperationExecutor._tool_result_from_payload({"structuredContent": value})
@@ -84,6 +103,57 @@ async def test_local_execution_preserves_runtime_metadata():
     result = await executor.execute(ToolCall(id="call", tool_name="local", arguments={}),
         ToolContext(tenant_id=uuid4(), user_id=uuid4()))
     assert result is expected and result.metadata["stored_result"]["result_id"] == "saved"
+
+
+@pytest.mark.asyncio
+async def test_local_handler_exception_returns_safe_model_facing_error():
+    from app.agents.context import ToolCall
+    from app.agents.contracts import ProviderExecutionTarget
+
+    handler = type("Handler", (), {"execute": AsyncMock(side_effect=RuntimeError("driver exploded at /internal/path"))})()
+    registry = type("Registry", (), {"get_handler": lambda self, slug: handler})()
+    executor = DirectOperationExecutor(tool_registry=registry)
+    target = ProviderExecutionTarget(operation_slug="local", provider_type="local", handler_slug="local",
+        data_instance_id="system", data_instance_slug="system")
+    executor._resolve_target_binding = lambda *a: (None, target)
+    result = await executor.execute(ToolCall(id="call", tool_name="local", arguments={}),
+        ToolContext(tenant_id=uuid4(), user_id=uuid4()))
+
+    assert not result.success
+    assert result.error == "The operation failed during execution. Try again later or refine the request."
+    assert result.metadata["error_code"] == "operation_execution_failed"
+    assert "internal/path" not in OperationExecutionFacade.format_result_for_context(result)
+
+
+@pytest.mark.asyncio
+async def test_cached_mcp_client_uses_each_request_timeout(monkeypatch):
+    import app.agents.operation_executor as module
+
+    class FakeResponse:
+        status_code = 200
+        content = b"{}"
+        headers = {"content-type": "application/json"}
+
+    class FakeClient:
+        def __init__(self, *, timeout, verify):
+            self.timeout = timeout
+            self.calls = []
+
+        async def post(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            return FakeResponse()
+
+    monkeypatch.setattr(module.httpx, "AsyncClient", FakeClient)
+    monkeypatch.setattr(module, "outbound_http_verify", lambda: True)
+    executor = DirectOperationExecutor()
+    first = await executor._get_client("https://provider.test/mcp", 2)
+    second = await executor._get_client("https://provider.test/mcp", 40)
+    assert first is second and second.timeout == 2
+
+    for timeout in (2, 40):
+        await executor._post_with_retry(client=second, provider_url="https://provider.test/mcp",
+            headers={}, payload={"method": "tools/call"}, timeout_s=timeout, allow_retries=False)
+    assert [call["timeout"] for call in second.calls] == [2, 40]
 
 
 def test_reuse_keeps_dataset_identity_instead_of_treating_descriptor_as_source_json():

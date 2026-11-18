@@ -285,6 +285,7 @@ def test_valid_json_values_keep_their_type(prediction_call, inputs, schema):
 @pytest.mark.parametrize("inputs", [
     '{"header":', {"header": "МИРК"}, {"header": 5, "description": "Отчеты"},
     '{"header":5,"description":"Отчеты"}', float("inf"),
+    {"header": "МИРК", "description": None}, {}, None,
 ])
 def test_invalid_inputs_are_actionable_and_never_sent_to_prediction(prediction_call, inputs):
     # HTTP JSON cannot carry infinity; test finite-value validation separately below.
@@ -299,6 +300,30 @@ def test_invalid_inputs_are_actionable_and_never_sent_to_prediction(prediction_c
     assert failure["request_id"] == "regression-nims"
     assert failure["stage"] == "input_validation"
     assert "inputs" in failure["message"]
+    assert [request.method for request in requests] == ["GET"]
+
+
+@pytest.mark.parametrize("description", ["", "None is not of type 'string'"])
+def test_prediction_string_values_follow_model_schema_without_content_heuristics(prediction_call, description):
+    inputs = {"header": "МИРК", "description": description}
+    result, requests = prediction_call(inputs, NIMS_SCHEMA)
+
+    assert "result" in result
+    assert json.loads(requests[-1].content)["input"] == inputs
+
+
+def test_empty_description_is_rejected_when_model_schema_requires_nonempty_text(prediction_call):
+    schema = {
+        **NIMS_SCHEMA,
+        "properties": {
+            **NIMS_SCHEMA["properties"],
+            "description": {"type": "string", "minLength": 1},
+        },
+    }
+    result, requests = prediction_call({"header": "МИРК", "description": ""}, schema)
+
+    assert result["error"]["data"]["category"] == "input"
+    assert result["error"]["data"]["code"] == "SCHEMA_VALIDATION_ERROR"
     assert [request.method for request in requests] == ["GET"]
 
 

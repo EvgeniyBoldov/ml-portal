@@ -837,6 +837,30 @@ source user/assistant message ids
 
 No broader conversation summary is part of the active chat-context contract.
 
+Snapshot loading isolates malformed persisted context rows: an invalid row is
+omitted while other valid rows remain available. The reader records a bounded
+`invalid_context_item` uncertainty for malformed rows (up to the snapshot's
+shared uncertainty limit); invalid rows do not abort the entire snapshot.
+Repository/database failures are still propagated rather than treated as bad
+individual rows. Optional semantic compaction is dispatched after terminal
+delivery by a detached module-level task from a bounded plain serialized
+payload. The outcome transaction freezes the origin head revision and turn
+marker immediately before committing the final or pause state. The task loads
+the full committed snapshot using a fresh session from the session factory and
+queues work only if both its revision and `updated_through_turn_id` still match
+that frozen origin. A stale snapshot is logged and skipped; the worker uses
+the same origin revision for its compare-and-swap and does not rebase the old
+dialogue onto a newer head. Async snapshot loading remains on the event loop;
+only the synchronous broker publish runs in a worker thread. Compaction is not
+a prerequisite for the user-visible response. Dispatch admission is bounded
+by `CHAT_CONTEXT_COMPACTION_DISPATCH_LIMIT` (default 32, minimum 1); saturation
+skips optional compaction and is logged.
+
+Compaction keeps typed payload lengths as validated: goal text and recent-anchor
+intent/outcome allow up to 1,200 characters each; topic, decision text and
+constraint allow up to 600. The persistence pass does not apply a second
+generic 600-character slice to values already accepted by their payload model.
+
 ## 15. Consumer-specific projections
 
 No LLM role receives the entire persistence payload.

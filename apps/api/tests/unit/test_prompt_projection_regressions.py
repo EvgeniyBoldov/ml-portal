@@ -15,6 +15,28 @@ from app.services.runtime_limits_service import ModelCallLimits
 from app.runtime.prompt_projections import task_result_for_prompt, preflight_context
 
 
+@pytest.mark.parametrize("projection", ["direct", "planned"])
+@pytest.mark.parametrize("source", [
+    {"document_id": "document-1", "kind": "rag_document", "text": "Observed passage"},
+    {"source_id": "source-1", "document_id": "document-1", "source_type": "rag_document"},
+    {"artifact_id": "artifact-1", "kind": "artifact", "artifact": {"artifact_id": "artifact-1"}},
+    {"url": "https://example.test/evidence", "kind": "url", "page": 1},
+])
+def test_citation_projections_preserve_explicit_source_identity(projection, source):
+    if projection == "direct":
+        from app.runtime.pipeline import _sources_from_selected_evidence
+        sources = _sources_from_selected_evidence({"evidence": [{"data": {"sources": [source]}}]})
+    else:
+        sources = SynthesisContextBuilder()._source_projection([source])
+
+    assert len(sources) == 1
+    expected_id = source.get("source_id") or source.get("document_id") or source.get("artifact_id") or source["url"]
+    assert sources[0]["source_id"] == expected_id
+    for field in ("document_id", "kind", "source_type", "artifact_id", "artifact", "url", "page"):
+        if field in source:
+            assert sources[0][field] == source[field]
+
+
 @pytest.mark.asyncio
 async def test_repeated_schema_repairs_replace_previous_correction_and_omit_error_input(monkeypatch):
     bad = {"proposal": {"terminal": "planner", "tasks": [{
@@ -60,6 +82,73 @@ def test_projection_keeps_distinct_legacy_data_and_source_content():
     result = {"answer": "short", "description": "additional explanation",
               "structured_response": {"a": 1}, "outputs": {"b": 2}}
     assert task_result_for_prompt(result) == result
+
+
+def test_dependency_prompt_preserves_null_but_omits_operational_diagnostic_message():
+    from app.runtime.agent_executor import AgentExecutor
+    from app.runtime.orchestrator_contracts import TaskRequest
+
+    marker = "None is not of type 'string'"
+    task = TaskRequest(task_id="consumer", executor="ml_inference_agent", intent="predict",
+        instructions="Predict from dependency data",
+        inputs={"input_data": {"description": "{{producer.outputs.description}}"}},
+        dependency_outputs={"producer": {
+            "outcome": "completed",
+            "structured_response": {"summary": "Known summary", "description": None},
+            "diagnostics": [{"code": "schema_deviation", "path": "structured_response",
+                             "message": marker, "severity": "warning"}],
+        }})
+
+    prompt = "\n".join(item.get("content", "") for item in AgentExecutor._build_sub_messages([], task, "goal"))
+    assert '"description": null' in prompt
+    assert marker not in prompt
+    assert "diagnostic" in prompt.lower()
+    assert "needs" in prompt.lower() and "unfulfillable" in prompt.lower()
+
+
+def test_fake_trace_null_output_warning_stays_null_and_diagnostic_text_stays_out_of_prompt():
+    from app.runtime.agent_executor import AgentExecutor
+    from app.runtime.orchestrator_contracts import TaskCompletionDeclaration, TaskRequest
+    from app.runtime.task_result_reducer import TaskAttemptResultReducer
+
+    producer = TaskRequest(task_id="producer", executor="jira_agent", intent="fetch",
+        instructions="fetch", response_spec={"mode": "structured", "schema": {
+            "type": "object", "properties": {
+                "summary": {"type": "string"}, "description": {"type": "string"},
+            }, "required": ["summary", "description"],
+        }})
+    reduced = TaskAttemptResultReducer().reduce(request=producer,
+        declaration=TaskCompletionDeclaration(completion="fulfilled", structured_response={
+            "summary": "Observed title", "description": None,
+        }), verified={}).model_dump(mode="json")
+    assert reduced["structured_response"]["description"] is None
+    assert reduced["diagnostics"][0]["message"] == "None is not of type 'string'"
+
+    consumer = TaskRequest(task_id="consumer", executor="ml_agent", intent="predict",
+        instructions="predict", dependency_outputs={"producer": reduced})
+    prompt = "\n".join(item.get("content", "") for item in AgentExecutor._build_sub_messages([], consumer, "goal"))
+    assert '"description": null' in prompt
+    assert "None is not of type 'string'" not in prompt
+
+
+def test_continuation_diagnostic_prose_is_not_projected_as_prior_task_data():
+    from app.runtime.agent_executor import AgentExecutor
+    from app.runtime.orchestrator_contracts import TaskRequest
+
+    marker = "None is not of type 'string'"
+    task = TaskRequest(task_id="consumer", executor="agent", intent="continue", instructions="continue",
+        continuation_context={
+            "prior_task_id": "producer", "prior_goal": "fetch", "remaining_goal": "infer",
+            "prior_structured_response": {"description": None},
+            "prior_diagnostics": [{"code": "schema_deviation", "message": marker,
+                                   "path": "description", "severity": "warning"}],
+        })
+
+    prompt = "\n".join(item.get("content", "") for item in AgentExecutor._build_sub_messages([], task, "goal"))
+
+    assert '"description": null' in prompt
+    assert marker not in prompt
+    assert task.continuation_context.prior_diagnostics[0]["message"] == marker
 
 
 def test_scope_projection_keeps_authoritative_selection_and_conversation_focus():

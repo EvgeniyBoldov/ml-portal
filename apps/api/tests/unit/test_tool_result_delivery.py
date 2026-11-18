@@ -98,6 +98,7 @@ def test_reused_stored_result_is_receipt_not_replayed_payload():
     )
     receipt = json.loads(rendered)
     assert receipt["status"] == "already_completed"
+    assert receipt["result_kind"] == "result_store_reference"
     assert receipt["revision"] == 3
     assert "records" not in receipt
     assert receipt["next_action"]["arguments"]["revision"] == 3

@@ -204,7 +204,9 @@ compatible and use the same SQL storage engine.
   a child listing directly. Text values can be paged by character offset and
   child listings by their own offset. The response identifies the effective
   view and reports child/text coverage separately from record and source
-  coverage.
+  coverage. Pointer escapes follow RFC 6901 (`~0` for `~`, `~1` for `/`);
+  malformed escapes are rejected. Array indexes use canonical non-negative
+  decimal form, so leading-zero forms such as `/01` are invalid.
 * `result.load(result_id, mode=next|remaining, max_pages?)` calls the same resolved
   read-only source operation with persisted continuation arguments. It rechecks
   availability, argument validation and credential resolution through the normal
@@ -212,6 +214,9 @@ compatible and use the same SQL storage engine.
   loading with saved pages intact and an explicit limitation. Each source page
   has its own call ID in page provenance. Remaining loading is bounded, resumable,
   and does not require an LLM turn per source page.
+  A page with `has_next=true` must carry executable `next_arguments`; invalid
+  continuation metadata fails page normalization before persistence, rather
+  than surfacing later as a `result.load` error.
 * `result.sql(sql)` executes one read-only PostgreSQL SELECT or WITH query. Each
   referenced dataset is a virtual CTE named `result_<uuid_without_hyphens>` with
   exactly the top-level fields of the saved records. `SELECT name, status FROM
@@ -377,10 +382,20 @@ returns the typed context-window error. The final `llm_request` snapshot is
 authoritative for the exact presentation the model received; the linked
 `tool_result_batch_projected` status reports final per-call inline coverage,
 while `tool_result` remains the execution result/event. Direct results are
-normally not stored and are delivered whole when they fit. On actual overflow
-or batch downgrade, runtime can store a recovery snapshot and return an explicit
-`result.read` receipt; it does not silently clip the result or rerun its source.
-Raw file-controlled bodies are excluded from this recovery persistence.
+normally delivered inline. Template search and list project candidate identifiers
+and titles into the reply without repeating full template records. Template
+schema replies project the fill input schema, and collection info for template
+collections projects bounded diagnostics. The raw execution result is retained
+separately from these projections.
+
+On actual overflow or batch downgrade, runtime can store a recovery snapshot
+without rerunning the source. Across tools, a reply that carries only a Result
+Store reference identifies itself with `result_kind: "result_store_reference"`
+and provides a reader action. The `result_id` identifies the saved response and
+must be used with the reader, while a template `row_id` comes from the search or
+list data. Reusing a direct overflow result returns the same reference and
+reader action. Raw file-controlled bodies are excluded from this recovery
+persistence.
 
 The same budget is passed to `result.describe`, `result.read`, and
 `result.analyze` projections. These readers return bounded pages and preserve

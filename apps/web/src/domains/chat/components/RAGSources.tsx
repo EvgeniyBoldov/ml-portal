@@ -1,17 +1,10 @@
 import React, { useCallback, useState } from 'react';
 import { Icon } from '@/shared/ui/Icon';
-import { buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
+import { buildArtifactDownloadUrl, buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
+import type { ChatRagSource } from '../types';
 import styles from './RAGSources.module.css';
 
-export interface RAGSource {
-  source_id?: string;
-  source_name?: string;
-  chunk_id?: string;
-  text?: string;
-  page?: number;
-  score?: number;
-  meta?: any;
-}
+export type RAGSource = ChatRagSource;
 
 interface RAGSourcesProps {
   sources: RAGSource[];
@@ -41,7 +34,19 @@ export default function RAGSources({ sources }: RAGSourcesProps) {
         {sources.map((source, idx) => {
           const isExpanded = expandedIdx === idx;
           const name = source.source_name || `Документ ${idx + 1}`;
-          const hasDownload = !!source.source_id;
+          const explicitKind = source.kind || source.source_type;
+          const artifactId = source.artifact_id ||
+            (source.artifact && typeof source.artifact === 'object' &&
+            'artifact_id' in source.artifact && typeof source.artifact.artifact_id === 'string'
+              ? source.artifact.artifact_id : undefined);
+          const documentId = !artifactId && !source.url
+            ? source.document_id ||
+              (explicitKind === 'rag_document' || explicitKind === 'rag'
+                ? source.source_id
+                : !explicitKind && (source.chunk_id || source.page != null)
+                  ? source.source_id
+                  : undefined)
+            : undefined;
 
           return (
             <div
@@ -71,14 +76,30 @@ export default function RAGSources({ sources }: RAGSourcesProps) {
 
               {isExpanded && (
                 <div className={styles.itemBody}>
-                  {source.text && (
-                    <div className={styles.snippet}>{source.text}</div>
+                  {(source.excerpt || source.text) && (
+                    <div className={styles.snippet}>
+                      {source.excerpt || source.text}{source.excerpt_truncated ? '…' : ''}
+                    </div>
                   )}
-                  {hasDownload && (
+                  {source.url && !artifactId && (
+                    <div className={styles.actions}>
+                      <a className={styles.downloadBtn} href={source.url} target="_blank" rel="noreferrer">
+                        Открыть источник
+                      </a>
+                    </div>
+                  )}
+                  {artifactId && (
+                    <div className={styles.actions}>
+                      <a className={styles.downloadBtn} href={buildArtifactDownloadUrl(artifactId)} target="_blank" rel="noreferrer">
+                        <Icon name="download" size={12} /> Скачать файл
+                      </a>
+                    </div>
+                  )}
+                  {documentId && (
                     <div className={styles.actions}>
                       <button
                         className={styles.downloadBtn}
-                        onClick={() => handleDownload(source.source_id!, 'original')}
+                        onClick={() => handleDownload(documentId, 'original')}
                         title="Скачать оригинал"
                       >
                         <Icon name="download" size={12} />
@@ -86,7 +107,7 @@ export default function RAGSources({ sources }: RAGSourcesProps) {
                       </button>
                       <button
                         className={styles.downloadBtn}
-                        onClick={() => handleDownload(source.source_id!, 'canonical')}
+                        onClick={() => handleDownload(documentId, 'canonical')}
                         title="Скачать обработанный текст"
                       >
                         <Icon name="file" size={12} />

@@ -16,8 +16,21 @@ a single agent with a tool-call loop:
 """
 from __future__ import annotations
 
-from app.runtime.events import RuntimeEvent, RuntimeEventType
+from typing import Any
+
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
+
+
+def __getattr__(name: str) -> Any:
+    # Importing result_context must not initialize app.runtime while
+    # chat_context_contracts is still defining ChatContextSnapshot.  Keep the
+    # legacy event exports available, but resolve them only when requested.
+    if name in {"RuntimeEvent", "RuntimeEventType"}:
+        from app.runtime import events
+
+        return getattr(events, name)
+    raise AttributeError(name)
+
 
 __all__ = [
     "RuntimeEvent",

@@ -60,7 +60,7 @@ describe('Chat memory scope override', () => {
         mutations: { retry: false },
       },
     });
-    render(
+    const view = render(
       <QueryClientProvider client={queryClient}>
         <ChatMemoryScopes chatId="chat1" context={context} />
       </QueryClientProvider>
@@ -69,20 +69,30 @@ describe('Chat memory scope override', () => {
       await screen.findByRole('checkbox', { name: 'Компания (company)' })
     );
     await user.click(screen.getByRole('checkbox', { name: 'NIMS (nims)' }));
-    await user.click(screen.getByRole('button', { name: 'Применить к чату' }));
+    await user.click(screen.getByRole('button', { name: 'Применить выбор' }));
     await waitFor(() =>
       expect(apiRequest).toHaveBeenCalledWith('/chats/chat1/memory-scopes', {
         method: 'PUT',
         body: JSON.stringify({ scope_keys: ['nims'], expected_revision: 4 }),
       })
     );
+    const scopedContext: ChatContextInspection = {
+      ...context,
+      revision: 5,
+      focus: { scope_keys: ['nims'], scope_mode: 'replace' },
+    };
+    view.rerender(
+      <QueryClientProvider client={queryClient}>
+        <ChatMemoryScopes chatId="chat1" context={scopedContext} />
+      </QueryClientProvider>
+    );
     await user.click(
-      screen.getByRole('button', { name: 'Использовать настройки профиля' })
+      screen.getByRole('button', { name: 'Вернуть настройки профиля' })
     );
     await waitFor(() =>
-      expect(apiRequest).toHaveBeenCalledWith('/chats/chat1/memory-scopes', {
+      expect(apiRequest).toHaveBeenLastCalledWith('/chats/chat1/memory-scopes', {
         method: 'PUT',
-        body: JSON.stringify({ scope_keys: null, expected_revision: 4 }),
+        body: JSON.stringify({ scope_keys: null, expected_revision: 5 }),
       })
     );
   });

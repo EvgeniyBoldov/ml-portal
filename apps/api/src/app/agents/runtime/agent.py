@@ -1657,15 +1657,9 @@ class AgentToolRuntime(BaseRuntime):
                             }, ensure_ascii=False)
                         recovery = item.get("direct_recovery")
                         if isinstance(recovery, dict):
-                            return json.dumps({
-                                "status": "ready", "result_id": recovery["result_id"],
-                                "revision": recovery.get("revision", 1),
-                                "recoverability": "direct_overflow_saved", "reason": recovery.get("reason"),
-                                "next_action": {"tool": "result.read", "arguments": {
-                                    "result_id": recovery["result_id"], "revision": recovery.get("revision", 1),
-                                    "offset": 0, "limit": 5,
-                                }, "message": "Read the bounded saved Direct result if more detail is needed."},
-                            }, ensure_ascii=False)
+                            from app.agents.runtime.result_context import DirectResultReference
+
+                            return DirectResultReference.from_recovery(recovery).model_dump_json()
                         formatted = self.tools.format_result_for_context(
                             deepcopy(item["result"]), operation_slug=item["call"].tool_name,
                             evidence_call_id=item.get("evidence_call_id"),
@@ -2490,6 +2484,8 @@ class AgentToolRuntime(BaseRuntime):
             }
             if operation_call.tool_name == "memory.search":
                 entry["fixed_text"] = result_text
+            elif isinstance(result.metadata.get("direct_recovery"), dict):
+                entry["minimum_receipt"] = result_text
             elif result.delivery == "direct":
                 entry["minimum_receipt"] = json.dumps({
                     "status": "unavailable", "reason": "batch_context_budget",

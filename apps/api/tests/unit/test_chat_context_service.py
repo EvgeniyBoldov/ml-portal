@@ -82,6 +82,34 @@ class TestChatContextService:
         assert all("close_unavailable_artifacts" not in str(call) for call in repository.mock_calls)
 
     @pytest.mark.asyncio
+    async def test_snapshot_skips_non_object_payloads_across_prepasses_and_keeps_valid_rows(
+        self, service: ChatContextService,
+    ) -> None:
+        repository = AsyncMock()
+        repository.get_head = AsyncMock(return_value=None)
+        repository.active_items_by_kind = AsyncMock(return_value=[
+            SimpleNamespace(kind="scope", item_key="focus", payload="legacy-scalar"),
+            SimpleNamespace(kind="term_binding", item_key="term", payload="legacy-scalar"),
+            SimpleNamespace(kind="artifact_ref", item_key="artifact", payload="legacy-scalar"),
+            SimpleNamespace(kind="goal", item_key="active_goal", payload={"text": "keep this goal"}),
+        ])
+        references = AsyncMock()
+        references.resolve_many = AsyncMock(return_value={})
+
+        with patch("app.services.chat_context_service.ChatContextRepository", return_value=repository), \
+             patch("app.services.chat_context_service.ChatArtifactReferenceService", return_value=references):
+            snapshot = await service.load_snapshot(
+                chat_id=str(uuid4()), owner_id=str(uuid4()), tenant_id=str(uuid4()),
+            )
+
+        assert snapshot.active_goal is not None
+        assert snapshot.active_goal.text == "keep this goal"
+        assert len(snapshot.uncertainties) == 3
+        assert all(item["code"] == "invalid_context_item" for item in snapshot.uncertainties)
+        references.resolve_many.assert_awaited_once()
+        assert references.resolve_many.await_args.kwargs["artifact_ids"] == []
+
+    @pytest.mark.asyncio
     async def test_cancel_closes_only_the_goal_owned_by_the_cancelled_turn(self, service: ChatContextService) -> None:
         chat_id = str(uuid4())
         turn_id = str(uuid4())
