@@ -414,6 +414,9 @@ Stored model replies must not reattach raw MCP content blocks after descriptor
 formatting, including tool-call reuse. MCP text may repeat the dataset inside
 a different JSON envelope. Only bounded warning summaries and omission counters
 accompany the descriptor; records remain accessible through the result workspace.
+The MCP adapter drops an exact mirror of a FastMCP string result before
+bounding text diagnostics. Distinct text and warnings are retained within the
+diagnostic budget and text clipping is reflected in the truncation flag.
 The trace inspector displays a complete tool reply when it can match it by call
 ID and owner in a later recorded LLM request. Otherwise it previews data in the
 tool-result event. In sandbox, a stored descriptor can be opened through the
@@ -432,6 +435,13 @@ protocol: required `completion`, optional string `answer`, arbitrary JSON
 nonempty list with unique refs; other completion modes require no unresolved
 needs. Invalid JSON, unknown envelope fields and inconsistent statuses receive
 bounded protocol correction. Data schemas never cause correction.
+
+For runtime tasks, prompt assembly omits recognized legacy `report/outputs`
+examples and format sections from the effective agent prompt. This applies
+after selecting the published version or sandbox override. If a reply still
+uses invalid legacy output slots, protocol correction directs the agent to
+`answer` and `structured_response`. Historical valid declarations can still
+be decoded by the legacy adapter.
 
 The agent assesses task success and completeness. Planner `response_spec.schema`,
 legacy output specs and registered data contracts guide the LLM. Runtime records

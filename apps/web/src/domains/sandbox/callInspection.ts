@@ -21,6 +21,7 @@ const LABELS: Record<string, string> = {
   model: 'Модель', purpose: 'Назначение', temperature: 'Температура', max_tokens: 'Лимит токенов',
   native_tool_calling: 'Native tool calling', response_length: 'Размер ответа', tokens_in: 'Токены входа',
   tokens_out: 'Токены выхода', tokens_total: 'Всего токенов', duration_ms: 'Длительность',
+  logical_duration_ms: 'Длительность с повторами',
   success: 'Статус', reused: 'Переиспользован', truncated: 'Сокращён', tool: 'Операция',
   operation_slug: 'Операция', safe_message: 'Сообщение', error_code: 'Код ошибки',
   retryable: 'Можно повторить', recoverable: 'Восстанавливаемая', title: 'Название',
@@ -99,13 +100,14 @@ export function llmResponseContent(payload: Record<string, unknown>): unknown {
 }
 
 export function llmResponseStatus(payload: Record<string, unknown>): 'answered' | 'empty' | 'error' {
-  if ((typeof payload.error_type === 'string' && payload.error_type.trim())
+  if (payload.status === 'failed' || payload.status === 'waiting_retry'
+    || (typeof payload.error_type === 'string' && payload.error_type.trim())
     || (typeof payload.error_code === 'string' && payload.error_code.trim() && !hasContent(llmResponseContent(payload)))) return 'error';
   return hasContent(llmResponseContent(payload)) ? 'answered' : 'empty';
 }
 
 export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0): LlmOutcome {
-  if (typeof payload.error_type === 'string' && payload.error_type.trim()) return { kind: 'error', label: 'Ошибка' };
+  if (llmResponseStatus(payload) === 'error') return { kind: 'error', label: 'Ошибка' };
   if (toolCallCount > 0) return { kind: 'tools', label: 'Вызов инструментов', count: toolCallCount };
 
   const resultKind = typeof payload.result_kind === 'string' ? payload.result_kind : '';

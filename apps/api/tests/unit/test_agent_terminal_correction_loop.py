@@ -103,6 +103,10 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
         assert not any(event.type == RuntimeEventType.FINAL for event in events)
         return
     final = [event for event in events if event.type == RuntimeEventType.FINAL]
+    attempts = [event.data for event in events if event.type == RuntimeEventType.LLM_RESPONSE]
+    assert [attempt["status"] for attempt in attempts] == ["failed", "failed", "completed" if repair else "failed"]
+    assert all(attempt["error_code"] == "output_contract_invalid" for attempt in attempts[:2])
+    assert [call.args[1] for call in session.record_event.await_args_list if call.args[0] == "llm_response"] == attempts
     assert len(final) == 1
     assert not any(event.type == RuntimeEventType.WAITING_INPUT for event in events)
     assert final[0].data["content"] == responses[-1]
@@ -126,10 +130,9 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
             assert request_event["tools"] == provider_call.kwargs["tools"]
         else:
             assert request_event.get("response_format") == provider_call.kwargs["response_format"]
-    turn_events = [call.args[1] for call in session.record_event.call_args_list
-                   if call.args and call.args[0] == "llm_turn"]
-    assert [item["messages"] for item in turn_events] == [item["messages"] for item in requests]
-    assert [item["request_snapshot"]["messages"] for item in turn_events] == [item["messages"] for item in requests]
+    recorded_requests = [call.args[1] for call in session.record_event.await_args_list if call.args[0] == "llm_request"]
+    assert recorded_requests == requests
+    assert all("messages" not in attempt for attempt in attempts)
     counts = [len(event["messages"]) for event in requests]
     assert counts == [counts[0], counts[0] + 2, counts[0] + 2]
     assert all((call.kwargs["response_format"] is None) == with_tools for call in calls.await_args_list)

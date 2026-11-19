@@ -123,6 +123,9 @@ fields mean unknown, and numeric zero is a present value. In particular,
 `result_inline_complete=true` does not guarantee that the journal/SSE event
 contains the complete result. Stored-result events commonly carry only a
 bounded descriptor; full data remains in Result Store.
+The result envelope omits an exact copy of the event's `data`. A distinct
+structured value used for runtime verification is retained alongside a
+truncated display preview.
 
 For agent tool exchanges, the inspector correlates a tool event with the actual
 subsequent model request and its result receipts, including native and text
@@ -147,6 +150,23 @@ a tool result starts a new request and receives a new ID. Consumers must not
 reconstruct retry chains from adjacent sequence numbers, timestamps, or a
 shared executor parent. Historical rows that used a different ID per retry
 remain compatible through their explicit shared `logical_llm_call_id`.
+
+A structured provider attempt emits one `llm_response` after validation.
+The response is `waiting_retry` while another attempt is scheduled,
+`completed` once accepted, or terminal `failed` or `cancelled`.
+`duration_ms` measures that attempt. `logical_duration_ms` includes earlier
+attempts and retry waits and is used for the logical call in the inspector.
+Progress names root routing separately from planning and reports cancellation
+as cancellation.
+Agent decisions also publish their protocol outcome. An invalid task envelope
+closes that decision as failed. Format correction uses a new decision and
+retains the rejected call ID in the retry diagnostic.
+
+The journal API serializes event timestamps in UTC. Trace downloads identify
+the browser-clock export time separately from the last journal event and report
+when the latest journal timestamp is ahead of that clock. Open trace duration
+uses the journal span plus monotonic time since the browser observed the last
+event. Completed duration uses journal start and end times.
 
 Each structured request records its attempt number and `input_tokens_estimate`
 using the same serialization/token estimator as the outbound adapter, including

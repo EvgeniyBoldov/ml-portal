@@ -124,6 +124,36 @@ def test_turn_preflight_prompt_keeps_database_sections_without_provider_schema()
     assert '"value"' not in prompt
 
 
+@pytest.mark.parametrize(
+    ("role", "rules"),
+    [
+        (SystemLLMRoleType.TURN_PREFLIGHT, """## RESOLVE (резолв терминов через память до маршрутизации)
+ВСЕГДА вызывай memory.lookup по X.
+## ROUTING
+memory.search — не для «что такое X».
+## CONTEXT
+Результаты memory.lookup — определения терминов.
+## OUTPUT
+Keep this authored requirement."""),
+        (SystemLLMRoleType.PLANNER, """## RESOLVE ТЕРМИНОВ ЧЕРЕЗ ПАМЯТЬ
+Используй memory.lookup. Поиск не для резолва термина.
+## ИСТОЧНИКИ И СОСТОЯНИЕ
+Keep this authored requirement."""),
+    ],
+)
+def test_root_role_replaces_stale_sandbox_memory_routing(role, rules):
+    prompt = StructuredLLMCall._compile_role_prompt(
+        {"role_type": role.value, "identity": "Custom identity"},
+        {"rules": rules},
+        schema=_Result,
+    )
+    assert "Custom identity" in prompt
+    assert "Keep this authored requirement." in prompt
+    assert "вызывай memory.lookup по X" not in prompt
+    assert "Используй memory.lookup." not in prompt
+    assert "memory.search" in prompt
+
+
 def test_structured_parser_rejects_invalid_items_instead_of_deleting_data():
     with pytest.raises(StructuredCallError):
         StructuredLLMCall._parse_and_validate(
@@ -198,11 +228,13 @@ async def test_structured_call_emits_safe_protocol_retry_for_invalid_schema():
     assert len(requests) == 2
     assert len({event.data["llm_call_id"] for event in requests}) == 1
     responses = [event for event in events if event.type is RuntimeEventType.LLM_RESPONSE]
-    # One raw response is recorded before schema validation, then the
-    # validated terminal response closes the same logical call.
-    assert len(responses) == 3
+    assert len(responses) == 2
     assert {event.data["llm_call_id"] for event in responses} == {requests[0].data["llm_call_id"]}
+    assert responses[0].data["status"] == "waiting_retry"
+    assert responses[0].data["error_code"] == "schema_validation"
+    assert responses[0].data["terminal"] is False
     assert responses[-1].data["status"] == "completed"
+    assert responses[-1].data["logical_duration_ms"] >= responses[-1].data["duration_ms"]
     logical_call_ids = {event.data["logical_llm_call_id"] for event in requests}
     assert len(logical_call_ids) == 1
     assert retries[0].data["logical_llm_call_id"] in logical_call_ids

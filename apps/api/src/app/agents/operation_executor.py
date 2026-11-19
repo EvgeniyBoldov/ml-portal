@@ -615,7 +615,14 @@ class DirectOperationExecutor:
         if structured is not None:
             content = payload.get("content") or []
             extras = _meaningful_mcp_content(content, structured)
-            return ToolResult.ok(structured, **({"mcp_content": safe_diagnostic(extras, secrets=secrets)} if extras else {}))
+            safe_extras = safe_diagnostic(extras, secrets=secrets)
+            safe_extras["truncated"] = extras["truncated"] or any(
+                isinstance(item.get("text"), str)
+                and item["text"].endswith(" [truncated]")
+                and item["text"] != original.get("text")
+                for item, original in zip(safe_extras["items"], extras["items"])
+            )
+            return ToolResult.ok(structured, mcp_content=safe_extras)
 
         content = payload.get("content") or []
         text = _extract_mcp_text_content(content)
@@ -1173,14 +1180,16 @@ def _meaningful_mcp_content(content: Any, structured: Any) -> dict[str, Any]:
     warning_summaries: list[str] = []
     warning_count = 0
     duplicate_count = 0
+    # FastMCP wraps a string return in structuredContent.result and also
+    # publishes that same string as a text block (often a JSON list).
+    string_result = structured.get("result") if isinstance(structured, dict) and set(structured) == {"result"} else structured
     for item in content:
         if not isinstance(item, dict):
             continue
         text_value = item.get("text")
-        if isinstance(text_value, str) and re.search(r"(?i)\b(warning|error|failed|failure|truncated|omitted)\b", text_value):
-            warning_count += 1
-            if len(warning_summaries) < 20:
-                warning_summaries.append(text_value[:1000])
+        if item.get("type") == "text" and isinstance(text_value, str) and text_value == string_result:
+            duplicate_count += 1
+            continue
         if isinstance(text_value, str) and canonical is not None:
             try:
                 if json.dumps(json.loads(text_value), ensure_ascii=False, sort_keys=True, separators=(",", ":")) == canonical:
@@ -1188,6 +1197,10 @@ def _meaningful_mcp_content(content: Any, structured: Any) -> dict[str, Any]:
                     continue
             except (ValueError, TypeError):
                 pass
+        if isinstance(text_value, str) and re.search(r"(?i)\b(warning|error|failed|failure|truncated|omitted)\b", text_value):
+            warning_count += 1
+            if len(warning_summaries) < 20:
+                warning_summaries.append(text_value[:1000])
         extras.append(item)
     selected = extras[:50]
     omitted = max(0, len(extras) - len(selected))

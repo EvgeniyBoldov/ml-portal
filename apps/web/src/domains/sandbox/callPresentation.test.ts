@@ -30,6 +30,21 @@ const event = (sequence: number, eventType: string, payload: Record<string, unkn
 });
 
 describe('call presentation', () => {
+  it('presents cancellation as terminal and uses the duration of the full logical call', () => {
+    const request = event(1, 'llm_request', { model: 'gemma' });
+    const response = event(2, 'llm_response', {
+      status: 'cancelled', terminal: true, error_code: 'llm_cancelled',
+      duration_ms: 100, logical_duration_ms: 500,
+    });
+    const call: TraceCall = {
+      entity: entity('llm-1'), events: [request, response], request, response,
+      retryEvents: [], linkedToolCalls: [], kind: 'llm', title: 'LLM', toolCallCount: 0,
+      info: { status: 'running', retryCount: 0 }, requestView: { messages: [] },
+    };
+
+    expect(callPresentation(call)).toMatchObject({ status: 'cancelled', durationMs: 500 });
+  });
+
   it('keeps canonical request, response and retry rows intact in RAW', () => {
     const request = event(1, 'llm_request', { model: 'gemma' });
     const response = event(2, 'llm_response', {

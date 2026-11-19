@@ -45,7 +45,7 @@ from app.runtime.orchestrator_contracts import (
     parse_task_completion_declaration,
     task_completion_json_schema,
 )
-from app.runtime.task_completion_prompt import build_task_completion_prompt, output_slot_example
+from app.runtime.task_completion_prompt import build_task_completion_prompt, omit_legacy_completion_sections
 from app.runtime.redactor import RuntimeRedactor
 from app.services.tool_result_store import ToolResultStore
 from app.runtime.context_snapshot import compact_snapshot
@@ -1333,7 +1333,7 @@ class AgentExecutor:
 
     @staticmethod
     def _with_terminal_contract_prompt(prompt: str, task: TaskRequest) -> str:
-        return "\n\n".join(part for part in [str(prompt or "").strip(), build_task_completion_prompt(task)] if part)
+        return "\n\n".join(part for part in [omit_legacy_completion_sections(prompt), build_task_completion_prompt(task)] if part)
 
     @staticmethod
     def _terminal_validation_errors(raw: str, *, task: TaskRequest, verified: Dict[str, Any], shadow: bool = False) -> list[str]:
@@ -1347,20 +1347,19 @@ class AgentExecutor:
                 json.dumps(declaration.structured_response, allow_nan=False)
         except ValidationError as exc:
             errors = []
+            legacy_outputs = False
             for error in exc.errors(include_input=False)[:10]:
                 loc = error["loc"]
+                if loc and loc[0] == "outputs":
+                    legacy_outputs = True
+                    continue
                 path = ".".join(str(part) for part in loc)
-                message = error["msg"]
-                if len(loc) == 2 and loc[0] == "outputs" and error["type"] in {
-                    "union_tag_not_found", "union_tag_invalid", "model_attributes_type",
-                }:
-                    shape = json.dumps(output_slot_example(task, str(loc[1])), ensure_ascii=False)
-                    message += (
-                        f". Исправь слот {path}: ожидаемая форма {shape}. "
-                        "Для kind=value перенеси весь результат внутрь value; не удаляй данные "
-                        "и не переименовывай ключ output. Подставь реальные данные вместо placeholder."
-                    )
-                errors.append(f"{path}: {message}")
+                errors.append(f"{path}: {error['msg']}")
+            if legacy_outputs:
+                errors.append(
+                    "Перенеси фактические данные из outputs в structured_response, "
+                    "текст report в answer и убери старые поля outputs и report."
+                )
             return errors
         except ValueError as exc:
             return [str(exc)]

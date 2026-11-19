@@ -52,6 +52,18 @@ def test_tool_result_keeps_known_completeness_and_count_metadata_without_inferen
     assert "result_source_complete" not in unknown.data
 
 
+def test_tool_result_keeps_one_copy_of_data_but_preserves_distinct_verification_data() -> None:
+    data = {"rows": [{"id": 1}]}
+    envelope = {"success": True, "data": data}
+    event = RuntimeEvent.tool_result(tool="search", call_id="call-1", success=True, data=data, envelope=envelope)
+    assert event.data["data"] == data
+    assert event.data["result"] == {"success": True}
+    truncated = RuntimeEvent.tool_result(
+        tool="search", call_id="call-2", success=True, data="preview", envelope=envelope, truncated=True,
+    )
+    assert truncated.data["result"]["data"] == data
+
+
 def test_tool_failure_user_text_is_catalog_backed_while_diagnostics_remain_separate() -> None:
     from app.runtime.operation_errors import RuntimeErrorCode
 

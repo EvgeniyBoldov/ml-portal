@@ -325,8 +325,8 @@ def _build_budget_snapshot_payload(
     delta: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     if not start_time:
-        start_time = loop_state.start_time or time.time()
-    used_wall_time_ms = int((time.time() - start_time) * 1000)
+        start_time = loop_state.start_time or time.monotonic()
+    used_wall_time_ms = int((time.monotonic() - start_time) * 1000)
     return {
         "entity_type": "agent_execution",
         "entity_id": owner_id,
@@ -411,6 +411,7 @@ class AgentToolRuntime(BaseRuntime):
             resolved_operations=available_operations,
             policy_limits=policy,
             platform_config=platform_config,
+            runtime_task_completion=bool(ctx.extra.get("task_completion_prompt")),
         )
 
         system_prompt = prompt_bundle.system_prompt
@@ -595,7 +596,7 @@ class AgentToolRuntime(BaseRuntime):
             reason="init",
             step=0,
             policy=policy,
-            loop_state=AgentLoopState(start_time=time.time()),
+            loop_state=AgentLoopState(start_time=time.monotonic()),
         )
         await run_session.record_event("budget_snapshot", init_budget_snapshot)
         yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, init_budget_snapshot)
@@ -618,6 +619,10 @@ class AgentToolRuntime(BaseRuntime):
             ),
             {"agent_slug": agent.slug, "operations_count": len(available_operations)}
         )
+
+        async def record_llm_event(event: RuntimeEvent) -> RuntimeEvent:
+            await run_session.record_event(event.type.value, event.data)
+            return event
 
         # Build working messages for LLM (mutable copy)
         llm_messages: List[Dict[str, Any]] = [{"role": "system", "content": system_prompt}]
@@ -718,7 +723,7 @@ class AgentToolRuntime(BaseRuntime):
                     "sources": [] if file_call_seen else deepcopy(loop_state.sources), "tool_ledger": receipts,
                     "execution_tool_ledger": execution_receipts}
 
-        loop_state.start_time = time.time()  # Start clock after all setup is complete
+        loop_state.start_time = time.monotonic()  # Start clock after all setup is complete
         max_steps_without_success = int(
             platform_config.get("max_steps_without_successful_tool_result")
             or MAX_STEPS_WITHOUT_SUCCESSFUL_TOOL_RESULT_DEFAULT
@@ -819,7 +824,7 @@ class AgentToolRuntime(BaseRuntime):
                 logical_llm_call_id = pending_logical_llm_call_id or str(uuid4())
                 pending_llm_call_id = None
                 pending_logical_llm_call_id = None
-                elapsed_ms = (time.time() - loop_state.start_time) * 1000
+                elapsed_ms = (time.monotonic() - loop_state.start_time) * 1000
                 global_remaining = policy.max_wall_time_ms - elapsed_ms
                 if elapsed_ms > policy.max_wall_time_ms or global_remaining <= 0:
                     yield RuntimeEvent.error(
@@ -853,7 +858,7 @@ class AgentToolRuntime(BaseRuntime):
                 yield RuntimeEvent(RuntimeEventType.BUDGET_SNAPSHOT, step_budget_snapshot)
 
                 # Non-streaming LLM call to let agent decide
-                llm_start = time.time()
+                llm_start = time.monotonic()
                 raw_response_dict: Optional[Dict[str, Any]] = None
                 from app.agents.runtime.model_context import (
                     bound_document_memory_request, outbound_request_snapshot, project_model_messages,
@@ -878,7 +883,7 @@ class AgentToolRuntime(BaseRuntime):
                     outbound_snapshot, context_window_tokens=request_context_window,
                 )
                 from app.adapters.impl.llm_context import estimate_request_tokens
-                yield RuntimeEvent.llm_request(
+                yield await record_llm_event(RuntimeEvent.llm_request(
                     usage_attempt=step + 1,
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
@@ -897,7 +902,7 @@ class AgentToolRuntime(BaseRuntime):
                     purpose="tool_decision_or_answer",
                     actor_type="agent",
                     actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                )
+                ))
                 try:
                     if native_tool_calling and tools_payload:
                         raw_response_dict = await self.llm.call_raw(
@@ -928,7 +933,7 @@ class AgentToolRuntime(BaseRuntime):
                             response_format=outbound_snapshot.get("response_format"),
                         )
                 except asyncio.CancelledError:
-                    yield RuntimeEvent.llm_response(
+                    yield await record_llm_event(RuntimeEvent.llm_response(
                         usage_attempt=step + 1,
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
@@ -937,7 +942,7 @@ class AgentToolRuntime(BaseRuntime):
                         terminal=True,
                         retryable=False,
                         error_code="llm_cancelled",
-                        duration_ms=int((time.time() - llm_start) * 1000),
+                        duration_ms=int((time.monotonic() - llm_start) * 1000),
                         parent_entity_type="agent_execution",
                         parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                         agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
@@ -945,7 +950,7 @@ class AgentToolRuntime(BaseRuntime):
                         purpose="tool_decision_or_answer",
                         actor_type="agent",
                         actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    )
+                    ))
                     logger.warning(
                         "Agent LLM call cancelled run_id=%s agent=%s step=%s model=%s",
                         run_session.run_id,
@@ -959,7 +964,7 @@ class AgentToolRuntime(BaseRuntime):
                         # The agent continues through the plaintext protocol;
                         # keep the request entity in its retry state so the
                         # trace does not report a false terminal failure.
-                        yield RuntimeEvent.llm_response(
+                        yield await record_llm_event(RuntimeEvent.llm_response(
                             usage_attempt=step + 1,
                             llm_call_id=llm_call_id,
                             logical_llm_call_id=logical_llm_call_id,
@@ -969,7 +974,7 @@ class AgentToolRuntime(BaseRuntime):
                             retryable=exc.retryable,
                             **(exc.provider_error.diagnostics() if exc.provider_error is not None else {}),
                             status="waiting_retry",
-                            duration_ms=int((time.time() - llm_start) * 1000),
+                            duration_ms=int((time.monotonic() - llm_start) * 1000),
                             parent_entity_type="agent_execution",
                             parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                             agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
@@ -977,7 +982,7 @@ class AgentToolRuntime(BaseRuntime):
                             purpose="tool_decision_or_answer",
                             actor_type="agent",
                             actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                        )
+                        ))
                         native_tool_calling = False
                         tools_payload = None
                         loop_state.force_tool_choice = False
@@ -1052,7 +1057,7 @@ class AgentToolRuntime(BaseRuntime):
                             gen.model,
                             type(exc).__name__,
                         )
-                    yield RuntimeEvent.llm_response(
+                    yield await record_llm_event(RuntimeEvent.llm_response(
                         usage_attempt=step + 1,
                         llm_call_id=llm_call_id,
                         logical_llm_call_id=logical_llm_call_id,
@@ -1063,7 +1068,7 @@ class AgentToolRuntime(BaseRuntime):
                         **(provider_error.diagnostics() if provider_error is not None else {}),
                         retry_after_ms=retry_after_ms,
                         status="waiting_retry" if will_retry else "failed",
-                        duration_ms=int((time.time() - llm_start) * 1000),
+                        duration_ms=int((time.monotonic() - llm_start) * 1000),
                         parent_entity_type="agent_execution",
                         parent_entity_id=str(run_session.run_id) if run_session.run_id else None,
                         agent_execution_id=str(run_session.run_id) if run_session.run_id else None,
@@ -1071,7 +1076,7 @@ class AgentToolRuntime(BaseRuntime):
                         purpose="tool_decision_or_answer",
                         actor_type="agent",
                         actor_entity_id=str(run_session.run_id) if run_session.run_id else None,
-                    )
+                    ))
                     if will_retry:
                         retry_delay_ms = self._retry_delay_ms(
                             retry_count=loop_state.llm_retry_count,
@@ -1101,7 +1106,7 @@ class AgentToolRuntime(BaseRuntime):
                         pending_llm_call_id = llm_call_id
                         pending_logical_llm_call_id = logical_llm_call_id
                         remaining_retry_ms = policy.max_wall_time_ms - (
-                            (time.time() - loop_state.start_time) * 1000
+                            (time.monotonic() - loop_state.start_time) * 1000
                         )
                         if remaining_retry_ms <= retry_delay_ms:
                             limit_message = "Wall time limit would be exceeded before the next LLM retry"
@@ -1142,7 +1147,7 @@ class AgentToolRuntime(BaseRuntime):
                     )
                     await run_session.finish("failed", message)
                     return
-                llm_duration = int((time.time() - llm_start) * 1000)
+                llm_duration = int((time.monotonic() - llm_start) * 1000)
                 usage = (raw_response_dict or {}).get("usage") if isinstance(raw_response_dict, dict) else None
                 prompt_tokens = 0
                 completion_tokens = 0
@@ -1160,29 +1165,7 @@ class AgentToolRuntime(BaseRuntime):
                 loop_state.tokens_in += max(0, prompt_tokens)
                 loop_state.tokens_out += max(0, completion_tokens)
                 loop_state.tokens_total += max(0, total_tokens)
-                await run_session.record_event("llm_turn", {
-                    "step": step + 1,
-                    "model": gen.model,
-                    "temperature": gen.temperature,
-                    "request_snapshot": deepcopy(outbound_snapshot),
-                    "messages": deepcopy(outbound_snapshot["messages"]),
-                    "content": raw_response,
-                    "response_length": len(raw_response),
-                    "native_tool_calling": native_tool_calling,
-                    "llm_call_id": llm_call_id,
-                    "logical_llm_call_id": logical_llm_call_id,
-                    "parent_entity_type": "agent_execution",
-                    "parent_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_execution_id": str(run_session.run_id) if run_session.run_id else None,
-                    "agent_slug": agent.slug,
-                    "tokens_in": max(0, prompt_tokens),
-                    "tokens_out": max(0, completion_tokens),
-                    "tokens_total": max(0, total_tokens),
-                    "purpose": "tool_decision_or_answer",
-                    "actor_type": "agent",
-                    "actor_entity_id": str(run_session.run_id) if run_session.run_id else None,
-                }, duration_ms=llm_duration, tokens_in=max(0, prompt_tokens), tokens_out=max(0, completion_tokens))
-                yield RuntimeEvent.llm_response(
+                llm_response_event = RuntimeEvent.llm_response(
                     usage_attempt=step + 1,
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
@@ -1190,7 +1173,6 @@ class AgentToolRuntime(BaseRuntime):
                     token_source="provider" if isinstance(usage, dict) and usage else "estimate",
                     model=gen.model,
                     temperature=gen.temperature,
-                    messages=deepcopy(outbound_snapshot["messages"]),
                     content=raw_response,
                     response_length=len(raw_response),
                     tokens_in=max(0, prompt_tokens),
@@ -1215,6 +1197,8 @@ class AgentToolRuntime(BaseRuntime):
                         parsed = parse_native_tool_calls(raw_response_dict)
                     except NativeToolCallProtocolError as exc:
                         message = f"Malformed native tool call: {exc}"
+                        llm_response_event.data.update(status="failed", error_code=RuntimeErrorCode.OPERATION_INVALID_ARGS.value)
+                        yield await record_llm_event(llm_response_event)
                         yield RuntimeEvent.error(
                             message,
                             recoverable=False,
@@ -1244,6 +1228,8 @@ class AgentToolRuntime(BaseRuntime):
                     collision = _duplicate_call_id(parsed.tool_calls, prior_call_ids)
                     if collision is not None:
                         message = f"Malformed tool call: duplicate id already used in this execution or batch: {collision}"
+                        llm_response_event.data.update(status="failed", error_code=RuntimeErrorCode.OPERATION_INVALID_ARGS.value)
+                        yield await record_llm_event(llm_response_event)
                         yield RuntimeEvent.error(message, recoverable=False,
                             error_code=RuntimeErrorCode.OPERATION_INVALID_ARGS, retryable=False,
                             user_message="The model returned an invalid operation request.",
@@ -1272,6 +1258,20 @@ class AgentToolRuntime(BaseRuntime):
                         or self._has_valid_task_completion_declaration(parsed.text)
                         else ["Invalid interaction completion declaration."]
                     )
+                    needs_fresh_retrieval = (
+                        not terminal_errors
+                        and require_retrieval
+                        and not callable(terminal_validator)
+                        and isinstance(terminal_candidate, dict)
+                        and terminal_candidate.get("completion") == "fulfilled"
+                        and not terminal_contract_correction_sent
+                        and not has_fresh_retrieval_receipt()
+                    )
+                    if terminal_errors:
+                        llm_response_event.data.update(status="failed", error_code="output_contract_invalid")
+                    elif needs_fresh_retrieval:
+                        llm_response_event.data.update(status="waiting_retry", terminal=False, retryable=True)
+                    yield await record_llm_event(llm_response_event)
                     if (
                         terminal_response_format
                         and terminal_json_corrections < max(1, policy.max_retries)
@@ -1294,6 +1294,7 @@ class AgentToolRuntime(BaseRuntime):
                         })
                         yield RuntimeEvent(RuntimeEventType.PROTOCOL_RETRY, {
                             "reason": "terminal_json_correction", "validation_errors": terminal_errors,
+                            "previous_llm_call_id": llm_call_id,
                         })
                         continue
                     if terminal_errors and ctx.extra.get("shadow_execution"):
@@ -1317,20 +1318,7 @@ class AgentToolRuntime(BaseRuntime):
                         })
                         await run_session.finish("waiting_input", question.question)
                         return
-                    completion_claim = None
-                    try:
-                        candidate = json.loads(parsed.text)
-                        if isinstance(candidate, dict):
-                            completion_claim = candidate.get("completion")
-                    except (TypeError, ValueError, json.JSONDecodeError):
-                        pass
-                    if (
-                        require_retrieval
-                        and not callable(terminal_validator)
-                        and completion_claim == "fulfilled"
-                        and not terminal_contract_correction_sent
-                        and not has_fresh_retrieval_receipt()
-                    ):
+                    if needs_fresh_retrieval:
                         terminal_contract_correction_sent = True
                         protocol_repair.apply(llm_messages, raw_response,
                             "Your fulfilled declaration cannot be accepted: this task requires fresh retrieval and no successful retrieval receipt exists. Reconsider the next step. You may call an available operation, return needs if external data is missing, or return unfulfillable with a limitation.")
@@ -1370,6 +1358,7 @@ class AgentToolRuntime(BaseRuntime):
                     return
 
                 # Execute each tool call
+                yield await record_llm_event(llm_response_event)
                 operation_results_for_context: List[tuple] = []
                 batch_result_contexts: List[Dict[str, Any]] = []
                 successful_operation_results = 0
@@ -1480,7 +1469,7 @@ class AgentToolRuntime(BaseRuntime):
                         batch_result_contexts=batch_result_contexts,
                         remaining_wall_time_ms=(
                             policy.max_wall_time_ms
-                            - ((time.time() - loop_state.start_time) * 1000)
+                            - ((time.monotonic() - loop_state.start_time) * 1000)
                         ),
                     ):
                         if ev.type == RuntimeEventType.CONFIRMATION_REQUIRED:
@@ -2324,7 +2313,10 @@ class AgentToolRuntime(BaseRuntime):
             else result.data
         ))
         if isinstance(result.metadata.get("mcp_content"), (list, dict)) and isinstance(safe_result_projection, dict):
-            safe_result_projection["mcp_content"] = RuntimeRedactor().redact(result.metadata["mcp_content"])
+            safe_result_projection = {
+                **safe_result_projection,
+                "mcp_content": RuntimeRedactor().redact(result.metadata["mcp_content"]),
+            }
         if (result.success and operation_call.tool_name == "result.analyze"
                 and isinstance(result.data, dict) and isinstance(safe_result_projection, dict)):
             safe_result_projection.update({
@@ -2414,8 +2406,6 @@ class AgentToolRuntime(BaseRuntime):
             "success": result.success,
             "reused": bool(result.metadata.get("reused")),
             "reused_from_call_id": result.metadata.get("reused_from_call_id"),
-            "output": safe_result_projection if result.success else result.error,
-            "result": safe_result_projection if result.success else result.error,
             "data": safe_result_projection if result.success else None,
             "error": None if result.success else str(result.error or ""),
             "safe_message": None if result.success else str(result.error or ""),
@@ -2644,9 +2634,8 @@ class AgentToolRuntime(BaseRuntime):
         )
         return json.dumps({
             "completion": "unfulfillable",
-            "report": (limitation_message if limitation_message else
+            "answer": (limitation_message if limitation_message else
                        f"The agent could not produce a terminal task declaration{suffix}."),
-            "outputs": {},
             "needs": [],
             "limitation": {
                 "code": "agent_terminal_declaration_missing",

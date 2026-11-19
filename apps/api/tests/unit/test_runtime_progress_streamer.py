@@ -69,3 +69,15 @@ def test_synthesis_end_without_status_does_not_claim_success() -> None:
     assert progress is not None
     assert progress["outcome"] is None
     assert "собран" not in progress["description"].lower()
+
+
+def test_preflight_and_non_successful_model_progress_use_the_actual_event_status():
+    streamer = RuntimeProgressStreamer()
+    context = {"run_id": "run-1", "phase": OrchestrationPhase.PREFLIGHT}
+    start = streamer.project(RuntimeEvent(RuntimeEventType.ORCHESTRATOR_START, {}), **context)
+    cancelled = streamer.project(RuntimeEvent.llm_response(status="cancelled"), **context)
+    retry = streamer.project(RuntimeEvent.llm_response(status="waiting_retry", terminal=False), **context)
+    assert start["description"] == "Определяю маршрут запроса"
+    assert cancelled["description"] == "Вызов модели отменён"
+    assert cancelled["outcome"] == "cancelled"
+    assert retry is None

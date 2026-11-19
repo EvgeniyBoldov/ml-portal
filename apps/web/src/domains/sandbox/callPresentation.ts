@@ -2,7 +2,7 @@ import type { RuntimeJournalEvent } from './traceState';
 import type { TraceCall } from './traceProjection';
 import { llmOutcome, llmResponseStatus, safeFailureMessage, toolResult, type LlmOutcome } from './callInspection';
 
-export type CallPresentationStatus = 'running' | 'waiting_retry' | 'ok' | 'error' | 'unknown';
+export type CallPresentationStatus = 'running' | 'waiting_retry' | 'ok' | 'error' | 'cancelled' | 'unknown';
 
 export type CallErrorDetails = {
   name: string;
@@ -38,7 +38,7 @@ const textField = (value: unknown): string | undefined => (
 
 function durationFor(call: TraceCall): number | undefined {
   const response = call.response;
-  const payloadDuration = numberField(response?.payload.duration_ms);
+  const payloadDuration = numberField(response?.payload.logical_duration_ms ?? response?.payload.duration_ms);
   if (payloadDuration !== undefined) return payloadDuration;
   if (response?.duration_ms !== null && response?.duration_ms !== undefined) return response.duration_ms;
   if (!response) return undefined;
@@ -128,13 +128,16 @@ export function callPresentation(call: TraceCall): CallPresentation {
   if (!response) return { ...base, status: call.retryEvents.length ? 'waiting_retry' : 'running' };
 
   if (call.kind === 'llm') {
+    if (response.status === 'cancelled') {
+      return { ...base, status: 'cancelled' };
+    }
     const responseStatus = llmResponseStatus(response);
     const outcome = llmOutcome(response, call.toolCallCount);
     const emptyResponse = responseStatus === 'empty';
     // Native tool calling legitimately has an empty text body.  The canonical
     // tool_call rows linked by llm_call_id are the response in that case.
     const hasToolOutcome = outcome.kind === 'tools' || call.linkedToolCalls.length > 0;
-    const waitingRetry = isWaitingForRetry(call);
+    const waitingRetry = response.status === 'waiting_retry' || isWaitingForRetry(call);
     const failed = !waitingRetry && (response.status === 'failed'
       || responseStatus === 'error'
       || (emptyResponse && !hasToolOutcome));
@@ -154,6 +157,9 @@ export function callPresentation(call: TraceCall): CallPresentation {
   }
 
   if (call.kind === 'tool') {
+    if (response.status === 'cancelled' || response.error_code === 'operation_cancelled') {
+      return { ...base, status: 'cancelled' };
+    }
     if (call.retryEvents.length && call.retryEvents[call.retryEvents.length - 1].sequence > call.response!.sequence) {
       return { ...base, status: 'waiting_retry' };
     }
@@ -174,6 +180,7 @@ export function callPresentation(call: TraceCall): CallPresentation {
 export function callStatusPresentation(status: CallPresentationStatus): { label: string; tone: 'success' | 'warn' | 'danger' } {
   if (status === 'waiting_retry') return { label: 'Ожидает повтора', tone: 'warn' };
   if (status === 'error') return { label: 'Ошибка', tone: 'danger' };
+  if (status === 'cancelled') return { label: 'Отменён', tone: 'warn' };
   if (status === 'running') return { label: 'Выполняется', tone: 'warn' };
   if (status === 'unknown') return { label: 'Результат не подтверждён', tone: 'warn' };
   return { label: 'Готово', tone: 'success' };

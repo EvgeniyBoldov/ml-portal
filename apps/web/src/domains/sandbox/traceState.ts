@@ -59,22 +59,26 @@ function terminalStatus(event: RuntimeJournalEvent): string | undefined {
   if (event.entity_type === 'task' && event.event_type === 'task_unfulfillable') return 'unfulfillable';
   if (event.entity_type === 'task' && event.event_type === 'task_blocked') return 'blocked';
   if (event.entity_type === 'task' && event.event_type === 'task_completed') return 'completed';
-  if (event.entity_type === 'task' && event.event_type === 'task_failed') return 'failed';
+  if (event.entity_type === 'task' && event.event_type === 'task_failed') {
+    return event.payload.status === 'cancelled' ? 'cancelled' : 'failed';
+  }
   if ((event.entity_type === 'task' || event.entity_type === 'checkpoint') && stringField(event.payload.status)) {
     return stringField(event.payload.status) || undefined;
   }
   if (event.event_type === 'protocol_retry') return 'waiting_retry';
   if (event.event_type === 'llm_request' || event.event_type === 'tool_call') return 'running';
   if (event.event_type === 'tool_result') {
+    if (event.payload.status === 'cancelled' || event.payload.error_code === 'operation_cancelled') return 'cancelled';
     const success = toolResult(event.payload).success;
     return success === true ? 'completed' : success === false ? 'failed' : 'unknown';
   }
   if (event.event_type === 'llm_response') {
+    const declared = stringField(event.payload.status).toLowerCase();
+    if (declared === 'cancelled' || declared === 'waiting_retry') return declared;
     // A non-terminal response is an intermediate provider/protocol update.
     // It must not close the logical call or its owning executor.
     if (event.payload.terminal === false) return 'running';
-    const declared = stringField(event.payload.status).toLowerCase();
-    if (declared === 'running' || declared === 'waiting_retry' || declared === 'failed' || declared === 'completed') {
+    if (declared === 'running' || declared === 'failed' || declared === 'completed') {
       return declared;
     }
     if (llmResponseStatus(event.payload) === 'error') {
@@ -93,7 +97,7 @@ function terminalStatus(event: RuntimeJournalEvent): string | undefined {
       ? declared : 'completed';
   }
   if (event.event_type === 'error') return 'error';
-  if (event.event_type.endsWith('_failed')) return 'failed';
+  if (event.event_type.endsWith('_failed')) return event.payload.status === 'cancelled' ? 'cancelled' : 'failed';
   return isEnd(event.event_type) ? String(event.payload.status ?? 'completed') : undefined;
 }
 

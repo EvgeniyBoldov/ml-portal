@@ -270,6 +270,7 @@ class OrchestratorEvent(dict):
                 attempt_id=self.get("attempt_id"),
                 agent_execution_id=self.get("agent_execution_id"),
                 step_id=self.get("step_id"),
+                **({"status": self.get("status")} if self.get("status") else {}),
             )
         if event_name == "task_attempt_failed":
             error = self.get("error") if isinstance(self.get("error"), dict) else {}
@@ -281,6 +282,7 @@ class OrchestratorEvent(dict):
                 plan_id=plan_id, iteration_id=iteration_id, attempt=attempt,
                 agent_execution_id=self.get("agent_execution_id"), step_id=self.get("step_id"),
                 error_code=error.get("code"), retryable=bool(error.get("retryable")),
+                status="cancelled" if error.get("code") == "cancelled" else "failed",
             )
         if event_name in {"task_attempt_started", "task_attempt_succeeded"}:
             attempt = int(self.get("attempt") or 0)
@@ -1343,7 +1345,7 @@ class GraphOrchestrator:
                     )
                     yield OrchestratorEvent(
                         type="task_failed", plan_id=str(plan_id), task_id=task_id,
-                        attempt=attempt, **trace_links,
+                        attempt=attempt, status="cancelled", **trace_links,
                     )
                     yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.agent_end(
                         agent_execution_id=execution_id,

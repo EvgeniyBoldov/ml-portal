@@ -1178,6 +1178,7 @@ function metricsFor(state: SandboxTraceState, entity: TraceEntity): TraceMetrics
     if (total !== undefined) tokens = Math.max(tokens ?? 0, total);
     if (event.event_type === 'llm_response' && event.payload.terminal !== false) {
       calls += 1;
+      if (event.payload.status === 'cancelled') continue;
       if (llmResponseStatus(event.payload) === 'error') failedCalls += 1;
       else successfulCalls += 1;
     }
@@ -3003,7 +3004,7 @@ export function resolveTraceInspectionTarget(
   return null;
 }
 
-export function traceElapsedMs(state: SandboxTraceState, now: number): number | undefined {
+export function traceElapsedMs(state: SandboxTraceState, elapsedSinceLastEventMs = 0): number | undefined {
   const events = state.eventIdsBySequence.map((id) => state.eventsById[id]).filter(Boolean);
   if (events.length === 0) return undefined;
   const start = new Date(events[0].occurred_at).getTime();
@@ -3018,6 +3019,7 @@ export function traceElapsedMs(state: SandboxTraceState, now: number): number | 
       terminal = ends.at(-1);
     }
   }
-  const finish = terminal ? new Date(terminal.occurred_at).getTime() : now;
+  const lastEventTime = new Date(events[events.length - 1].occurred_at).getTime();
+  const finish = terminal ? new Date(terminal.occurred_at).getTime() : lastEventTime + elapsedSinceLastEventMs;
   return finish > start ? finish - start : undefined;
 }

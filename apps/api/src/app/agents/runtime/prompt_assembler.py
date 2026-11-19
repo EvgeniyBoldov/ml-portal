@@ -82,6 +82,7 @@ class PromptAssembler:
         resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
         policy_limits: Optional[PolicyLimits] = None,
         platform_config: Optional[Dict[str, Any]] = None,
+        runtime_task_completion: bool = False,
     ) -> PromptAssembly:
         resolved_policy_limits = policy_limits or PolicyLimits.from_policy(
             exec_request.policy_data,
@@ -95,6 +96,10 @@ class PromptAssembler:
             system_prompt_override=system_prompt_override,
             sandbox_overrides=sandbox_overrides,
         )
+        if runtime_task_completion:
+            from app.runtime.task_completion_prompt import omit_legacy_completion_sections
+
+            base_prompt = omit_legacy_completion_sections(base_prompt)
         # Older published agent versions may still mention the removed
         # ``file.create`` name. Keep the prompt aligned with the canonical
         # operation surface while those versions are being republished.

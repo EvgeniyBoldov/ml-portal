@@ -26,8 +26,7 @@ async def record_usage(context: Any, event_type: str, payload: dict[str, Any], s
         return
     if USAGE_EVENTS[event_type] == "llm":
         entity_id = f"{entity_id}/{payload.get('usage_attempt', payload.get('attempt', payload.get('step', 1)))}"
-    # Structured calls can emit an intermediate response and then its validated
-    # result. Persist each transport attempt once, never sum repeated projections.
+    # Request, response and retry events update the same transport attempt.
     is_start = event_type.endswith("_start") or event_type == "llm_request"
     now = datetime.now(timezone.utc)
     status = str(payload.get("status") or ("running" if is_start else "completed"))

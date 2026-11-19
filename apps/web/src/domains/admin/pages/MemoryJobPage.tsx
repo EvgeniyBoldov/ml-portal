@@ -59,7 +59,7 @@ export default function MemoryJobPage() {
   const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: 'Мемори', href: '/admin/agent-runs?tab=memory' }, { label: title }];
   return (
     <EntityPageV2 title={title} subtitle={job?.trace_run_id || 'Ожидание запуска'} mode="view" breadcrumbs={breadcrumbs} backPath="/admin/agent-runs" loading={isLoading}
-      headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace, Date.now()))} disabled={!job?.events.length}>Скачать лог</Button>}>
+      headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace))} disabled={!job?.events.length}>Скачать лог</Button>}>
       <Tab title="Трейс" id="trace" layout="custom">
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 32%)', gap: 16, minHeight: 600 }}>
           <section style={{ minWidth: 0, border: '1px solid var(--border)', borderRadius: 8, padding: 12, overflow: 'auto' }}>

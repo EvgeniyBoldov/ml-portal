@@ -14,6 +14,20 @@ from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeR
 from app.services.sandbox.turn_lifecycle import SandboxTurnLifecycleService
 
 
+def test_sandbox_replay_and_live_journal_serialize_the_same_utc_instant():
+    event_id, run_id = uuid4(), uuid4()
+    row = SimpleNamespace(
+        id=event_id, run_id=run_id, sequence=1, event_type="run_start",
+        occurred_at="2026-11-19T11:17:55+03:00",
+        entity_type=None, entity_id=None, parent_entity_type=None, parent_entity_id=None,
+        caused_by_event_id=None, duration_ms=None, payload={},
+    )
+    live = {"event_id": event_id, "run_id": run_id, "sequence": 1, "type": "run_start",
+            "occurred_at": "2026-11-19T08:17:55Z"}
+    assert sandbox_runs._journal_from_row(row) == sandbox_runs._journal_from_tail(live)
+    assert sandbox_runs._journal_from_row(row)["occurred_at"] == "2026-11-19T08:17:55Z"
+
+
 @pytest.mark.asyncio
 async def test_setup_failure_terminalizes_existing_hidden_sandbox_turn() -> None:
     turn = SimpleNamespace(id=uuid4())

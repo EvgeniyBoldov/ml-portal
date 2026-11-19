@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 from app.runtime.orchestrator_contracts import TaskRequest, task_completion_json_schema
 
 
-def output_slot_example(task: TaskRequest, key: str) -> dict[str, Any]:
-    """Legacy callers may inspect old task specifications."""
-    return {"kind": "value", "value": "<observed data>"}
+_AUTHOR_FORMAT_SECTION = re.compile(r"(?m)^# (?:Output Format|Examples)[ \t]*\n[\s\S]*?(?=^# \S|\Z)")
+
+
+def omit_legacy_completion_sections(prompt: str) -> str:
+    """Keep task instructions while omitting authored examples of the old envelope."""
+    return _AUTHOR_FORMAT_SECTION.sub(
+        lambda section: "" if all(
+            re.search(rf'"{field}"\s*:', section.group()) for field in ("completion", "report", "outputs")
+        ) else section.group(),
+        prompt,
+    ).strip()
 
 
 def build_task_completion_prompt(task: TaskRequest, *, include_schema: bool = True) -> str:

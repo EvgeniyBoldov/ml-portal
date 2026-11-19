@@ -56,7 +56,7 @@ class RuntimeProgressStreamer:
     }
 
     def project(self, event: RuntimeEvent, *, run_id: str, phase: OrchestrationPhase) -> Optional[dict[str, Any]]:
-        description = self._description(event)
+        description = self._description(event, phase)
         if description is None:
             return None
         data = event.data
@@ -89,9 +89,27 @@ class RuntimeProgressStreamer:
             OrchestrationPhase.PIPELINE: "executing",
         }[phase]
 
-    def _description(self, event: RuntimeEvent) -> Optional[str]:
+    def _description(self, event: RuntimeEvent, phase: OrchestrationPhase) -> Optional[str]:
+        status = str(event.data.get("status") or "").lower()
+        if event.type is RuntimeEventType.ORCHESTRATOR_START and phase is OrchestrationPhase.PREFLIGHT:
+            return "Определяю маршрут запроса"
+        if event.type is RuntimeEventType.LLM_RESPONSE:
+            if status == "cancelled":
+                return "Вызов модели отменён"
+            if status == "waiting_retry":
+                return None  # The following protocol_retry describes the wait.
+            if status in {"failed", "error"}:
+                if event.data.get("error_code") == "output_contract_invalid":
+                    return "Формат ответа модели не прошёл проверку"
+                return "Вызов модели завершился ошибкой"
+            if status == "running" or event.data.get("terminal") is False:
+                return None
+        if event.type is RuntimeEventType.TOOL_RESULT:
+            if status == "cancelled":
+                return "Выполнение инструмента отменено"
+            if status in {"failed", "error"}:
+                return "Инструмент завершился ошибкой"
         if event.type is RuntimeEventType.SYNTHESIS_END:
-            status = str(event.data.get("status") or "").lower()
             if status in {"failed", "error"}:
                 return "Не удалось собрать итоговый ответ"
             if status == "cancelled":

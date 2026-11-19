@@ -27,6 +27,11 @@ technical `ExecutionPreflight` that prepares an already selected agent.
 
 Factual synthesis requires sufficient input or retrieved document evidence. Requested examples and new prose use an explicit generative content mode.
 TurnPreflight may search memory itself. Fresh external data, checks, actions and specialized investigation route to planner.
+An explicit request to use memory for a factual question starts with registered
+`memory.search` when the tool, scope, and call budget are available. A glossary
+miss does not establish that document memory lacks the answer. The role prompt
+compiler replaces the recognized obsolete lookup routing sections in stored or
+sandbox prompts before applying the runtime tool contract.
 Chat file reads, history reads and creation of answer files can stay on the direct synthesis route. Missing
 parameters and unresolved external project names are handed to planner with the
 original request; they do not trigger a preliminary scope question. Planner has

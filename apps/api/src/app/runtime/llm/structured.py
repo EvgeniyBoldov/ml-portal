@@ -398,6 +398,7 @@ class StructuredLLMCall:
                         attempt=attempt + 1,
                         max_attempts=max_retries + 1,
                         duration_ms=attempt_duration_ms,
+                        logical_duration_ms=int((time.monotonic() - start) * 1000),
                     )))
                 logger.warning(
                     "Structured LLM attempt cancelled role=%s model=%s attempt=%s/%s "
@@ -442,18 +443,19 @@ class StructuredLLMCall:
                         model=model,
                         error_type="TimeoutError",
                         error_code="llm_timeout",
-                        retryable=True,
+                        retryable=attempt < max_retries,
                         status="waiting_retry" if attempt < max_retries else "failed",
                         terminal=attempt >= max_retries,
                         attempt=attempt + 1,
                         max_attempts=max_retries + 1,
-                        duration_ms=int((time.monotonic() - start) * 1000),
+                        duration_ms=attempt_duration_ms,
+                        logical_duration_ms=int((time.monotonic() - start) * 1000),
                     ))
                 await emit_protocol_retry(reason="timeout")
                 await wait_before_retry()
                 continue
             except Exception as exc:  # network / upstream failure
-                consume_attempt_time()
+                attempt_duration_ms = consume_attempt_time()
                 last_exception = exc
                 last_traceback = traceback.format_exc()
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -492,7 +494,8 @@ class StructuredLLMCall:
                         terminal=not will_retry,
                         attempt=attempt + 1,
                         max_attempts=max_retries + 1,
-                        duration_ms=int((time.monotonic() - start) * 1000),
+                        duration_ms=attempt_duration_ms,
+                        logical_duration_ms=int((time.monotonic() - start) * 1000),
                     ))
                 if fail_fast and not adaptive_retry:
                     logger.warning(
@@ -540,7 +543,11 @@ class StructuredLLMCall:
                 budget_registry.consume(budget_entity_id, "tokens_total", input_tokens + output_tokens, reason="llm_total")
                 if attempt_duration_ms > 0:
                     budget_registry.consume(budget_entity_id, "wall_time_ms", attempt_duration_ms, reason="llm_time")
-            if event_sink is not None and resolved_trace_parent_id:
+
+            async def record_provider_response(*, error_code: str | None = None) -> None:
+                if event_sink is None or not resolved_trace_parent_id:
+                    return
+                will_retry = error_code is not None and attempt < max_retries
                 await event_sink(RuntimeEvent.llm_response(
                     llm_call_id=llm_call_id,
                     logical_llm_call_id=logical_llm_call_id,
@@ -548,7 +555,6 @@ class StructuredLLMCall:
                     agent_slug=role_key,
                     purpose="planning_decision" if role_key == "planner" else role_key,
                     model=model,
-                    response=raw_response,
                     content=raw_response,
                     usage=provider_usage,
                     tokens_in=tokens_in_reported,
@@ -556,14 +562,19 @@ class StructuredLLMCall:
                     tokens_in_estimate=input_tokens,
                     tokens_out_estimate=output_tokens_estimate,
                     token_source=token_source,
-                    status="running",
-                    terminal=False,
+                    result_kind=("plan" if role_key == "planner" else "answer") if not error_code else None,
+                    error_code=error_code,
+                    retryable=will_retry if error_code else None,
+                    status=("waiting_retry" if will_retry else "failed") if error_code else "completed",
+                    terminal=not will_retry,
                     attempt=attempt + 1,
                     max_attempts=max_retries + 1,
-                    duration_ms=int((time.monotonic() - start) * 1000),
+                    duration_ms=attempt_duration_ms,
+                    logical_duration_ms=int((time.monotonic() - start) * 1000),
                 ))
             if not raw_response:
                 last_error = "empty_response"
+                await record_provider_response(error_code=last_error)
                 await emit_protocol_retry(reason="empty_response")
                 await wait_before_retry()
                 continue
@@ -585,6 +596,7 @@ class StructuredLLMCall:
                     "StructuredLLMCall schema mismatch role=%s attempt=%s: %s",
                     role, attempt + 1, exc,
                 )
+                await record_provider_response(error_code=validation_reason)
                 await emit_protocol_retry(reason=validation_reason)
                 if attempt < max_retries:
                     # A provider's JSON mode only guarantees syntactically valid
@@ -607,30 +619,8 @@ class StructuredLLMCall:
                     parent_entity_type=trace_parent_entity_type, parent_entity_id=resolved_trace_parent_id,
                     attempt=attempt + 1, normalizations=normalizations,
                 ))
+            await record_provider_response()
             duration_ms = int((time.monotonic() - start) * 1000)
-            if event_sink is not None and resolved_trace_parent_id:
-                await event_sink(RuntimeEvent.llm_response(
-                    llm_call_id=llm_call_id,
-                    logical_llm_call_id=logical_llm_call_id,
-                    **trace_identity,
-                    agent_slug=role_key,
-                    purpose="planning_decision" if role_key == "planner" else role_key,
-                    model=model,
-                    response=raw_response,
-                    content=raw_response,
-                    result_kind="plan" if role_key == "planner" else "answer",
-                    usage=provider_usage,
-                    tokens_in=tokens_in_reported,
-                    tokens_out=tokens_out_reported,
-                    tokens_in_estimate=input_tokens,
-                    tokens_out_estimate=output_tokens_estimate,
-                    token_source=token_source,
-                    status="completed",
-                    terminal=True,
-                    attempt=attempt + 1,
-                    max_attempts=max_retries + 1,
-                    duration_ms=duration_ms,
-                ))
             return StructuredCallResult(
                 value=parsed,
                 trace_id=None,
@@ -846,8 +836,11 @@ class StructuredLLMCall:
         operator-authored output requirements and runtime mechanics. The schema
         is supplied separately through response_format and enforced by the parser.
         """
-        parts = [compile_system_role_prompt(role_config, role_override)]
         role_type = str(role_config.get("role_type") or "").strip().lower()
+        prompt = compile_system_role_prompt(role_config, role_override)
+        if schema is not None:
+            prompt = StructuredLLMCall._omit_legacy_memory_routing(prompt, role_type)
+        parts = [prompt]
 
         if role_type != SystemLLMRoleType.SYNTHESIZER.value and schema is not None:
             if role_type == SystemLLMRoleType.PLANNER.value:
@@ -862,3 +855,32 @@ class StructuredLLMCall:
             )
 
         return "\n\n".join(parts)
+
+    @staticmethod
+    def _omit_legacy_memory_routing(prompt: str, role_type: str) -> str:
+        """Replace obsolete routing blocks found in stored prompts and sandbox overrides."""
+        if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value and "ВСЕГДА вызывай memory.lookup" in prompt:
+            from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_PROMPT_V3
+
+            # The old template grouped lookup, fallback routing, and context
+            # instructions under these consecutive subsections of Rules.
+            rules = TURN_PREFLIGHT_PROMPT_V3["rules"].split("\n\n# OUTPUT", 1)[0]
+            rules = rules.replace("# ROUTING\n", "## ROUTING\n", 1).replace("\n# CONTEXT\n", "\n## CONTEXT\n", 1)
+            prompt = re.sub(
+                r"(?ms)^## RESOLVE \(резолв терминов через память до маршрутизации\)\n.*?(?=^## OUTPUT\s*$|^# \S|\Z)",
+                lambda _: rules + "\n\n",
+                prompt,
+                count=1,
+            )
+            return prompt.replace(
+                "При необходимости используй memory.lookup / memory.search.",
+                "При необходимости используй доступный memory.search.",
+            )
+        if role_type == SystemLLMRoleType.PLANNER.value and "не для резолва термина." in prompt:
+            return re.sub(
+                r"(?ms)^## RESOLVE ТЕРМИНОВ ЧЕРЕЗ ПАМЯТЬ\n.*?(?=^#{1,2} \S|\Z)",
+                "Роль агента определяй по описанию в available_agents.\n\n",
+                prompt,
+                count=1,
+            )
+        return prompt

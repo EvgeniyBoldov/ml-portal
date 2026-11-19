@@ -26,7 +26,7 @@ export default function AgentRunPage() {
   const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: `Запуск ${id.slice(0, 8)}` }];
   return (
     <EntityPageV2 title={agentName} subtitle={agentSlug} mode="view" breadcrumbs={breadcrumbs} backPath="/admin/agent-runs" loading={isLoading}
-      headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace, Date.now()))} disabled={!run?.events.length}>Скачать лог</Button>}>
+      headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace))} disabled={!run?.events.length}>Скачать лог</Button>}>
       <Tab title="Трейс" id="trace" layout="custom">
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(340px, 32%)', gap: 16, minHeight: 600 }}>
           <section style={{ minWidth: 0, border: '1px solid var(--border)', borderRadius: 8, padding: 12, overflow: 'auto' }}>

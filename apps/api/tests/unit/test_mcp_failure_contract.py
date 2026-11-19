@@ -241,3 +241,21 @@ def test_null_mcp_structured_content_falls_back_to_json_text():
 def test_null_mcp_value_without_json_text_remains_null():
     result = DirectOperationExecutor._tool_result_from_payload({"structuredContent": None, "content": []})
     assert result.success and result.data is None
+
+
+def test_fastmcp_string_mirror_is_removed_before_bounding_distinct_content():
+    pages = json.dumps([{"title": "DCBox" * 2000}])
+    warning = "Warning: " + "details " * 1500
+    result = DirectOperationExecutor._tool_result_from_payload({
+        "structuredContent": {"result": pages},
+        "content": [{"type": "text", "text": text} for text in (pages, warning)],
+    })
+
+    assert result.data == {"result": pages}
+    extras = result.metadata["mcp_content"]
+    assert extras["duplicate_count"] == 1
+    assert extras["omitted_count"] == 0
+    assert extras["truncated"] is True
+    assert len(extras["items"]) == 1
+    assert extras["items"][0]["text"].startswith("Warning:")
+    assert extras["warning_summaries"]

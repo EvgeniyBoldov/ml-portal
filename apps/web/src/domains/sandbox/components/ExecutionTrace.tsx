@@ -40,10 +40,16 @@ export function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProg
       status: typeof item.status === 'string' ? item.status : null,
     }));
   const exportedProgress = progress.length ? progress : embeddedProgress;
+  const exportedAt = new Date();
+  const journalLastAt = events.at(-1)?.occurred_at;
+  const journalAheadMs = journalLastAt ? Date.parse(journalLastAt) - exportedAt.getTime() : 0;
   const lines = [
     'TRACE LOG EXPORT',
     `run_id: ${trace.runId ?? 'unknown'}`,
-    `exported_at: ${new Date().toISOString()}`,
+    `exported_at: ${exportedAt.toISOString()}`,
+    'exported_at_source: browser_clock',
+    ...(journalLastAt ? [`journal_last_at: ${journalLastAt}`] : []),
+    ...(journalAheadMs > 0 ? [`journal_ahead_of_browser_ms: ${journalAheadMs}`] : []),
     `elapsed: ${formatDuration(elapsedMs)}`,
     `events: ${events.length}`,
     `progress_items: ${exportedProgress.length}`,
@@ -59,7 +65,7 @@ export function downloadTraceLog(trace: SandboxTraceState, progress: RuntimeProg
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `trace-${trace.runId ?? 'unknown'}-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+  anchor.download = `trace-${trace.runId ?? 'unknown'}-${exportedAt.toISOString().replace(/[:.]/g, '-')}.txt`;
   document.body.appendChild(anchor);
   anchor.click();
   anchor.remove();
@@ -108,12 +114,15 @@ function CallCard({ call, executor, stage, onSelect, selected }: { call: TraceCa
     : call.kind === 'confirm' && call.info.status === 'running'
       ? { label: 'Ожидает решения', tone: 'warn' as const }
       : callStatusPresentation(call.info.status);
+  const statusClass = call.info.status === 'running' ? styles.callStatusRunning
+    : status.tone === 'danger' ? styles.callStatusError
+      : status.tone === 'success' ? styles.callStatusComplete : styles.callStatusWarning;
   return (
     <div className={styles.callWrap}>
       <button type="button" className={`${styles.call} ${styles[`call-${call.kind}`]} ${selected ? styles.isSelected : ''}`} onClick={() => onSelect?.(withTraceInspectorTabs(call.kind === 'error' ? { kind: 'error', key: call.entity.key, call, executor, stage, tabs: [] } : { kind: 'call', key: call.entity.key, call, executor, stage, tabs: [] }))}>
         <span className={styles.callType}><i className={styles.typeMarker} />{typeLabel}</span>
         <span className={styles.callTitle}>{call.title}{call.summary ? <small>{call.summary}</small> : null}</span>
-        <span className={`${styles.callStatus} ${call.info.status === 'error' ? styles.callStatusError : call.info.status === 'ok' ? styles.callStatusComplete : call.info.status === 'waiting_retry' || call.info.status === 'unknown' ? styles.callStatusWarning : styles.callStatusRunning}`}><span>{status.label}</span>{call.info.outcome?.count ? <span className={styles.callStatusCount}>· {call.info.outcome.count}</span> : null}</span>
+        <span className={`${styles.callStatus} ${statusClass}`}><span>{status.label}</span>{call.info.outcome?.count ? <span className={styles.callStatusCount}>· {call.info.outcome.count}</span> : null}</span>
       </button>
     </div>
   );
@@ -174,7 +183,8 @@ function StageCard({ stage, onSelect, selectedTargetKey, defaultCallsExpanded }:
 
 export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget, selectedTargetKey, defaultExpanded = false, defaultCallsExpanded = false, rawEvents, showHeader = true }: ExecutionTraceProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
-  const [now, setNow] = useState(() => Date.now());
+  const lastEventId = trace.eventIdsBySequence.at(-1);
+  const [liveElapsed, setLiveElapsed] = useState<{ eventId: string; ms: number }>();
   const stages = useMemo(() => projectTraceStages(trace), [trace]);
   const autoExpandedRunsRef = useRef(new Set<string>());
   const latestProgress = progress[progress.length - 1]?.description;
@@ -186,12 +196,15 @@ export function ExecutionTrace({ trace, isRunning, progress = [], onSelectTarget
     setExpanded(true);
   }, [hasRootRouting, trace.runId]);
   useEffect(() => {
-    if (!isRunning) return undefined;
-    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    if (!isRunning || !lastEventId) return undefined;
+    const observedAt = performance.now();
+    const timer = window.setInterval(() => {
+      setLiveElapsed({ eventId: lastEventId, ms: performance.now() - observedAt });
+    }, 1000);
     return () => window.clearInterval(timer);
-  }, [isRunning]);
+  }, [isRunning, lastEventId]);
   if (stages.length === 0 && !latestProgress) return null;
-  const elapsedMs = traceElapsedMs(trace, now);
+  const elapsedMs = traceElapsedMs(trace, isRunning && liveElapsed && liveElapsed.eventId === lastEventId ? liveElapsed.ms : 0);
   return (
     <section className={showHeader ? styles.trace : styles.traceBare}>
       {showHeader && <header className={styles.summary}>

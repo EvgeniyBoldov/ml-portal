@@ -96,11 +96,15 @@ class RunSession:
         if error: payload["error"] = error
         if duration_ms is not None:
             payload["duration_ms"] = duration_ms
+        if step_type in {"llm_request", "llm_response"}:
+            await self._emit(RuntimeEvent(RuntimeEventType(step_type), payload))
+            return
         if step_type == "llm_turn":
             call_id = str(payload.get("llm_call_id") or uuid4())
             request_payload = dict(payload)
             response_payload = dict(payload)
             request_payload.pop("llm_call_id", None)
+            request_payload.pop("content", None)
             response_payload.pop("llm_call_id", None)
             response_payload.pop("messages", None)
             request_payload.setdefault("parent_entity_type", "agent_execution")

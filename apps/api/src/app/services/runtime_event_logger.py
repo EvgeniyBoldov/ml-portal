@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -349,7 +350,11 @@ class RuntimeEventLogger:
             self._run_terminal_status = str(data.get("status") or "completed")
         entity_id = str(data.get("entity_id") or data.get("llm_call_id") or data.get("call_id") or "")
         if event_type == "llm_request" and entity_id:
-            self._open_llm_calls[entity_id] = dict(data)
+            now = time.monotonic()
+            previous = self._open_llm_calls.get(entity_id, {})
+            self._open_llm_calls[entity_id] = {
+                **data, "_started_at": now, "_logical_started_at": previous.get("_logical_started_at", now),
+            }
         elif event_type == "llm_response" and entity_id:
             if data.get("terminal") is not False and data.get("status") not in {"running", "waiting_retry"}:
                 self._open_llm_calls.pop(entity_id, None)
@@ -368,6 +373,7 @@ class RuntimeEventLogger:
         """Close provider/tool/synthesis lifecycles interrupted by cancellation or failure."""
         is_cancelled = status == "cancelled"
         for call_id, request in list(self._open_llm_calls.items()):
+            now = time.monotonic()
             response_payload: dict[str, Any] = {
                 "llm_call_id": call_id,
                 "logical_llm_call_id": request.get("logical_llm_call_id"),
@@ -380,7 +386,8 @@ class RuntimeEventLogger:
                 "parent_entity_type": request.get("parent_entity_type"),
                 "parent_entity_id": request.get("parent_entity_id"),
                 "agent_slug": request.get("agent_slug"),
-                "duration_ms": 0,
+                "duration_ms": int((now - request["_started_at"]) * 1000),
+                "logical_duration_ms": int((now - request["_logical_started_at"]) * 1000),
             }
             for field in ("usage_attempt", "attempt", "step", "max_attempts", "agent_execution_id"):
                 if request.get(field) is not None:
@@ -511,11 +518,12 @@ class RuntimeEventLogger:
                     from app.services.runtime_tail_event_bus import RuntimeTailEventBus
                     publisher = RuntimeTailEventBus()
                 await publisher.publish(stream_key=str(self.context.run_id), payload={
+                    **clean_payload,
                     "type": event_type, "run_id": str(self.context.run_id), "event_id": str(event_id),
                     "sequence": sequence, "entity_type": resolved_entity_type, "entity_id": resolved_entity_id,
                     "parent_entity_type": resolved_parent_type, "parent_entity_id": resolved_parent_id,
                     "caused_by_event_id": str(caused_by_event_id) if caused_by_event_id else None,
-                    "duration_ms": duration_ms, "occurred_at": occurred_at.isoformat(), **clean_payload,
+                    "duration_ms": duration_ms, "occurred_at": occurred_at.isoformat(),
                 })
             except Exception:
                 try:

@@ -657,7 +657,9 @@ class RuntimeEvent:
         }
         if success is not None:
             payload["success"] = bool(success)
-            payload["status"] = "completed" if success else "failed"
+            payload["status"] = "completed" if success else (
+                "cancelled" if error_code == "operation_cancelled" else "failed"
+            )
         else:
             payload["status"] = "unknown"
         if sources is not None:
@@ -682,6 +684,8 @@ class RuntimeEvent:
             payload["debug"] = dict(debug)
         if envelope is not None:
             payload["result"] = dict(envelope)
+            if "data" in envelope and envelope["data"] is data:
+                payload["result"].pop("data")
         if parent_entity_type is not None:
             payload["parent_entity_type"] = parent_entity_type
         if parent_entity_id is not None:
