@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.agents.operation_publication import (
-    build_runtime_operation_slug,
     canonical_operation_name,
     resolve_publication,
 )
@@ -108,11 +107,4 @@ def test_only_explicit_memory_search_and_scope_lookup_are_published():
         decision = resolve_publication(instance_domain="memory", raw_slug=operation)
         assert decision is not None
         assert decision.canonical_op_slug == operation
-
-
-def test_runtime_operation_slug_builder():
-    assert (
-        build_runtime_operation_slug("collection-contracts", "collection.table.search")
-        == "instance.collection-contracts.collection.table.search"
-    )
 

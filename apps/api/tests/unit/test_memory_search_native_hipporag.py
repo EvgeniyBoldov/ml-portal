@@ -7,13 +7,10 @@ import pytest
 from app.agents.context import ToolContext
 from app.agents.builtins import memory_search
 from app.services.hipporag_service import HippoRAGService
-from app.runtime.memory.search import MemorySearchService
 
 
 @pytest.mark.asyncio
 async def test_tool_preserves_one_group_per_chat_scope_including_empty_and_failed(monkeypatch):
-    legacy = AsyncMock(side_effect=AssertionError('Legacy memory must not be queried'))
-    monkeypatch.setattr(MemorySearchService, 'search', legacy)
     session = AsyncMock()
     session.__aenter__.return_value = session
     monkeypatch.setattr(memory_search, 'get_session_factory', lambda: lambda: session)
@@ -39,7 +36,6 @@ async def test_tool_preserves_one_group_per_chat_scope_including_empty_and_faile
     assert groups[2]['items'] == [] and not groups[2]['success']
     assert 'items' not in result.data  # No combined, reranked or truncated wrapper.
     native.assert_awaited_once_with('backup', scope_keys=['company', 'dcbox', 'nims'], limit=8)
-    legacy.assert_not_awaited()
 
 
 @pytest.mark.asyncio

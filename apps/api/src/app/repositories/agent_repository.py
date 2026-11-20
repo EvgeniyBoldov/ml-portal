@@ -35,14 +35,6 @@ class AgentRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_by_slug_with_versions(self, slug: str) -> Optional[Agent]:
-        stmt = (
-            select(Agent)
-            .where(Agent.slug == slug)
-            .options(selectinload(Agent.versions))
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
 
     async def get_by_id_with_versions(self, agent_id: UUID) -> Optional[Agent]:
         stmt = (

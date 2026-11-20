@@ -196,9 +196,6 @@ class ToolRelease(Base):
     def is_editable(self) -> bool:
         return self.status == ToolReleaseStatus.DRAFT.value
 
-    @property
-    def can_activate(self) -> bool:
-        return self.status == ToolReleaseStatus.DRAFT.value
 
     def __repr__(self) -> str:
         return f"<ToolRelease {self.tool_id}@v{self.version} ({self.status})>"

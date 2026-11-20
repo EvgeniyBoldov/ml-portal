@@ -59,6 +59,9 @@ def update(job_id: str, status: str, **values: Any) -> None:
 class LocalLLM(BaseLLM):
     """Count the actual llama.cpp chat template; cache successful bounded responses."""
 
+    def _init_llm_config(self) -> None:
+        self.llm_config = LLMConfig.from_dict({"model": MODEL})
+
     def __init__(self, config: BaseConfig, root: Path):
         super().__init__(config)
         self.llm_name = MODEL

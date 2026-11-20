@@ -171,10 +171,6 @@ class PromptVersion(Base):
         """Only draft versions can be edited"""
         return self.status == PromptStatus.DRAFT.value
     
-    @property
-    def can_activate(self) -> bool:
-        """Only draft versions can be activated"""
-        return self.status == PromptStatus.DRAFT.value
 
     def __repr__(self):
         return f"<PromptVersion {self.prompt_id} v{self.version} ({self.status})>"

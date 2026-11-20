@@ -25,23 +25,26 @@ Planner still chooses and schedules the actual agent task.
 request router and normalizer, not an agent executor and not the existing
 technical `ExecutionPreflight` that prepares an already selected agent.
 
-Factual synthesis requires sufficient input or retrieved document evidence. Requested examples and new prose use an explicit generative content mode.
-TurnPreflight may search memory itself. Fresh external data, checks, actions and specialized investigation route to planner.
-An explicit request to use memory for a factual question starts with registered
-`memory.search` when the tool, scope, and call budget are available. A glossary
-miss does not establish that document memory lacks the answer. The role prompt
-compiler replaces the recognized obsolete lookup routing sections in stored or
-sandbox prompts before applying the runtime tool contract.
-Chat file reads, history reads and creation of answer files can stay on the direct synthesis route. Missing
-parameters and unresolved external project names are handed to planner with the
-original request; they do not trigger a preliminary scope question. Planner has
-the richer capability/source context and owns execution-related clarification.
-Preflight `clarify` is limited to a future direct answer: its
-`direct_answer_reason` must explain why one user choice is sufficient and no
-retrieval, verification, tool or action will be needed. Without that justification,
-runtime forwards the request and proposed clarification to planner.
+General questions without company-specific dependencies and factual questions
+supported by sufficient context or document evidence can go directly to
+Synthesizer. Requested examples and new prose use an explicit generative content
+mode. Current ticket or inventory data, specialized data analysis, actions and
+work under a corporate process or template go to Planner. Explaining a
+procedure from its documentation can go directly to Synthesizer.
 
-The active role prompt is updated by migration `0188`, preserving model and
+Preflight may use registered `memory.search` for a factual question that could
+be answered from document memory. An explicit request to search memory starts
+there when the tool, scope and budget are available and the request does not
+already require Planner. Otherwise the request to use memory is part of the
+Planner handoff. Chat file reads, history reads and creation of answer files
+can stay on the direct route.
+
+Preflight `clarify` asks one question whose answer determines whether to use
+Synthesizer or Planner. Its `routing_reason` states how the answer affects that
+decision. If the route is already known, the responsible role receives any
+missing parameters with the normalized task.
+
+Migration `0214` updates the active role prompt while preserving model and
 call settings. Invalid/conflicting memory focus keys from a model also route to
 planner, retaining the previous focus. `user`/`tenant` identify fact owners and
 never become document-memory scope identities. An external project name may
@@ -91,11 +94,11 @@ values or act as an LLM tool loop.
 
 TurnPreflight returns one strict `TurnPreflightDecision`:
 
-- `route=synthesis` with a `SynthesisBrief`; runtime invokes synthesizer
+- `route=synthesis` with a `DirectAnswerBrief` containing the synthesis brief and draft; runtime invokes synthesizer
   directly and creates no plan or synthetic agent task;
 - `route=planner` with a `TaskBrief`; runtime invokes planner, which creates
   only real agent work;
-- `route=tool_call` with `tool_call` selecting registered `memory.search`, `file.read`, or `chat.history.read`;
+- `route=tool_call` with `tool_call` selecting a registered context tool from `available_tools`;
   the registered tool executes and its result returns to TurnPreflight,
   which may refine the query or choose a final route;
 - `route=clarify` with one question and continuation context. It reuses the

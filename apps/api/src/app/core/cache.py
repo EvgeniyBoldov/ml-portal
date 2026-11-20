@@ -4,8 +4,7 @@ Redis cache and distributed locks implementation
 from __future__ import annotations
 import json
 from app.core.logging import get_logger
-import uuid
-from typing import Any, List, Optional
+from typing import Any, Optional
 import redis.asyncio as redis
 from app.core.config import get_settings
 
@@ -82,128 +81,9 @@ class RedisCache:
             logger.error(f"Redis delete error for key {key}: {e}")
             return False
     
-    async def delete_pattern(self, pattern: str) -> int:
-        """Delete all keys matching pattern using SCAN"""
-        if not self.redis_client:
-            return 0
-        
-        try:
-            deleted_count = 0
-            async for key in self.redis_client.scan_iter(match=pattern):
-                result = await self.redis_client.delete(key)
-                deleted_count += result
-            return deleted_count
-        except Exception as e:
-            logger.error(f"Redis delete pattern error for {pattern}: {e}")
-            return 0
     
     
-    async def get_index_keys(self, index_name: str) -> List[str]:
-        """Get all keys in index set"""
-        if not self.redis_client:
-            return []
-        
-        try:
-            keys = await self.redis_client.smembers(index_name)
-            return list(keys)
-        except Exception as e:
-            logger.error(f"Redis get index keys error for {index_name}: {e}")
-            return []
     
-
-class DistributedLock:
-    """Distributed lock using Redis with Lua scripts"""
-    
-    def __init__(self, redis_client: redis.Redis, key: str, timeout: int = 30):
-        self.redis_client = redis_client
-        self.key = f"lock:{key}"
-        self.timeout = timeout
-        self.identifier = str(uuid.uuid4())
-        self.acquired = False
-    
-    async def acquire(self) -> bool:
-        """Acquire lock with timeout"""
-        if self.acquired:
-            return True
-        
-        # Lua script for atomic lock acquisition
-        lua_script = """
-        if redis.call("GET", KEYS[1]) == false then
-            redis.call("SET", KEYS[1], ARGV[1])
-            redis.call("EXPIRE", KEYS[1], ARGV[2])
-            return 1
-        else
-            return 0
-        end
-        """
-        
-        try:
-            result = await self.redis_client.eval(
-                lua_script, 1, self.key, self.identifier, self.timeout
-            )
-            self.acquired = result == 1
-            return self.acquired
-        except Exception as e:
-            logger.error(f"Redis lock acquire error for {self.key}: {e}")
-            return False
-    
-    async def release(self) -> bool:
-        """Release lock (only by the owner)"""
-        if not self.acquired:
-            return True
-        
-        # Lua script for atomic lock release
-        lua_script = """
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            redis.call("DEL", KEYS[1])
-            return 1
-        else
-            return 0
-        end
-        """
-        
-        try:
-            result = await self.redis_client.eval(
-                lua_script, 1, self.key, self.identifier
-            )
-            self.acquired = result == 0
-            return result == 1
-        except Exception as e:
-            logger.error(f"Redis lock release error for {self.key}: {e}")
-            return False
-    
-    async def extend(self, additional_time: int) -> bool:
-        """Extend lock timeout"""
-        if not self.acquired:
-            return False
-        
-        # Lua script for atomic lock extension
-        lua_script = """
-        if redis.call("GET", KEYS[1]) == ARGV[1] then
-            redis.call("EXPIRE", KEYS[1], ARGV[2])
-            return 1
-        else
-            return 0
-        end
-        """
-        
-        try:
-            result = await self.redis_client.eval(
-                lua_script, 1, self.key, self.identifier, self.timeout + additional_time
-            )
-            return result == 1
-        except Exception as e:
-            logger.error(f"Redis lock extend error for {self.key}: {e}")
-            return False
-    
-    async def __aenter__(self):
-        """Async context manager entry"""
-        await self.acquire()
-        return self
-    
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        """Async context manager exit"""
-        await self.release()
 
 
 # Global cache instance

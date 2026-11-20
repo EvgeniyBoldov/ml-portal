@@ -10,25 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from tests.integration.test_memory_candidate_tags import tag_pg, seed
 from app.models.document_memory_staging import MemoryExtractionCandidate, DocumentMemorySnapshot
-from app.models.memory import MemoryClaim, MemoryItem, Fact, FactScope, FactStatus
-from app.models.memory_scope import MemoryScope, MemoryCandidateScope
+from app.models.memory import MemoryClaim, MemoryItem, Fact, FactScope
+from app.models.memory_scope import MemoryScope
 from app.models.rag import RAGDocument
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
-from app.runtime.memory.search import MemorySearchService
 from app.runtime.memory.recall import MemoryRecallService
 from app.runtime.memory.semantic_index import MemorySemanticIndex
 from app.runtime.memory.fact_store import FactStore
-from app.runtime.memory.read_policy import source_access
 
 pytestmark = pytest.mark.skipif(os.getenv('MEMORY_WORKFLOW_PG') != '1', reason='requires opt-in PostgreSQL')
-
-
-@pytest.fixture(autouse=True)
-def legacy_retrieval_for_existing_lexical_regressions(monkeypatch):
-    # This suite covers the retained SQL/Qdrant implementation. The HippoRAG
-    # boundary is exercised independently with the same authoritative policy.
-    from app.runtime.memory import retrieval
-    monkeypatch.setattr(retrieval, 'get_settings', lambda: NS(MEMORY_SEARCH_BACKEND='legacy'))
 
 
 async def publish(session, *, scope_type='project', term_only=False):
@@ -66,110 +56,6 @@ async def test_memory_card_preserves_candidate_links_and_source_identity(tag_pg)
         page = await SemanticMemoryAdminService(session).list_items(scope_id=scope.id)
         assert page.total == 1
         assert page.rows[0].item.id == card.id
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('scope_type', ['project', 'team'])
-async def test_term_alias_finds_linked_rule_in_typed_scope_without_legacy_project(tag_pg, monkeypatch, scope_type):
-    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
-    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
-        candidate, scope, claim = await publish(session, scope_type=scope_type)
-        from app.models.document_memory_staging import GlossaryTerm
-        term = await session.scalar(select(GlossaryTerm))
-        term.aliases = ['NET']
-        await session.commit()
-        result = await MemorySearchService(session).search(query='NET', tenant_id=None, scope_keys=[scope.key], scopes=[scope_type, 'glossary'])
-        assert result.get('success') is not False
-        assert [item['selected_claim_id'] for item in result['items']] == [str(claim.id)]
-        assert result['items'][0]['scope_keys'] == [scope.key]
-        assert result['glossary'][0]['term'] == 'Network'
-        other = await MemorySearchService(session).search(query='NET', tenant_id=None, scopes=[scope_type, 'glossary'])
-        assert not other['items']
-
-
-@pytest.mark.asyncio
-async def test_execution_context_search_separates_common_concrete_and_non_project_memory(tag_pg, monkeypatch):
-    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
-    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
-        candidate, project, claim = await publish(session)
-        team = MemoryScope(scope_type='team', key='team.ops', name='Operations')
-        common = MemoryScope(scope_type='project', key='project.all', name='Common projects', is_all=True)
-        session.add_all([team, common])
-        await session.flush()
-        subjects = {}
-        for ordinal, bound in [(2, [team.id, common.id]), (3, [team.id])]:
-            row = MemoryExtractionCandidate(snapshot_id=candidate.snapshot_id, attempt_id=candidate.attempt_id,
-                ordinal=ordinal, candidate_type='rule', subject=f'Backup {ordinal}', normalized_subject=f'backup {ordinal}',
-                content={'statement': 'Create backup', 'effect': 'require'}, content_text='Create backup',
-                evidence_section_ids=['s1'], resolution_status='needs_review', scope_candidate='unknown')
-            session.add(row)
-            await session.flush()
-            publisher = ShadowMemoryPublicationService(session)
-            await publisher.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=bound,
-                glossary_term_ids=[], reason='Synthetic review')
-            await publisher.approve(candidate_id=row.id, actor_id=None, reason=None)
-            subjects[ordinal] = row.subject
-        await session.commit()
-        service = MemorySearchService(session)
-        for selected, expected in [(['project.all'], {subjects[2]}),
-                                   ([], {subjects[3]}),
-                                   ([project.key], {candidate.subject, subjects[2]})]:
-            result = await service.search(query='backup', tenant_id=None, project_keys=selected,
-                context_scope_keys=[team.key, project.key], enforce_context=True, kinds=['rule'])
-            assert result.get('success') is not False
-            assert {item['subject'] for item in result['items']} == expected
-        rejected = await service.search(query='backup', tenant_id=None, project_keys=['project.other'],
-            context_scope_keys=[team.key, project.key], enforce_context=True)
-        assert rejected['error_code'] == 'project_not_in_execution_context'
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize('invalid', ['missing_origin', 'unresolved', 'old_attempt', 'old_snapshot', 'stale_claim', 'archived_document'])
-async def test_invalid_publication_is_excluded_before_shortlist(tag_pg, monkeypatch, invalid):
-    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
-    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
-        candidate, scope, claim = await publish(session)
-        if invalid == 'missing_origin': claim.approved_candidate_id = None
-        elif invalid == 'unresolved': candidate.resolution_status = 'needs_review'
-        elif invalid == 'old_attempt': candidate.attempt_id = uuid4()
-        elif invalid == 'stale_claim': claim.state = 'stale'
-        elif invalid == 'archived_document':
-            document = await session.get(RAGDocument, claim.document_id)
-            document.status = 'archived'
-        else:
-            previous = await session.get(DocumentMemorySnapshot, candidate.snapshot_id)
-            session.add(DocumentMemorySnapshot(document_id=claim.document_id, canonical_checksum=uuid4().hex, status='queued'))
-        await session.commit()
-        result = await MemorySearchService(session).search(query='backup', tenant_id=None, scope_keys=[scope.key], scopes=['project'])
-        assert result['items'] == []
-
-
-@pytest.mark.asyncio
-async def test_wrong_scope_candidates_do_not_displace_lexical_match(tag_pg, monkeypatch):
-    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
-    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
-        candidate, scope, claim = await publish(session)
-        # Forty-nine newer matches belong to a different scope; limit=48 must
-        # be applied after applicability rather than after global lexical ranking.
-        other = MemoryScope(scope_type='team', key='team.other', name='Other', aliases=[], is_all=False)
-        session.add(other)
-        await session.flush()
-        for index in range(49):
-            row = MemoryExtractionCandidate(snapshot_id=candidate.snapshot_id, attempt_id=candidate.attempt_id,
-                ordinal=index + 2, candidate_type='rule', subject=f'Backup {index}', normalized_subject=f'backup {index}',
-                content={'statement': 'Create backup', 'effect': 'require'}, content_text='Create backup',
-                evidence_section_ids=['s1'], resolution_status='needs_review', scope_candidate='unknown')
-            session.add(row)
-            await session.flush()
-            pub = ShadowMemoryPublicationService(session)
-            await pub.update_review_tags(candidate_id=row.id, actor_id=None, scope_ids=[other.id],
-                                        glossary_term_ids=[], reason='Reviewed')
-            await pub.approve(candidate_id=row.id, actor_id=None, reason=None)
-        await session.commit()
-        result = await MemorySearchService(session).search(query='backup', tenant_id=None, scope_keys=[scope.key], scopes=['project'])
-        assert [item['selected_claim_id'] for item in result['items']] == [str(claim.id)]
-        args = MemorySemanticIndex.search_ids.await_args.kwargs
-        assert args['eligible_ids'] == [claim.memory_item_id]
 
 
 @pytest.mark.asyncio
@@ -263,26 +149,6 @@ async def test_manual_legacy_attempt_requires_new_publication(tag_pg):
         recall = MemoryRecallService(session=session, preparer=None)
         assert await recall._accessible_semantic_items(project_ids=[], semantic_ids=[claim.memory_item_id],
             tenant_id=None, context_scope_keys=[scope.key], collection_ids=[]) == []
-
-
-@pytest.mark.asyncio
-async def test_memory_search_returns_only_confirmed_owned_facts_and_reports_conflict(tag_pg, monkeypatch):
-    from app.runtime.memory import search as module
-    monkeypatch.setattr(module, 'allowed_source_collections', AsyncMock(return_value=[]))
-    monkeypatch.setattr(MemorySemanticIndex, 'search_ids', AsyncMock(return_value=[]))
-    async with AsyncSession(tag_pg, expire_on_commit=False) as session:
-        user, tenant = uuid4(), uuid4()
-        for scope, owner, value in [('user', user, 'A'), ('tenant', tenant, 'B'), ('user', uuid4(), 'SECRET')]:
-            session.add(Fact(scope=scope, owner_type=scope, owner_id=owner, subject='jira.default_project',
-                             value=value, status='confirmed', source='system'))
-        await session.commit()
-        data = await MemorySearchService(session).search(query='jira', user_id=user, tenant_id=tenant,
-            scopes=['user', 'tenant'], fact_subject='jira.default_project')
-        assert {fact['value'] for fact in data['facts']} == {'A', 'B'}
-        assert data['memory_context']['clarification_required']
-        assert not data['memory_context']['rag_required']
-        assert data['items'] == []
-        assert data['count'] == 2
 
 
 @pytest.mark.asyncio

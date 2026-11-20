@@ -9,63 +9,8 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 
 
-class ActionType(str, Enum):
-    OPERATION_CALL = "operation_call"
-    AGENT_CALL = "agent_call"
-    FINAL = "final"
-
-
-class ExecutionModeType(str, Enum):
-    DIRECT = "direct"
-    SINGLE_AGENT = "single_agent"
-    MULTI_AGENT = "multi_agent"
-
-
-class ActionIntent(BaseModel):
-    operation_slug: str = Field(..., min_length=1)
-    op: str = Field(..., min_length=1)
-
-
-class OperationActionPayload(BaseModel):
-    intent: ActionIntent
-    input: Dict[str, Any] = Field(default_factory=dict)
-
-
-class AgentActionPayload(BaseModel):
-    agent_slug: str = Field(..., min_length=1)
-    input: Dict[str, Any] = Field(default_factory=dict)
-
-
 class FinalPayload(BaseModel):
     answer: str = Field(..., min_length=1)
-
-
-class ActionMeta(BaseModel):
-    side_effects: Optional[bool] = None
-    risk_level: Optional[Literal["safe", "write", "destructive"]] = None
-    why: Optional[str] = None
-    phase_id: Optional[str] = None
-    phase_title: Optional[str] = None
-    finalization_rationale: Optional[str] = None
-
-
-class ObservationStatus(str, Enum):
-    OK = "ok"
-    ERROR = "error"
-    BLOCKED = "blocked"
-
-
-class ObservationError(BaseModel):
-    type: str
-    message: str
-    details: Optional[Dict[str, Any]] = None
-
-
-class PolicyDecisionType(str, Enum):
-    ALLOW = "allow"
-    BLOCK = "block"
-    REQUIRE_CONFIRMATION = "require_confirmation"
-    REQUIRE_INPUT = "require_input"
 
 
 class OperationAction(BaseModel):
@@ -267,25 +212,4 @@ class ResolvedOperation(BaseModel):
     published: Optional[PublishedOperationSummary] = None
     target: ProviderExecutionTarget
 
-
-class OutlinePhase(BaseModel):
-    phase_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    objective: str = Field(..., min_length=1)
-    must_do: bool = True
-    preferred_agents: List[str] = Field(default_factory=list)
-    preferred_sources: List[str] = Field(default_factory=list)
-    completion_signals: List[str] = Field(default_factory=list)
-    allow_final_after: bool = False
-
-
-class ExecutionOutline(BaseModel):
-    mode: ExecutionModeType = ExecutionModeType.SINGLE_AGENT
-    goal: str = Field(..., min_length=1)
-    suggested_start_agent: Optional[str] = None
-    phases: List[OutlinePhase] = Field(default_factory=list)
-    finalization_rules: List[str] = Field(default_factory=list)
-    clarify_triggers: List[str] = Field(default_factory=list)
-    max_iterations: int = Field(default=6, ge=1, le=20)
-    max_agent_handoffs: int = Field(default=3, ge=1, le=10)
 

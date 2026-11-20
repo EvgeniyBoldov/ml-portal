@@ -222,10 +222,3 @@ class ToolBackendReleaseSyncService:
         return "schema_changed" if schema_changed else "updated"
 
 
-async def sync_backend_releases_from_registry(
-    session: AsyncSession,
-    worker_build_id: Optional[str] = None,
-    tool_slug: Optional[str] = None,
-) -> dict:
-    service = ToolBackendReleaseSyncService(session, worker_build_id=worker_build_id)
-    return await service.sync_backend_releases(tool_slug=tool_slug)

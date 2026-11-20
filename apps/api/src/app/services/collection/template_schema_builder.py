@@ -11,7 +11,6 @@ from app.services.collection.template_contract import (
 from app.services.collection.template_layout_parser import (
     RawLayout,
     SchemaNode,
-    TokenOccurrence,
     _build_schema_roots,
 )
 
@@ -345,54 +344,3 @@ class TemplateSchemaBuilder:
         return Orientation.HORIZONTAL if orientation == "horizontal" else Orientation.VERTICAL
 
 
-    def _first_token(self, layout: RawLayout, key: str) -> Optional[TokenOccurrence]:
-        for token in layout.tokens:
-            if token.token == key:
-                return token
-        return None
-
-
-    def _token_for_placeholder(self, layout: RawLayout, placeholder: str) -> Optional[TokenOccurrence]:
-        for token in layout.tokens:
-            if token.placeholder == placeholder:
-                return token
-        clean = placeholder.strip("{}")
-        clean = clean.replace("[]", "")
-        return self._first_token(layout, clean)
-
-
-    def _segment_params(
-        self,
-        token: Optional[TokenOccurrence],
-        *,
-        context: str = "scalar",
-    ) -> Dict[str, Any]:
-        if not token or not token.segments:
-            return token.params if token else {}
-        if context == "table":
-            for segment in token.segments:
-                if segment.get("repeat"):
-                    return dict(segment.get("params") or {})
-            return dict(token.segments[0].get("params") or {})
-        if context == "column":
-            return dict(token.segments[-1].get("params") or {})
-        return dict(token.segments[-1].get("params") or {})
-
-    def _segment_param(
-        self,
-        token: Optional[TokenOccurrence],
-        key: str,
-        *,
-        context: str = "scalar",
-    ) -> Any:
-        return self._segment_params(token, context=context).get(key)
-
-
-    def _normalize_field_key(self, value: str, *, fallback: str) -> str:
-        normalized = value.strip().lower()
-        normalized = normalized.replace(".", "_")
-        normalized = "".join(ch if ch.isalnum() or ch == "_" else "_" for ch in normalized)
-        normalized = normalized.strip("_")
-        while "__" in normalized:
-            normalized = normalized.replace("__", "_")
-        return normalized or fallback

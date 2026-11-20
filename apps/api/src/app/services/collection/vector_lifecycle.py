@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, List, Optional
+from typing import Any, List
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -187,9 +187,6 @@ class CollectionVectorLifecycleService:
         collection.failed_rows = 0
         collection.total_chunks = 0
 
-    async def resolve_primary_vector_model(self, tenant_id: uuid.UUID) -> Optional[str]:
-        target_models = await self.resolve_target_vector_models(tenant_id)
-        return target_models[0] if target_models else None
 
     async def resolve_target_vector_models(self, tenant_id: uuid.UUID) -> list[str]:
         try:
@@ -208,9 +205,6 @@ class CollectionVectorLifecycleService:
             )
         return []
 
-    async def resolve_embedding_dimensions(self, model_alias: str) -> int:
-        from app.services.vector_index_service import VectorIndexService
-        return (await VectorIndexService(self.session).resolve("capabilities", model_alias)).dimensions
 
     async def provision_qdrant_collection(self, tenant_id: uuid.UUID, qdrant_collection_name: str) -> None:
         if not qdrant_collection_name:

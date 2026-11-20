@@ -7,7 +7,6 @@ from uuid import UUID
 from pydantic import BaseModel, Field, ConfigDict
 
 from app.models.system_llm_role import SystemLLMRoleType
-from app.agents.contracts import ExecutionModeType
 from app.schemas.runtime_limits import ActorLimitsResponse, OrchestratorLimitsUpdate
 
 
@@ -125,30 +124,6 @@ FactCompactorRoleUpdate = SystemLLMRoleUpdate
 
 
 # === Contract Schemas ===
-
-
-class ExecutionOutlinePhase(BaseModel):
-    """High-level phase for orchestration guidance."""
-    phase_id: str = Field(..., min_length=1)
-    title: str = Field(..., min_length=1)
-    objective: str = Field(..., min_length=1)
-    must_do: bool = True
-    preferred_agents: List[str] = Field(default_factory=list)
-    preferred_sources: List[str] = Field(default_factory=list)
-    completion_signals: List[str] = Field(default_factory=list)
-    allow_final_after: bool = False
-
-
-class ExecutionOutline(BaseModel):
-    """High-level orchestration outline returned by helper/planner-compatible layers."""
-    mode: ExecutionModeType = ExecutionModeType.SINGLE_AGENT
-    goal: str = Field(..., min_length=1)
-    suggested_start_agent: Optional[str] = None
-    phases: List[ExecutionOutlinePhase] = Field(default_factory=list)
-    finalization_rules: List[str] = Field(default_factory=list)
-    clarify_triggers: List[str] = Field(default_factory=list)
-    max_iterations: int = Field(default=6, ge=1, le=20)
-    max_agent_handoffs: int = Field(default=3, ge=1, le=10)
 
 
 # === Input Schemas ===

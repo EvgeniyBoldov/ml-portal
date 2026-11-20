@@ -45,19 +45,6 @@ class InstancePlacement(str, Enum):
     REMOTE = "remote"
 
 
-class InstanceDomain(str, Enum):
-    """Instance domain — subject specialization"""
-    LLM = "llm"
-    SQL = "sql"
-    MCP = "mcp"
-    COLLECTION_DOCUMENT = "collection.document"
-    COLLECTION_TABLE = "collection.table"
-    RAG = "rag"
-    JIRA = "jira"
-    NETBOX = "netbox"
-    DCBOX = "dcbox"
-
-
 class ToolInstance(Base):
     """
     Универсальный ресурс платформы (v3).

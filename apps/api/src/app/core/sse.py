@@ -1,8 +1,6 @@
 from __future__ import annotations
-import asyncio
 import json
-from typing import Any, AsyncGenerator, Optional, Callable
-from fastapi.responses import StreamingResponse
+from typing import Any, Optional
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -46,88 +44,6 @@ class SSEMessage:
         # SSE messages must end with double newline (\n\n)
         return "\n".join(lines) + "\n\n"
 
-class SSEStream:
-    """Server-Sent Events stream handler"""
-    
-    def __init__(self, heartbeat_interval: int = 30):
-        self.heartbeat_interval = heartbeat_interval
-        self._closed = False
-    
-    async def stream(self, generator: AsyncGenerator[SSEMessage, None]) -> StreamingResponse:
-        """Create streaming response from generator"""
-        
-        async def event_generator():
-            try:
-                async for message in generator:
-                    if self._closed:
-                        break
-                    yield message.to_sse_format()
-                
-                # Send final done event
-                if not self._closed:
-                    done_message = SSEMessage(data="done", event="done")
-                    yield done_message.to_sse_format()
-                    
-            except Exception as e:
-                logger.error(f"SSE stream error: {e}")
-                error_message = SSEMessage(
-                    data={"error": str(e)}, 
-                    event="error"
-                )
-                yield error_message.to_sse_format()
-            finally:
-                self._closed = True
-        
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            }
-        )
-    
-    def close(self):
-        """Close the stream"""
-        self._closed = True
-
-
-async def _data_to_sse_generator(data: dict, event: Optional[str], serialize_func: Callable) -> AsyncGenerator[str, None]:
-    """Convert data to SSE generator"""
-    try:
-        message_data = serialize_func(data)
-        message = SSEMessage(data=message_data, event=event)
-        yield message.to_sse_format()
-    except Exception as e:
-        logger.error(f"SSE generator error: {e}")
-        error_message = SSEMessage(
-            data={"error": str(e)}, 
-            event="error"
-        )
-        yield error_message.to_sse_format()
-
-
-async def _sse_generator(generator: AsyncGenerator[SSEMessage, None], heartbeat_interval: int):
-    """Internal SSE generator with heartbeat"""
-    last_heartbeat = asyncio.get_event_loop().time()
-    
-    try:
-        async for message in generator:
-            yield message.to_sse_format()
-            last_heartbeat = asyncio.get_event_loop().time()
-        
-        # Send final done event
-        done_message = SSEMessage(data="done", event="done")
-        yield done_message.to_sse_format()
-        
-    except Exception as e:
-        logger.error(f"SSE stream error: {e}")
-        error_message = SSEMessage(
-            data={"error": str(e)}, 
-            event="error"
-        )
-        yield error_message.to_sse_format()
 
 def format_sse(data: Any, event: Optional[str] = None, id: Optional[str] = None) -> str:
     """Format data as SSE message"""

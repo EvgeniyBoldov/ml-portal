@@ -6,7 +6,7 @@ import pytest
 
 from app.models.memory_scope import MemoryCandidateScope
 from app.runtime.memory.recall import _claim_scopes_apply
-from app.runtime.memory.search import _apply_project_precedence
+from app.runtime.memory.scope_precedence import apply_scope_precedence as _apply_project_precedence
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService, _scope_signature
 
 

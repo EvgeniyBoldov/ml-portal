@@ -130,12 +130,6 @@ class SandboxOverrideResolver:
         payload = json.dumps(_SANDBOX_BLUEPRINTS, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    @classmethod
-    def get_blueprint(cls, key: str) -> Optional[Dict[str, Any]]:
-        for blueprint in _SANDBOX_BLUEPRINTS:
-            if blueprint.get("key") == key:
-                return json.loads(json.dumps(blueprint, ensure_ascii=False))
-        return None
 
     def _parse_overrides(self) -> None:
         """Group overrides by entity_type for fast lookup."""
@@ -170,17 +164,6 @@ class SandboxOverrideResolver:
             if field_path is not None and ov.get("field_path") != field_path:
                 continue
             yield ov
-
-    @staticmethod
-    def _nested_get(data: Dict[str, Any], path: str) -> Any:
-        if "." not in path:
-            return data.get(path)
-        current: Any = data
-        for part in path.split("."):
-            if not isinstance(current, dict):
-                return None
-            current = current.get(part)
-        return current
 
 
     @property
@@ -218,46 +201,6 @@ class SandboxOverrideResolver:
                 continue
             result[ov.get("field_path", "")] = ov.get("value_json")
         return result
-
-    def get_override_entry(
-        self,
-        entity_type: str,
-        entity_id: Optional[str],
-        field_path: str,
-    ) -> Optional[Dict[str, Any]]:
-        """Return raw override entry for exact entity + field match."""
-        for ov in self._iter_entity_field_overrides(
-            entity_type=entity_type,
-            entity_id=entity_id,
-            field_path=field_path,
-        ):
-            return ov
-        return None
-
-    def resolve_field_state(
-        self,
-        *,
-        entity_type: str,
-        entity_id: Optional[str],
-        field_path: str,
-        base_value: Any,
-    ) -> Dict[str, Any]:
-        """
-        Resolve canonical field state:
-        - base_value (from DB-sourced entity view)
-        - override_value (from branch overlay)
-        - effective_value (base + overlay)
-        """
-        override = self.get_override_entry(entity_type, entity_id, field_path)
-        has_override = override is not None
-        override_value = override.get("value_json") if override else None
-        return {
-            "field_path": field_path,
-            "base_value": base_value,
-            "override_value": override_value,
-            "effective_value": override_value if has_override else base_value,
-            "is_overridden": has_override,
-        }
 
 
     # ── AgentVersion ─────────────────────────────────────────────────────

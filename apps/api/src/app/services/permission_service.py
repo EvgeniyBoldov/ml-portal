@@ -39,9 +39,6 @@ class EffectivePermissions:
     # default fallback behavior for unresolved collection permissions
     default_collection_allow: bool = False
 
-    def is_instance_allowed(self, instance_slug: str) -> bool:
-        """Check if instance is allowed. Default is denied."""
-        return self.instance_permissions.get(instance_slug, False)
 
     def is_agent_allowed(self, agent_slug: str) -> bool:
         """Check if agent is allowed. Default is denied."""
@@ -136,12 +133,6 @@ class PermissionService:
 
     Data source: RbacRule (flat rules with user > tenant > platform priority).
     No more PermissionSet — all access control goes through RbacRule.
-
-    Example:
-        service = PermissionService(session)
-        perms = await service.resolve_permissions(user_id, tenant_id)
-        if perms.is_instance_allowed("jira-prod"):
-            ...
     """
 
     def __init__(self, session: AsyncSession):

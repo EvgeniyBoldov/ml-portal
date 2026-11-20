@@ -464,6 +464,4 @@ class SandboxService:
 
     # ── Cleanup ──────────────────────────────────────────────────────────
 
-    async def cleanup_expired(self) -> int:
-        return await self.sessions.archive_expired()
 

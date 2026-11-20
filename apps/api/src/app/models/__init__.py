@@ -17,7 +17,7 @@ from .events import EventOutbox
 from .memory import MemoryFinalizeOutbox
 from .prompt import Prompt, PromptVersion, PromptStatus
 from .tool import Tool
-from .tool_instance import ToolInstance, InstanceKind, InstancePlacement, InstanceDomain
+from .tool_instance import ToolInstance, InstanceKind, InstancePlacement
 from .tool_release import ToolBackendRelease, ToolRelease, ToolReleaseStatus
 from .agent import Agent
 from .agent_version import AgentVersion, AgentVersionStatus

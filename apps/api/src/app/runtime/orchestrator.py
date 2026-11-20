@@ -81,20 +81,6 @@ def _task_memory_context(task: TaskRequest, planner_memory_context: list[dict[st
     return selected
 
 
-def _memory_recalls(memory_context: Any) -> list[dict[str, Any]]:
-    recalls = []
-    for item in memory_context or []:
-        if not isinstance(item, dict):
-            continue
-        if item.get("type") == "memory_recall":
-            recalls.append(item)
-        elif item.get("type") == "planner_memory_result":
-            recalled = (item.get("result") or {}).get("memory_context")
-            if isinstance(recalled, dict):
-                recalls.append(recalled)
-    return recalls
-
-
 def _same_user_question(candidate: str, goal: str) -> bool:
     """Compare immutable questions while ignoring formatting-only endings."""
     terminal_punctuation = " \t\r\n.!?…。！？"

@@ -193,13 +193,4 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
         latest_desc.reverse()
         return latest_desc
     
-    async def get_message_by_id(self, message_id: str) -> Optional[ChatMessages]:
-        """Get message by ID"""
-        result = await self.session.execute(
-            select(ChatMessages).where(ChatMessages.id == message_id)
-        )
-        message = result.scalar_one_or_none()
-        if not message:
-            return None
-        return message
     

@@ -850,8 +850,8 @@ class StructuredLLMCall:
 
             # The old template grouped lookup, fallback routing, and context
             # instructions under these consecutive subsections of Rules.
-            rules = TURN_PREFLIGHT_PROMPT_V3["rules"].split("\n\n# OUTPUT", 1)[0]
-            rules = rules.replace("# ROUTING\n", "## ROUTING\n", 1).replace("\n# CONTEXT\n", "\n## CONTEXT\n", 1)
+            rules = TURN_PREFLIGHT_PROMPT_V3["rules"]
+            rules = rules.replace("# ROUTING\n", "## ROUTING\n", 1).replace("\n# HANDOFF\n", "\n## HANDOFF\n", 1)
             prompt = re.sub(
                 r"(?ms)^## RESOLVE \(резолв терминов через память до маршрутизации\)\n.*?(?=^## OUTPUT\s*$|^# \S|\Z)",
                 lambda _: rules + "\n\n",

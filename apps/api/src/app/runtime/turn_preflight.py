@@ -52,9 +52,9 @@ class DirectAnswerBrief(BaseModel):
 
 class Clarification(InteractionQuestion):
     question: str = Field(..., min_length=1)
-    direct_answer_reason: Optional[str] = Field(
+    routing_reason: Optional[str] = Field(
         default=None, min_length=1,
-        description="Why the answer after this single choice can be synthesized solely from existing input, without search, verification, tools or actions. Otherwise route to planner.",
+        description="How the answer determines whether to route to planner or synthesis.",
     )
     context: dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
@@ -308,7 +308,7 @@ class TurnPreflight:
             routed._proposed_route = decision._proposed_route
             routed._memory_tool_results = tool_results
             return routed
-        if decision.route == "clarify" and not str(decision.clarification.direct_answer_reason or "").strip():
+        if decision.route == "clarify" and not str(decision.clarification.routing_reason or "").strip():
             return self._planner_handoff(user_request, decision, reason="Предварительное уточнение: " + decision.clarification.question,
                                          selection=selection)
         if decision.route in {"synthesis", "clarify"} and self._needs_collection_inventory(user_request):

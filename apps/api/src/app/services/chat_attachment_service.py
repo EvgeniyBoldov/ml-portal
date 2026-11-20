@@ -254,26 +254,6 @@ class ChatAttachmentService:
         return rows
 
 
-    async def list_owned_attachments_for_chat(
-        self,
-        *,
-        chat_id: str,
-        owner_id: str,
-        statuses: Optional[Iterable[str]] = None,
-    ) -> list[ChatAttachment]:
-        conditions = [
-            ChatAttachment.chat_id == uuid.UUID(chat_id),
-            ChatAttachment.owner_id == uuid.UUID(owner_id),
-        ]
-        normalized_statuses = [str(item).strip() for item in (statuses or []) if str(item).strip()]
-        if normalized_statuses:
-            conditions.append(ChatAttachment.status.in_(normalized_statuses))
-        return await self._fetch_rows(
-            select(ChatAttachment)
-            .where(and_(*conditions))
-            .order_by(ChatAttachment.created_at.asc())
-        )
-
     async def bind_to_message(
         self,
         *,

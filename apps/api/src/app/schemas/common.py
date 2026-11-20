@@ -41,14 +41,6 @@ class Step(str, Enum):
     INDEX = "index"
 
 
-class IngestRunStatus(str, Enum):
-    """Ingest run status"""
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-    CANCELED = "canceled"
-
-
 class ChunkProfile(str, Enum):
     """Chunking profiles"""
     BY_TOKENS = "by_tokens"

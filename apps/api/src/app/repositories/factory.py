@@ -10,7 +10,7 @@ import uuid
 
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
 from app.repositories.documents_repo import AsyncRAGDocumentsRepository
-from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
+from app.repositories.rag_ingest_repos import AsyncSourceRepository
 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
@@ -61,11 +61,6 @@ class AsyncRepositoryFactory:
         return self._repositories['source']
     
     
-    def get_emb_status_repository(self) -> AsyncEmbStatusRepository:
-        """Get async embedding status repository with tenant isolation"""
-        if 'emb_status' not in self._repositories:
-            self._repositories['emb_status'] = AsyncEmbStatusRepository(self.session, self.tenant_id, self.user_id)
-        return self._repositories['emb_status']
     
     
     async def create_chat(self, owner_id: uuid.UUID, name: Optional[str] = None, tags: Optional[list] = None):

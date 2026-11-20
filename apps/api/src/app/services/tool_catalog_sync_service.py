@@ -109,6 +109,3 @@ class ToolCatalogSyncService:
         return []
 
 
-async def sync_tools_from_registry(session: AsyncSession) -> dict:
-    service = ToolCatalogSyncService(session)
-    return await service.sync_tools()

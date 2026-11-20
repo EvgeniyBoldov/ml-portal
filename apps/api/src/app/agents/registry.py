@@ -120,21 +120,6 @@ class ToolRegistry:
         cls._ensure_initialized()
         return cls._handlers.get(slug)
     
-    @classmethod
-    def get_for_agent(cls, tool_slugs: List[str]) -> List[ToolHandler]:
-        """
-        Получить список handlers для агента.
-        Пропускает неизвестные slugs с warning.
-        """
-        cls._ensure_initialized()
-        handlers = []
-        for slug in tool_slugs:
-            handler = cls._handlers.get(slug)
-            if handler:
-                handlers.append(handler)
-            else:
-                logger.warning(f"Tool '{slug}' not found in registry")
-        return handlers
     
     @classmethod
     def list_all(cls) -> List[ToolHandler]:

@@ -4,7 +4,6 @@ from uuid import uuid4
 
 import pytest
 
-import app.runtime.memory.search as search
 from app.api.v1.routers.admin.semantic_memory import _candidate_approval_blockers
 from app.runtime.memory.shadow_document_study import ShadowDocumentStudyService, ShadowStudyItem
 from app.runtime.memory.shadow_memory_publication import ShadowMemoryPublicationService
@@ -81,22 +80,6 @@ async def test_published_term_reuse_and_pending_term_dependency(status, expected
     assert proposal.glossary_term_id == (glossary_id if status == "resolved" else None)
     assert proposal.term_candidate_id == (None if status == "resolved" else term_id)
     assert proposal.source_term_candidate_id == term_id
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("params,error", [
-    ({"team_keys": ["all"]}, "invalid_query_scope"),
-    ({"project_keys": ["b"], "scope_keys": ["project.a"]}, "conflicting_project_scope"),
-    ({"project_keys": ["a"], "scope_keys": ["project.all"]}, "conflicting_project_scope"),
-])
-async def test_invalid_scope_stops_before_recall(monkeypatch, params, error):
-    monkeypatch.setattr(search, "GlossaryService", lambda _: NS(list_confirmed_terms=AsyncMock(return_value=[])))
-    recall = Mock()
-    monkeypatch.setattr(search, "MemoryRecallService", recall)
-    result = await search.MemorySearchService(NS()).search(query="rules", tenant_id=None, **params)
-    assert result["success"] is False
-    assert result["error_code"] == error
-    assert not recall.called
 
 
 def test_attempt_message_and_cursor_reject_stale_and_duplicate_delivery():

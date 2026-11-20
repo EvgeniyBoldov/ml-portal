@@ -624,10 +624,6 @@ def _is_collection_like_raw(raw_slug: str) -> bool:
     return raw_slug.startswith("collection.") or raw_slug.startswith("collection_")
 
 
-def build_runtime_operation_slug(instance_slug: str, canonical_name: str) -> str:
-    return f"instance.{instance_slug}.{canonical_name}"
-
-
 def build_collection_workflow_steps(
     *,
     collection_type: str,

@@ -1,6 +1,6 @@
 """Pydantic schemas for Collections API."""
 import re
-from typing import Any, Optional, List, Literal
+from typing import Optional, List, Literal
 import uuid
 from pydantic import BaseModel, Field, ConfigDict, model_validator
 
@@ -267,10 +267,6 @@ class DiscoveredApiEntity(BaseModel):
 class DiscoverApiEntitiesResponse(BaseModel):
     items: List[DiscoveredApiEntity] = Field(default_factory=list)
     total: int = 0
-
-
-def _normalize_text(value: Any) -> str:
-    return str(value or "").strip()
 
 
 class CollectionVersionCreate(BaseModel):

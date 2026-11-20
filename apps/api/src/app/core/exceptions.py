@@ -14,12 +14,10 @@ core/exceptions.py — единый каталог domain exceptions.
     ├── ConflictError            — 409
     ├── NotEditableError         — 409  (entity in non-editable state)
     ├── ProtectedError           — 409  (entity is protected / pinned)
-    ├── InUseError               — 409  (entity is referenced by another)
     ├── UnavailableError         — 503  (dependency unavailable)
     ├── ExternalServiceError     — 502  (upstream call failed)
     │   └── CircuitBreakerOpen   — 503
-    ├── UploadValidationError    — 422  (file intake policy)
-    └── RuntimeError             — 500  (agent/planner runtime failure)
+    └── UploadValidationError    — 422  (file intake policy)
 
 Usage in services:
     from app.core.exceptions import NotFoundError
@@ -135,13 +133,6 @@ class ProtectedError(AppError):
     code = "PROTECTED"
 
 
-class InUseError(AppError):
-    """Entity is referenced by another entity and cannot be removed — HTTP 409."""
-
-    http_status = 409
-    code = "IN_USE"
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # 422 — UNPROCESSABLE
 # ──────────────────────────────────────────────────────────────────────────────
@@ -182,13 +173,6 @@ class ChatRuntimeStartError(UnavailableError):
     """A chat continuation could not start and its turn was terminalized."""
 
     code = "CHAT_RUNTIME_START_FAILED"
-
-
-class AgentRuntimeError(AppError):
-    """Agent / planner runtime failure — HTTP 500."""
-
-    http_status = 500
-    code = "RUNTIME_ERROR"
 
 
 class StatusTransitionError(ConflictError):
@@ -376,9 +360,6 @@ class CSVValidationError(AppError):
 
 
 # — Adapters ──────────────────────────────────────────────────────────────────
-
-class ConnectorError(ExternalServiceError):
-    """Generic connector / adapter error."""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

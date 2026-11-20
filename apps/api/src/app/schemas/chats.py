@@ -90,35 +90,3 @@ class ChatUploadPolicyResponse(BaseModel):
     allowed_content_types_by_extension: Dict[str, List[str]] = Field(default_factory=dict)
 
 
-class ChatResponse(BaseModel):
-    """Response schema for chat operations"""
-    model_config = {"from_attributes": True}
-    
-    id: uuid.UUID = Field(..., description="Chat ID")
-    tenant_id: uuid.UUID = Field(..., description="Tenant ID")
-    name: Optional[str] = Field(None, description="Chat name")
-    owner_id: uuid.UUID = Field(..., description="Owner ID")
-    tags: Optional[List[str]] = Field(None, description="Chat tags")
-    version: int = Field(..., description="Version for optimistic locking")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    last_message_at: Optional[datetime] = Field(None, description="Last message timestamp")
-
-
-class ChatMessageResponse(BaseModel):
-    """Response schema for chat message operations"""
-    model_config = {"from_attributes": True}
-    
-    id: uuid.UUID = Field(..., description="Message ID")
-    tenant_id: uuid.UUID = Field(..., description="Tenant ID")
-    chat_id: uuid.UUID = Field(..., description="Chat ID")
-    role: str = Field(..., description="Message role")
-    content: Dict[str, Any] = Field(..., description="Message content as JSON dict")
-    model: Optional[str] = Field(None, description="Model used for generation")
-    tokens_in: Optional[int] = Field(None, description="Input tokens")
-    tokens_out: Optional[int] = Field(None, description="Output tokens")
-    version: int = Field(..., description="Version for optimistic locking")
-    created_at: datetime = Field(..., description="Creation timestamp")
-    updated_at: datetime = Field(..., description="Last update timestamp")
-    meta: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
-

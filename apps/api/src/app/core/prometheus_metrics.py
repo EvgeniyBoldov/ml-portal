@@ -20,7 +20,6 @@ except ImportError:
         def labels(self, **kwargs): return self
         def observe(self, v): pass
         def inc(self, v=1): pass
-        def dec(self, v=1): pass
         def set(self, v): pass
 
     def Counter(name, doc, labelnames=(), registry=None): return _NoOpMetric()

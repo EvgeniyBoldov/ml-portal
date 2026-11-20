@@ -156,10 +156,6 @@ def require_admin(user: UserCtx = Depends(get_current_user)) -> UserCtx:
         )
     return user
 
-def get_tenant_id(request: Request) -> str | None:
-    """Get tenant_id from request state (set by middleware)"""
-    return getattr(request.state, "tenant_id", None)
-
 
 # ── Chat context resolution ───────────────────────────────────────────────────────────
 

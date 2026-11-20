@@ -210,28 +210,3 @@ def _resolve_sandbox_branch_id(sandbox_overrides: Optional[Dict[str, Any]]) -> O
         return None
 
 
-def _apply_branch_summary_overrides(
-    summary: SummaryDTO,
-    *,
-    sandbox_overrides: Optional[Dict[str, Any]],
-) -> SummaryDTO:
-    overrides = (sandbox_overrides or {}).get("branch_summary_overrides")
-    if not isinstance(overrides, dict):
-        return summary
-    if isinstance(overrides.get("goals"), list):
-        summary.goals = [str(item) for item in overrides["goals"]]
-    if isinstance(overrides.get("done"), list):
-        summary.done = [str(item) for item in overrides["done"]]
-    if isinstance(overrides.get("entities"), dict):
-        summary.entities = {
-            str(key): str(value)
-            for key, value in overrides["entities"].items()
-            if str(key).strip() and str(value).strip()
-        }
-    if isinstance(overrides.get("open_questions"), list):
-        summary.open_questions = [str(item) for item in overrides["open_questions"]]
-    if isinstance(overrides.get("raw_tail"), str):
-        summary.raw_tail = overrides["raw_tail"]
-    if isinstance(overrides.get("last_updated_turn"), int):
-        summary.last_updated_turn = overrides["last_updated_turn"]
-    return summary

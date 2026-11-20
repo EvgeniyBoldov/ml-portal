@@ -506,11 +506,6 @@ class ToolInstanceService:
             return template_instance
         return table_instance
 
-    async def delete_local_instance(self, instance_id: UUID) -> None:
-        """Delete a LOCAL instance (internal use only)."""
-        instance = await self.get_instance(instance_id)
-        await self.repo.delete(instance)
-        logger.info(f"Deleted local instance: {instance.slug}")
 
     # ─── Health check ─────────────────────────────────────────────────
 

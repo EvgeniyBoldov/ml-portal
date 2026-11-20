@@ -8,9 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
 from app.models.memory import MemoryItem, MemoryClaim
-from app.models.document_memory_staging import MemoryConflictCase, MemoryConflictMember, MemoryScopeProposal
-from app.runtime.memory.search import MemorySearchService
-from app.runtime.memory.scope_precedence import apply_scope_precedence
+from app.models.document_memory_staging import MemoryScopeProposal
 from app.models.memory_scope import MemoryScope, MemoryClaimScope
 from app.runtime.memory.read_policy import applicable_claim
 from app.runtime.memory.effective_scope import memory_visible_for_scope
@@ -61,25 +59,6 @@ async def test_sql_and_prompt_filters_agree_for_all_null_and_concrete_branches()
                     .where(applicable_claim(project_ids=[], scope_keys=query, tenant_id=None)))).all())
                 expected = {claim.id for claim, bound in zip(claims, atoms) if memory_visible_for_scope({"scope_keys": bound}, query)}
                 assert actual == expected, query
-            universal, specific = claims[5], claims[6]
-            conflict = MemoryConflictCase(kind="scope_override", status="resolved", rationale="synthetic contradiction",
-                evidence={"scope_policy": "two_branch_v1"})
-            session.add(conflict)
-            await session.flush()
-            session.add_all([MemoryConflictMember(conflict_id=conflict.id, candidate_id=claim.approved_candidate_id)
-                             for claim in (universal, specific)])
-            await session.flush()
-            service = MemorySearchService(session)
-            related = await service._conflict_related_item_ids([universal.memory_item_id], [universal.memory_item_id, specific.memory_item_id])
-            assert set(related) == {universal.memory_item_id, specific.memory_item_id}
-            items = [{"id": str(claim.memory_item_id), "approved_candidate_id": str(claim.approved_candidate_id),
-                      "selected_claim_id": str(claim.id), "scope_keys": bound}
-                     for claim, bound in [(universal, atoms[5]), (specific, atoms[6])]]
-            await service._attach_project_overrides(items)
-            assert apply_scope_precedence(items, [])[0] == [items[1]]
-            # A counterpart outside the eligibility set must not be pulled in.
-            related = await service._conflict_related_item_ids([universal.memory_item_id], [universal.memory_item_id])
-            assert related == [universal.memory_item_id]
             await session.rollback()
     finally:
         if scoped:

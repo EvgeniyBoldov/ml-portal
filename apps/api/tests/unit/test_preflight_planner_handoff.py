@@ -388,15 +388,15 @@ async def test_unjustified_preflight_clarification_is_deferred_to_planner() -> N
 
 
 @pytest.mark.asyncio
-async def test_direct_answer_clarification_can_remain_in_preflight() -> None:
+async def test_routing_clarification_can_remain_in_preflight() -> None:
     preflight = TurnPreflight(session=object(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(
         value=TurnPreflightDecision.model_validate({
             "route": "clarify", "clarification": {
-                "question": "Какой из двух текстов сократить?",
-                "direct_answer_reason": "Оба текста уже во входе; после выбора нужно только сократить текст без поиска и действий.",
+                "question": "Нужен порядок закрытия по регламенту или закрыть тикет?",
+                "routing_reason": "Описание порядка можно дать из памяти, а закрытие тикета требует Planner.",
             },
         }),
     ))
-    result = await preflight.decide(user_request="Сократи этот текст", mechanical_lookup={})
+    result = await preflight.decide(user_request="Помоги с закрытием тикета", mechanical_lookup={})
     assert result.route == "clarify"

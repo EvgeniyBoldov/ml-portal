@@ -267,16 +267,6 @@ class AgentService:
             raise AgentVersionNotFoundError(f"Agent version '{version_id}' not found")
         return version
 
-    async def get_version_by_number(
-        self, agent_slug: str, version_number: int
-    ) -> AgentVersion:
-        agent = await self.get_agent_by_slug(agent_slug)
-        version = await self.version_repo.get_by_agent_and_version(agent.id, version_number)
-        if not version:
-            raise AgentVersionNotFoundError(
-                f"Version {version_number} not found for agent '{agent_slug}'"
-            )
-        return version
 
     async def get_version_by_number_and_agent_id(
         self, agent_id: UUID, version_number: int

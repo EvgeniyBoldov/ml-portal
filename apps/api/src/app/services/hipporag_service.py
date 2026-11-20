@@ -141,9 +141,6 @@ class HippoRAGService:
             return response.json()
 
 
-    async def index_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
-        return await self._call("corpus/index", {"documents": documents})
-
     async def reindex_embeddings(self) -> dict[str, Any]:
         from app.models.rag import RAGDocument
         from app.models.rag_ingest import Source

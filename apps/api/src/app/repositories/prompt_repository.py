@@ -1,10 +1,10 @@
 from typing import List, Optional, Tuple, Dict, Any
 from uuid import UUID
 
-from sqlalchemy import select, desc, func, update
+from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.prompt import Prompt, PromptVersion, PromptStatus
+from app.models.prompt import Prompt
 
 
 class PromptRepository:
@@ -71,92 +71,4 @@ class PromptRepository:
         await self.session.flush()
         return True
 
-
-class PromptVersionRepository:
-    """Repository for PromptVersion operations"""
-    
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def create(self, version: PromptVersion) -> PromptVersion:
-        """Create new prompt version"""
-        self.session.add(version)
-        await self.session.flush()
-        return version
-
-    async def get_by_id(self, version_id: UUID) -> Optional[PromptVersion]:
-        """Get version by ID"""
-        stmt = select(PromptVersion).where(PromptVersion.id == version_id)
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def get_by_prompt_and_version(
-        self, 
-        prompt_id: UUID, 
-        version: int
-    ) -> Optional[PromptVersion]:
-        """Get specific version of a prompt"""
-        stmt = select(PromptVersion).where(
-            PromptVersion.prompt_id == prompt_id,
-            PromptVersion.version == version
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-    async def get_active_by_prompt(self, prompt_id: UUID) -> Optional[PromptVersion]:
-        """Get active version of a prompt"""
-        stmt = select(PromptVersion).where(
-            PromptVersion.prompt_id == prompt_id,
-            PromptVersion.status == PromptStatus.ACTIVE.value
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
-
-    async def get_all_by_prompt(self, prompt_id: UUID) -> List[PromptVersion]:
-        """Get all versions of a prompt ordered by version desc"""
-        stmt = (
-            select(PromptVersion)
-            .where(PromptVersion.prompt_id == prompt_id)
-            .order_by(desc(PromptVersion.version))
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
-
-    async def get_next_version(self, prompt_id: UUID) -> int:
-        """Get next version number for a prompt"""
-        stmt = select(func.max(PromptVersion.version)).where(
-            PromptVersion.prompt_id == prompt_id
-        )
-        max_version = await self.session.scalar(stmt)
-        return (max_version or 0) + 1
-
-    async def update_status(self, version_id: UUID, status: str) -> None:
-        """Update version status"""
-        stmt = (
-            update(PromptVersion)
-            .where(PromptVersion.id == version_id)
-            .values(status=status)
-        )
-        await self.session.execute(stmt)
-
-    async def archive_active_version(self, prompt_id: UUID) -> None:
-        """Archive currently active version of a prompt"""
-        stmt = (
-            update(PromptVersion)
-            .where(
-                PromptVersion.prompt_id == prompt_id,
-                PromptVersion.status == PromptStatus.ACTIVE.value
-            )
-            .values(status=PromptStatus.ARCHIVED.value)
-        )
-        await self.session.execute(stmt)
-
-    async def update(self, version: PromptVersion, data: Dict[str, Any]) -> PromptVersion:
-        """Update version fields"""
-        for key, value in data.items():
-            if hasattr(version, key) and value is not None:
-                setattr(version, key, value)
-        await self.session.flush()
-        return version
 

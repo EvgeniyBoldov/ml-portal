@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import inspect
 import re
 import uuid
 from dataclasses import dataclass
@@ -13,7 +12,6 @@ from app.core.cache import get_cache
 from app.core.config import get_settings
 from app.models.chat_attachment import ChatAttachment
 from app.models.collection import Collection
-from app.models.rag import RAGDocument
 from app.models.rag_ingest import Source
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.document_artifacts import get_document_artifact_key
@@ -53,9 +51,6 @@ class FileDeliveryService:
         self.repo_factory = repo_factory
         self.settings = get_settings()
 
-    @staticmethod
-    def make_chat_attachment_file_id(attachment_id: str) -> str:
-        return f"{CHAT_ATTACHMENT_PREFIX}_{attachment_id}"
 
     @staticmethod
     def make_rag_document_file_id(doc_id: str, kind: str) -> str:
@@ -65,18 +60,6 @@ class FileDeliveryService:
     def make_collection_export_file_id(export_id: str) -> str:
         return f"{COLLECTION_EXPORT_PREFIX}_{export_id}"
 
-
-    @classmethod
-    def parse_storage_uri(cls, storage_uri: str) -> tuple[str, str]:
-        normalized = str(storage_uri or "").strip()
-        match = cls.STORAGE_URI_RE.match(normalized)
-        if not match:
-            raise FileDeliveryNotFoundError(f"Unsupported storage uri: {storage_uri}")
-        bucket = str(match.group(1) or "").strip()
-        key = str(match.group(2) or "").strip().lstrip("/")
-        if not bucket or not key:
-            raise FileDeliveryNotFoundError(f"Unsupported storage uri: {storage_uri}")
-        return bucket, key
 
     async def resolve(self, file_id: str, *, owner_id: str) -> ResolvedDownload:
         # Unified chat artifact references are UUIDs and resolve through the
@@ -157,38 +140,6 @@ class FileDeliveryService:
             size_bytes=row.size_bytes,
         )
 
-    async def _resolve_chat_attachment_by_storage(
-        self,
-        *,
-        bucket: str,
-        key: str,
-        owner_id: str,
-    ) -> Optional[ResolvedDownload]:
-        try:
-            owner_uuid = uuid.UUID(owner_id)
-        except ValueError:
-            raise FileDeliveryNotFoundError("Invalid owner id")
-
-        result = await self.session.execute(
-            select(ChatAttachment).where(
-                ChatAttachment.owner_id == owner_uuid,
-                ChatAttachment.storage_bucket == bucket,
-                ChatAttachment.storage_key == key,
-            )
-        )
-        row = result.scalar_one_or_none()
-        if inspect.isawaitable(row):
-            row = await row
-        if not row:
-            return None
-        return ResolvedDownload(
-            file_id=self.make_chat_attachment_file_id(str(row.id)),
-            bucket=row.storage_bucket,
-            key=row.storage_key,
-            file_name=row.file_name,
-            content_type=row.content_type,
-            size_bytes=row.size_bytes,
-        )
 
     async def _resolve_rag_document(self, *, file_id: str, doc_id: str, kind: str) -> ResolvedDownload:
         if kind not in RAG_KIND_SET:
@@ -235,48 +186,6 @@ class FileDeliveryService:
             size_bytes=document.size_bytes,
         )
 
-    async def _resolve_rag_document_by_storage(
-        self,
-        *,
-        bucket: str,
-        key: str,
-    ) -> Optional[ResolvedDownload]:
-        if bucket != self.settings.S3_BUCKET_RAG:
-            return None
-
-        result = await self.session.execute(
-            select(RAGDocument).where(
-                RAGDocument.tenant_id == self.repo_factory.tenant_id,
-                or_(
-                    RAGDocument.s3_key_raw == key,
-                    RAGDocument.s3_key_processed == key,
-                ),
-            )
-        )
-        document = result.scalar_one_or_none()
-        if inspect.isawaitable(document):
-            document = await document
-        if not document:
-            return None
-
-        if document.s3_key_raw == key:
-            kind = "original"
-            file_name = document.filename
-            content_type = document.content_type
-        else:
-            kind = "canonical"
-            base = document.filename.rsplit(".", 1)[0] if "." in document.filename else document.filename
-            file_name = f"{base}.canonical.jsonl"
-            content_type = "application/x-ndjson"
-
-        return ResolvedDownload(
-            file_id=self.make_rag_document_file_id(str(document.id), kind),
-            bucket=bucket,
-            key=key,
-            file_name=file_name,
-            content_type=content_type,
-            size_bytes=document.size_bytes,
-        )
 
     async def _resolve_collection_export(self, *, file_id: str, export_id: str, owner_id: str) -> ResolvedDownload:
         cache = await get_cache()
@@ -304,43 +213,6 @@ class FileDeliveryService:
             size_bytes=int(meta.get("size_bytes") or 0),
         )
 
-    async def _resolve_collection_export_by_storage(
-        self,
-        *,
-        bucket: str,
-        key: str,
-        owner_id: str,
-    ) -> Optional[ResolvedDownload]:
-        match = self.EXPORT_KEY_RE.match(str(key or "").strip())
-        if not match:
-            return None
-
-        tenant_id = str(match.group(1) or "").strip()
-        export_id = str(match.group(3) or "").strip()
-        if tenant_id != str(self.repo_factory.tenant_id):
-            return None
-
-        cache = await get_cache()
-        meta = await cache.get(f"collection_export_meta:{export_id}")
-        if not meta:
-            return None
-        if str(meta.get("status") or "") != "ready":
-            return None
-        if str(meta.get("tenant_id") or "") != str(self.repo_factory.tenant_id):
-            return None
-        if str(meta.get("owner_id") or "") != str(owner_id):
-            return None
-        if str(meta.get("bucket") or "") != bucket or str(meta.get("key") or "") != key:
-            return None
-
-        return ResolvedDownload(
-            file_id=self.make_collection_export_file_id(export_id),
-            bucket=bucket,
-            key=key,
-            file_name=str(meta.get("file_name") or f"collection_export_{export_id}.csv"),
-            content_type=str(meta.get("content_type") or "text/csv"),
-            size_bytes=int(meta.get("size_bytes") or 0),
-        )
 
     async def _resolve_template_upload(self, *, file_id: str) -> Optional[ResolvedDownload]:
         collections_result = await self.session.execute(
@@ -385,47 +257,3 @@ class FileDeliveryService:
             )
         return None
 
-    async def _resolve_template_upload_by_storage(
-        self,
-        *,
-        bucket: str,
-        key: str,
-    ) -> Optional[ResolvedDownload]:
-        collections_result = await self.session.execute(
-            select(Collection).where(
-                Collection.tenant_id == self.repo_factory.tenant_id,
-                Collection.collection_type == "template",
-                Collection.is_active == True,
-            )
-        )
-        collections = collections_result.scalars().all()
-        for collection in collections:
-            table_name = str(collection.table_name or "").strip()
-            if not table_name:
-                continue
-            result = await self.session.execute(
-                text(
-                    f"SELECT file FROM {table_name} "
-                    f"WHERE file->>'bucket' = :bucket AND file->>'s3_key' = :key "
-                    f"LIMIT 1"
-                ),
-                {"bucket": bucket, "key": key},
-            )
-            row = result.mappings().first()
-            if not row:
-                continue
-            file_meta = row.get("file") or {}
-            if not isinstance(file_meta, dict):
-                continue
-            file_id = str(file_meta.get("file_id") or "").strip()
-            filename = str(file_meta.get("filename") or f"template_{file_id or 'file'}").strip()
-            content_type = str(file_meta.get("content_type") or "application/octet-stream").strip()
-            return ResolvedDownload(
-                file_id=file_id,
-                bucket=bucket,
-                key=key,
-                file_name=filename,
-                content_type=content_type or "application/octet-stream",
-                size_bytes=int(file_meta.get("size") or 0) if str(file_meta.get("size") or "").isdigit() else None,
-            )
-        return None

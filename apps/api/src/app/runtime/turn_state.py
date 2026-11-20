@@ -126,11 +126,6 @@ class RuntimeTurnState(BaseModel):
             continuation=dict(continuation or {}),
         )
 
-    @staticmethod
-    def _normalize_fact(text: str) -> str:
-        """Normalize fact text for deduplication (lowercase + collapse whitespace)."""
-        return " ".join(text.lower().split())
-
 
     def set_lifecycle_status(self, status: str) -> None:
         allowed = {

@@ -8,9 +8,6 @@ from app.runtime.memory.index_dispatch import dispatch_memory_index
 from app.runtime.memory.service import MemorySnapshot
 from app.runtime.memory.dto import FactDTO
 from app.models.memory import FactScope, FactSource
-from app.runtime.memory.search import _memory_context
-from app.runtime.agent_executor import _render_memory_recall
-from app.runtime.memory.effective_scope import project_memory_context
 
 
 @pytest.mark.asyncio
@@ -31,18 +28,6 @@ def test_large_user_profile_keeps_relevant_tenant_fact_in_planner_profile():
     selected = MemorySnapshot(user_facts=users, tenant_facts=(tenant,)).planner_context(query='jira project', limit=4)
     assert any(item['scope'] == 'tenant' and item['value'] == 'OPS' for item in selected)
     assert len(selected) == 4
-
-
-def test_owned_fact_conflict_survives_task_handoff_and_does_not_require_document_rag():
-    facts = [{'scope': 'user', 'subject': 'jira.default_project', 'value': 'A'},
-             {'scope': 'tenant', 'subject': 'jira.default_project', 'value': 'B'}]
-    context = _memory_context([], [], facts, [], ['fact_conflict:jira.default_project'])
-    assert context['clarification_required'] and not context['rag_required']
-    projected = project_memory_context(context, [])
-    assert projected['clarification_required'] and not projected['rag_required']
-    rendered = _render_memory_recall(projected)
-    assert any('Confirmed user fact' in line and ': A' in line for line in rendered)
-    assert any('Confirmed tenant fact' in line and ': B' in line for line in rendered)
 
 
 @pytest.mark.asyncio

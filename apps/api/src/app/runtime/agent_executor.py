@@ -38,7 +38,6 @@ from app.core.logging import get_logger
 from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
     TaskExecutionReceipt,
-    DiscoveredNeed,
     TaskExecutionError,
     TaskRequest,
     parse_task_completion_declaration,
@@ -1378,29 +1377,6 @@ class AgentExecutor:
         )
         return match.group("payload").strip() if match else text
 
-
-    @staticmethod
-    def _extract_needs_from_dict(parsed: Dict[str, Any]) -> List[DiscoveredNeed]:
-        needs_data = parsed.get("needs")
-        if not isinstance(needs_data, list):
-            return []
-        result: List[DiscoveredNeed] = []
-        for item in needs_data:
-            if not isinstance(item, dict):
-                continue
-            key = str(item.get("key") or "").strip()
-            if not key:
-                continue
-            result.append(
-                DiscoveredNeed(
-                    ref=str(item.get("ref") or key),
-                    kind=str(item.get("kind") or "data"),
-                    key=key,
-                    description=str(item.get("description") or "").strip() or key,
-                    context=dict(item.get("context") or {}),
-                )
-            )
-        return result
 
     @staticmethod
     def _build_context_snapshot(

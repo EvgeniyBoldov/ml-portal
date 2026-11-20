@@ -14,18 +14,6 @@ class RunTerminalStatus(str, Enum):
     STOPPED = "stopped"
 
 
-class ContinuationTerminalStatus(str, Enum):
-    COMPLETED = "completed"
-    ERROR = "error"
-    PAUSED = "paused"
-
-
-class ContinuationApiStatus(str, Enum):
-    RESUMED_COMPLETED = "resumed_completed"
-    RESUMED_WITH_ERROR = "resumed_with_error"
-    RESUMED_PAUSED_AGAIN = "resumed_paused_again"
-
-
 def normalize_run_terminal_status(reason: Optional[str]) -> RunTerminalStatus:
     value = str(reason or "").strip()
     if value == RunTerminalStatus.WAITING_INPUT.value:
