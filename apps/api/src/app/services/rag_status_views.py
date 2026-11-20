@@ -3,10 +3,9 @@ Presentation / policy helpers for RAG status manager.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict
 from uuid import UUID
 
-from app.models.rag import RAGDocument
 from app.services.rag_status_policy import (
     StageStatus,
     STOPPABLE_STAGE_STATUSES,

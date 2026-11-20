@@ -29,12 +29,6 @@ class ToolService:
             raise ToolNotFoundError(f"Tool '{tool_id}' not found")
         return tool
 
-    async def get_tool_by_slug(self, slug: str) -> Tool:
-        """Get tool by slug (for runtime/internal use only)."""
-        tool = await self.repo.get_by_slug(slug)
-        if not tool:
-            raise ToolNotFoundError(f"Tool '{slug}' not found")
-        return tool
 
     async def create_tool(self, data: ToolCreate) -> Tool:
         existing = await self.repo.get_by_slug(data.slug)
@@ -53,6 +47,3 @@ class ToolService:
 
         return await self.repo.update(tool)
 
-    async def delete_tool(self, tool_id: UUID) -> None:
-        tool = await self.get_tool(tool_id)
-        await self.repo.delete(tool)

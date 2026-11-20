@@ -93,9 +93,6 @@ class IngestStageContext:
 
     # ── helpers ──────────────────────────────────────────
 
-    @property
-    def source_id_str(self) -> str:
-        return str(self.source_id)
 
     @property
     def tenant_id_str(self) -> str:

@@ -1,2 +1,1 @@
-export { TableHeader, type TableHeaderProps } from './TableHeader';
-export { default } from './TableHeader';
+export { TableHeader } from './TableHeader';

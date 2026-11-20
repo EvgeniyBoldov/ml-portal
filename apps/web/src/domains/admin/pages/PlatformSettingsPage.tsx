@@ -447,4 +447,3 @@ export function PlatformSettingsPage() {
   );
 }
 
-export default PlatformSettingsPage;

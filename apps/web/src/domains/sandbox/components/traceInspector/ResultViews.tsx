@@ -104,8 +104,6 @@ export function MemoryExtractionResultView({ result }: { result: TraceExecutorRe
   </InspectorFieldGroup>;
 }
 
-export const AgentResultViewer = ExecutorResultView;
-export const SynthesizerResultViewer = ExecutorResultView;
 
 export function StageResultView({ stage }: { stage: TraceStage }) {
   const results = stage.executorRuns.map((executor) => executor.result);

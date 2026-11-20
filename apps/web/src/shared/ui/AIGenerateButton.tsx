@@ -1,7 +1,7 @@
 /**
  * AIGenerateButton - Button for AI-powered content generation
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/shared/ui';
 import { useAIGenerate } from '@/shared/hooks/useAIGenerate';
 import type { VersionGenerateRequest } from '@/shared/api/aiGenerate';

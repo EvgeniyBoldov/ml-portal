@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { ExamplesView } from './ExamplesView';
-import { SchemaTreeRenderer, PlainTextContractLegend, ResponseContractSchemaSummary } from './SchemaTreeRenderer';
+import { PlainTextContractLegend, ResponseContractSchemaSummary } from './SchemaTreeRenderer';
 import type { ResponseContract } from '@/shared/api/admin';
 import styles from './ContractAwareEditor.module.css';
 
@@ -10,11 +10,6 @@ function asRecord(value: unknown): Record<string, unknown> {
 
 function asStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
-}
-
-function hasSchemaShape(value: Record<string, unknown> | null): boolean {
-  if (!value) return false;
-  return Boolean(value.properties) || Boolean(value.items) || Boolean(value.oneOf);
 }
 
 function extractInputFields(schema: Record<string, unknown> | null): Array<{ name: string; type: string; description: string; required: boolean }> {

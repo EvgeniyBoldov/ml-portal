@@ -63,20 +63,6 @@ class StructuredCallError(RuntimeError):
     def error_type(self) -> Optional[str]:
         return type(self.original_exception).__name__ if self.original_exception is not None else None
 
-    def debug_payload(self) -> Optional[Dict[str, Any]]:
-        if isinstance(self.original_exception, LLMProviderError):
-            from app.runtime.error_payloads import build_debug_payload
-            return build_debug_payload(exc=self.original_exception)
-        if self.original_exception is None and not self.traceback_text:
-            return None
-        payload: Dict[str, Any] = {}
-        if self.original_exception is not None:
-            payload["exception_type"] = type(self.original_exception).__name__
-            payload["exception_message"] = str(self.original_exception)
-        if self.traceback_text:
-            payload["traceback"] = self.traceback_text
-        return payload or None
-
 
 @dataclass
 class StructuredCallResult(Generic[T]):

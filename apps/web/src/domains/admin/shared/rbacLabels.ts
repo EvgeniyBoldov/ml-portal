@@ -28,11 +28,6 @@ export const RBAC_RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
   instance: 'Данные',
 };
 
-export const RBAC_RESOURCE_TYPE_DISPLAY_LABELS: Record<ResourceType, string> = {
-  agent: 'Агент',
-  tool: 'Инструмент',
-  instance: 'Данные',
-};
 
 export const RBAC_RESOURCE_TYPE_TONES: Record<ResourceType, 'info' | 'neutral' | 'warn'> = {
   agent: 'info',
@@ -40,23 +35,11 @@ export const RBAC_RESOURCE_TYPE_TONES: Record<ResourceType, 'info' | 'neutral' |
   instance: 'warn',
 };
 
-export const RBAC_RESOURCE_TYPE_ORDER: Record<ResourceType, number> = {
-  agent: 0,
-  tool: 1,
-  instance: 2,
-};
 
 function isLikelyUuid(value: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value.trim());
 }
 
-export function formatRbacOwnerLabel(level: RbacLevel, name?: string | null): string {
-  const normalized = name?.trim();
-  if (!normalized || isLikelyUuid(normalized)) {
-    return RBAC_LEVEL_LABELS[level];
-  }
-  return normalized;
-}
 
 export function formatRbacResourceLabel(type: ResourceType, name?: string | null): string {
   const normalized = name?.trim();

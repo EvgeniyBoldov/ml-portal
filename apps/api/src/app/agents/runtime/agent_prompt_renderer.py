@@ -108,22 +108,3 @@ class AgentPromptRenderer:
 
         return DEFAULT_AGENT_SYSTEM_PROMPT
 
-    @staticmethod
-    def build_synthesis_messages(
-        agent_prompt: str,
-        original_messages: list,
-        observation_text: str,
-    ) -> list:
-        return [
-            {"role": "system", "content": agent_prompt},
-            *original_messages,
-            {"role": "assistant", "content": SYNTHESIS_ASSISTANT_STUB},
-            {
-                "role": "user",
-                "content": SYNTHESIS_USER_TEMPLATE.format(
-                    observation_text=observation_text,
-                    synthesis_instruction=SYNTHESIS_INSTRUCTION,
-                ),
-            },
-        ]
-

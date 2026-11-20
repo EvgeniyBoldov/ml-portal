@@ -6,18 +6,7 @@ from uuid import UUID
 import pytest
 
 from app.services import permission_service as permission_service_module
-from app.services.permission_service import EffectivePermissions, PermissionService
-
-
-def test_effective_permissions_helpers():
-    perms = EffectivePermissions(
-        collection_permissions={"docs": True, "tickets": False},
-        default_collection_allow=False,
-    )
-
-    assert perms.allowed_collections == ["docs"]
-    assert perms.is_collection_allowed("docs") is True
-    assert perms.is_collection_allowed("tickets") is False
+from app.services.permission_service import PermissionService
 
 
 @pytest.mark.asyncio

@@ -55,29 +55,29 @@ export interface CollectionVersion {
   updated_at: string;
 }
 
-export interface DataInstanceShort {
+interface DataInstanceShort {
   id: string;
   slug: string;
   name: string;
 }
 
-export interface CollectionSource {
+interface CollectionSource {
   name: string;
   type: string;
 }
 
-export interface PublishedCollectionVersionInfo {
+interface PublishedCollectionVersionInfo {
   number: number;
   status: 'published';
 }
 
-export interface CollectionCount {
+interface CollectionCount {
   value: number | null;
   kind: string | null;
   unit: string | null;
 }
 
-export interface CollectionWorkspace {
+interface CollectionWorkspace {
   id: string;
   name: string;
 }
@@ -119,7 +119,7 @@ export interface CollectionVersionUpdate {
   notes?: string | null;
 }
 
-export interface CollectionTypePreset {
+interface CollectionTypePreset {
   collection_type: CollectionType;
   fields: BackendCollectionField[];
 }
@@ -140,7 +140,7 @@ export interface DiscoverSqlTablesResponse {
   total: number;
 }
 
-export interface DiscoveredApiEntity {
+interface DiscoveredApiEntity {
   entity_type: string;
   aliases: string[];
   examples: string[];
@@ -252,7 +252,7 @@ export interface CreateCollectionRequest {
   memory_enabled?: boolean;
 }
 
-export interface SchemaOperation {
+interface SchemaOperation {
   op: 'add' | 'alter' | 'rename' | 'remove';
   name?: string;
   new_name?: string;
@@ -1117,4 +1117,3 @@ export const collectionsApi = {
     `/api/v1/collections/${collectionId}/docs/${encodeURIComponent(docId)}/status/events${tenantId ? `?tenant_id=${encodeURIComponent(tenantId)}` : ''}`,
 };
 
-export default collectionsApi;

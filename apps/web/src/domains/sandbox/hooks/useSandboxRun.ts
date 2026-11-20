@@ -100,7 +100,7 @@ const hasMemoryWriteEnded = (events: RuntimeJournalEvent[]): boolean =>
       event.payload.stage === 'memory_write_end'
   );
 
-export interface SandboxRun {
+interface SandboxRun {
   id: string;
   requestText: string;
   startedAt: string;

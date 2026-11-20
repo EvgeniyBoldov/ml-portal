@@ -131,18 +131,6 @@ def test_rejection_diagnostics_describe_tool_protocol_without_content():
     assert shape["messages"][2]["tool_call_id_present"] is True
 
 
-def test_provider_detail_diagnostics_is_bounded_and_filtered():
-    error = SimpleNamespace(
-        body={"error": {"message": "bad request", "code": "invalid", "prompt": "secret"}}
-    )
-
-    detail = OpenAICompatibleLLM._provider_detail_for_diagnostics(error)
-
-    assert "bad request" in detail
-    assert "invalid" in detail
-    assert "secret" not in detail
-
-
 @pytest.mark.parametrize("surface", ["nested", "flat", "response"])
 def test_rejection_preserves_safe_reason_without_inventing_capability_failure(surface):
     body = {"message": "Invalid json_schema: oneOf is forbidden", "code": "invalid_schema",

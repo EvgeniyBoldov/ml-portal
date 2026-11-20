@@ -17,9 +17,6 @@ class OperationSpec:
     requires_collection_binding: bool = False
     requires_vector_search: bool = False
 
-    def to_publication_decision(self) -> "PublicationDecision":
-        return PublicationDecision(canonical_op_slug=self.canonical_op_slug, spec=self)
-
 
 @dataclass(frozen=True, slots=True)
 class PublicationRule:
@@ -552,18 +549,6 @@ def resolve_publication(
     return None
 
 
-def is_operation_allowed_for_collection_type(
-    publication: PublicationDecision,
-    *,
-    collection_type: Optional[str],
-) -> bool:
-    supported = tuple(publication.spec.collection_types or ())
-    if not supported:
-        return publication.scope_kind != "collection"
-    normalized = str(collection_type or "").strip().lower()
-    return bool(normalized) and normalized in supported
-
-
 def _build_domain_candidates(
     *,
     context_domains: Optional[Iterable[str]],
@@ -641,26 +626,6 @@ def _is_collection_like_raw(raw_slug: str) -> bool:
 
 def build_runtime_operation_slug(instance_slug: str, canonical_name: str) -> str:
     return f"instance.{instance_slug}.{canonical_name}"
-
-
-def canonical_operation_identity(
-    *,
-    instance_slug: str,
-    instance_domain: str,
-    raw_slug: str,
-) -> Tuple[str, str]:
-    canonical_name = canonical_operation_name(instance_domain, raw_slug)
-    return canonical_name, build_runtime_operation_slug(instance_slug, canonical_name)
-
-
-def get_operation_spec(canonical_op_slug: str) -> Optional[OperationSpec]:
-    return _OPERATION_SPECS.get(str(canonical_op_slug or "").strip())
-
-
-def get_collection_capability_bindings(
-    collection_type: str,
-) -> Tuple[CollectionCapabilityBinding, ...]:
-    return _COLLECTION_CAPABILITY_BINDINGS.get(str(collection_type or "").strip().lower(), ())
 
 
 def build_collection_workflow_steps(

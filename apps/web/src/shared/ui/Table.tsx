@@ -42,7 +42,6 @@ export function Table<T = unknown>({
   onRowDoubleClick,
   rowKey = 'id' as keyof T,
   selectedRowKeys = [],
-  _onSelectionChange,
   sortBy,
   sortOrder,
   onSort,
@@ -180,5 +179,3 @@ export function Table<T = unknown>({
     </div>
   );
 }
-
-export default Table;

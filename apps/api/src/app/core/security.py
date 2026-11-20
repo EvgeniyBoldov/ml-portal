@@ -2,7 +2,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Optional, Any, Dict, List
+from typing import Any, Dict, List
 import jwt
 from argon2 import PasswordHasher
 from .config import get_settings

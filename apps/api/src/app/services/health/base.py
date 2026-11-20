@@ -128,15 +128,6 @@ class HealthCheckTarget:
         self.next_check_at = next_check_at
         self.last_error = last_error
     
-    def should_check(self, now: datetime) -> bool:
-        """Check if this target is due for health check."""
-        if not self.is_active:
-            return False
-        
-        if self.next_check_at is None:
-            return True  # Never checked before
-        
-        return now >= self.next_check_at
     
     def __repr__(self) -> str:
         return f"<HealthCheckTarget {self.type}:{self.id} status={'active' if self.is_active else 'inactive'}>"

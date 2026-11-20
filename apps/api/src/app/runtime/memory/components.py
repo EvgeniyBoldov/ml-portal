@@ -7,7 +7,7 @@ turn, and returns a bounded, explainable section.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Protocol, Sequence
 from uuid import UUID
 
 from app.models.memory import FactScope
@@ -303,109 +303,6 @@ class MemoryAssembler:
             section.items = kept
             section.budget_used_chars = section_used
         return used
-
-
-class MemoryPromptRenderer:
-    """Render bounded prompt context from MemoryBundle sections."""
-
-    def render(
-        self,
-        *,
-        bundle: MemoryBundle,
-        max_chars: int,
-        allow_internal: bool = False,
-        include_section_headers: bool = True,
-    ) -> str:
-        allowed_levels = {"safe"}
-        if allow_internal:
-            allowed_levels.add("internal")
-
-        chunks: List[str] = []
-        used = 0
-        ordered_sections = sorted(bundle.sections, key=lambda item: (item.priority, item.name))
-        for section in ordered_sections:
-            if section.redaction_level not in allowed_levels:
-                continue
-            lines: List[str] = []
-            if include_section_headers:
-                lines.append(f"[{section.name}]")
-            for item in section.items:
-                if item.redaction_level not in allowed_levels:
-                    continue
-                text = _trim_text(item.text, PROMPT_ITEM_PREVIEW_CHARS)
-                lines.append(f"- {text}")
-            if not lines:
-                continue
-            section_text = "\n".join(lines)
-            if used + len(section_text) > max_chars:
-                available = max_chars - used
-                if available <= 0:
-                    break
-                chunks.append(section_text[:available])
-                used += available
-                break
-            chunks.append(section_text)
-            used += len(section_text)
-
-        return "\n\n".join(chunks)
-
-
-class ConversationMemoryComponent:
-    """Structured per-chat summary, selected by explicit facets."""
-
-    name = "conversation"
-    priority = 10
-
-    async def collect(self, ctx: MemoryQueryContext) -> MemorySection:
-        items: List[MemoryItem] = []
-        summary = ctx.summary
-
-        for goal in summary.goals[:5]:
-            items.append(MemoryItem(text=f"goal: {goal}", source="dialogue_summary", subject="goal", score=1.0))
-        for done in summary.done[:5]:
-            items.append(MemoryItem(text=f"done: {done}", source="dialogue_summary", subject="done", score=0.8))
-        for question in summary.open_questions[:5]:
-            items.append(
-                MemoryItem(
-                    text=f"open_question: {question}",
-                    source="dialogue_summary",
-                    subject="open_question",
-                    score=1.0,
-                )
-            )
-        for key, value in list(summary.entities.items())[:8]:
-            items.append(
-                MemoryItem(
-                    text=f"entity {key}: {value}",
-                    source="dialogue_summary",
-                    subject=f"entity.{key}",
-                    score=0.6,
-                )
-            )
-        if summary.raw_tail:
-            items.append(
-                MemoryItem(
-                    text=summary.raw_tail[-min(len(summary.raw_tail), 600):],
-                    source="dialogue_summary",
-                    subject="raw_tail",
-                    score=0.4,
-                    redaction_level="internal",
-                )
-            )
-
-        budget = ctx.budget.for_section(
-            self.name,
-            default_chars=min(ctx.budget.default_section_chars, 1_600),
-            default_items=min(ctx.budget.max_items_per_section, 12),
-        )
-        return _fit_section(
-            name=self.name,
-            priority=self.priority,
-            items=items,
-            max_chars=budget.max_chars or min(ctx.budget.default_section_chars, 1_600),
-            max_items=budget.max_items or min(ctx.budget.max_items_per_section, 12),
-            selection_reason="structured_summary_facets",
-        )
 
 
 class FactMemoryComponent:

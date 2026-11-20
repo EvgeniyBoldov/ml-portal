@@ -29,7 +29,7 @@ Versioned Tool Base Class
             pass
 """
 from __future__ import annotations
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Any, Dict, Optional, ClassVar, List, Callable
 from dataclasses import dataclass
 from functools import wraps
@@ -259,26 +259,6 @@ class VersionedTool(ABC):
             return True
         return isinstance(value, expected)
     
-    def to_llm_schema(self, version: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Преобразовать tool в формат для LLM.
-        """
-        if version is None:
-            version_info = self.get_latest_version()
-        else:
-            version_info = self.get_version(version)
-        
-        if version_info is None:
-            return {}
-        
-        return {
-            "type": "function",
-            "function": {
-                "name": self.tool_slug,
-                "description": self.description,
-                "parameters": version_info.input_schema
-            }
-        }
     
     @staticmethod
     def _parse_version(version: str) -> tuple:
@@ -320,9 +300,6 @@ class ToolRegistry:
         """Получить все зарегистрированные инструменты"""
         return list(self._tools.values())
     
-    def get_by_domain(self, domain: str) -> List[VersionedTool]:
-        """Получить инструменты по домену"""
-        return [t for t in self._tools.values() if domain in (t.domains or [])]
     
     def clear(self) -> None:
         """Очистить реестр (для тестов)"""

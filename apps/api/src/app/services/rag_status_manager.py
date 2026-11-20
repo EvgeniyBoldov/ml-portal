@@ -18,7 +18,6 @@ from app.services.rag_status_policy import (
     PipelineStage,
     StageStatus,
     VALID_TRANSITIONS,
-    build_stage_control,
     format_stage_name,
     is_retry_supported,
     split_stage_name,
@@ -285,20 +284,6 @@ class RAGStatusManager:
     async def get_ingest_policy(self, doc_id: UUID) -> Dict[str, Any]:
         return await build_ingest_policy(self.status_repo, self.target_models, doc_id)
 
-    def _build_stage_control(
-        self,
-        stage: str,
-        node_type: str,
-        status: str,
-        archived: bool,
-    ) -> Dict[str, Any]:
-        """Derive control capabilities for a single stage."""
-        return build_stage_control(
-            stage=stage,
-            node_type=node_type,
-            status=status,
-            archived=archived,
-        )
 
     async def start_ingest(self, doc_id: UUID) -> None:
         """

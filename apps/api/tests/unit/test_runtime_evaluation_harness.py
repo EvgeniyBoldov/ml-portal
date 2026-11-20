@@ -1,8 +1,6 @@
 from app.services.runtime_evaluation_harness import (
     RuntimeEvaluationCase,
-    default_runtime_eval_cases,
     evaluate_runtime_case,
-    evaluate_runtime_cases,
 )
 
 
@@ -27,19 +25,6 @@ def test_runtime_eval_passes_document_retrieval_case():
     assert result.score == 1.0
     assert result.dimensions.tool_choice_score == 1.0
     assert "collection.document.search" in result.seen_operations
-
-
-def test_table_or_sql_case_accepts_direct_retrieval_without_info():
-    case = next(item for item in default_runtime_eval_cases() if item.key == "table_or_sql_retrieval")
-    events = [
-        {"type": "status", "data": {"operation_slug": "collection.table.search"}},
-        {"type": "final", "data": {"message": "ok"}},
-    ]
-
-    result = evaluate_runtime_case(case, events)
-
-    assert result.passed is True
-    assert "collection.info" not in result.seen_operations
 
 
 def test_runtime_eval_fails_when_forbidden_operation_seen():
@@ -75,11 +60,3 @@ def test_runtime_eval_waiting_input_expectation():
     result = evaluate_runtime_case(case, events)
     assert result.passed is True
 
-
-def test_default_cases_are_evaluable():
-    events = [
-        {"type": "status", "data": {"stage": "planner"}},
-        {"type": "final", "data": {"message": "ok"}},
-    ]
-    results = evaluate_runtime_cases(default_runtime_eval_cases(), events)
-    assert len(results) >= 7

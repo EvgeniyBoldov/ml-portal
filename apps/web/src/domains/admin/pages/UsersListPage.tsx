@@ -11,7 +11,7 @@ import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
 import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusBadge } from '@/shared/ui';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 
-export function UsersListPage() {
+function UsersListPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');

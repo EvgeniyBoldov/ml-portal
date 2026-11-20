@@ -6,7 +6,7 @@ New extractors can be registered at runtime via register().
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Type
+from typing import Dict, List, Optional
 
 from app.core.logging import get_logger
 from app.services.extractors.base import BaseExtractor, ExtractResult
@@ -33,10 +33,6 @@ class ExtractorRegistry:
             cls._extractors[ext] = extractor
             logger.debug(f"Registered extractor '{extractor.kind}' for .{ext}")
 
-    @classmethod
-    def register_class(cls, extractor_cls: Type[BaseExtractor]) -> None:
-        """Instantiate and register an extractor class."""
-        cls.register(extractor_cls())
 
     @classmethod
     def get_extractor(cls, ext: str) -> Optional[BaseExtractor]:

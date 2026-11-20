@@ -3,7 +3,6 @@ Collection Aggregate Tool - агрегации и статистика по ко
 """
 from __future__ import annotations
 from typing import Any, Dict, List, ClassVar, Optional
-import uuid
 import re
 
 from app.core.logging import get_logger
@@ -425,14 +424,6 @@ class CollectionAggregateTool(VersionedTool):
             order_by=order_by,
         )
 
-    def _build_where_clause(
-        self,
-        filters: Dict,
-        params: Dict,
-        param_idx: int
-    ) -> tuple[List[str], Dict, int]:
-        """Build WHERE clause from DSL filters."""
-        return SQL_BUILDER.build_where_clause(filters, params, param_idx)
 
     def _build_condition(
         self,
@@ -443,11 +434,3 @@ class CollectionAggregateTool(VersionedTool):
         """Build a single condition from DSL."""
         return SQL_BUILDER.build_condition(cond, params, param_idx)
 
-    def _build_having_clause(
-        self,
-        having: List[Dict],
-        params: Dict,
-        param_idx: int,
-    ) -> tuple[List[str], Dict, int]:
-        """Build HAVING clause from having conditions list."""
-        return SQL_BUILDER.build_having_clause(having, params, param_idx)

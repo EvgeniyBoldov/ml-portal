@@ -451,4 +451,3 @@ export function OrchestrationPage() {
   );
 }
 
-export default OrchestrationPage;

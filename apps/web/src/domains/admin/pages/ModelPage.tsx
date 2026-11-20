@@ -175,7 +175,7 @@ const META_FIELDS: FieldConfig[] = [
 
 /* ─── Component ─── */
 
-export function ModelPage() {
+function ModelPage() {
   const [vectorDim, setVectorDim] = useState<string>('');
   const [contextWindow, setContextWindow] = useState<string>('');
   const [requestTimeout, setRequestTimeout] = useState<string>('');

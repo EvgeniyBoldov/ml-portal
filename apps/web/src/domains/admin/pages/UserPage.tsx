@@ -19,7 +19,7 @@ import { Badge, Button, LifecycleDeleteDialog, Modal } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import Input from '@/shared/ui/Input';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
-import type { User, Tenant } from '@shared/api/admin';
+import type { Tenant } from '@shared/api/admin';
 import { CredentialsPanel, FactsPanel } from '@/shared/ui';
 
 /* ─── SetPasswordModal ─── */
@@ -207,7 +207,7 @@ const META_FIELDS: FieldConfig[] = [
 
 /* ─── Component ─── */
 
-export function UserPage() {
+function UserPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();

@@ -321,11 +321,5 @@ def _cacheable_result_data(value: Any) -> Any:
     return value
 
 
-def _is_read_operation(operation: str) -> bool:
-    """Deprecated name-based helper; never use it for execution safety."""
-    canonical = canonical_operation_name(operation).lower()
-    return canonical in {"memory.search", "collection.doc_search", "collection.list_documents"}
-
-
 def _entry_is_read_only(entry: ToolLedgerEntry) -> bool:
     return entry.operation_side_effects is False and (entry.risk_level or "").lower() == "safe"

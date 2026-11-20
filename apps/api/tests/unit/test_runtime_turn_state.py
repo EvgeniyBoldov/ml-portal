@@ -18,12 +18,6 @@ def _state() -> RuntimeTurnState:
     )
 
 
-def test_runtime_turn_state_snapshot_preserves_runtime_facts():
-    state = _state()
-    state.add_runtime_fact("f1", source="planner")
-    assert state.runtime_facts[0].text == "f1"
-
-
 def test_runtime_turn_state_compact_view_is_serializable():
     state = _state()
     state.set_lifecycle_status("completed")

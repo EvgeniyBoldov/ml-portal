@@ -7,10 +7,10 @@ future importer that needs to convert raw user/API input to typed PG values.
 from __future__ import annotations
 
 from datetime import datetime, date
-from typing import Any, List, Optional
+from typing import Any, List
 
-from app.core.exceptions import InvalidSchemaError, RowValidationError
-from app.models.collection import Collection, FieldCategory, FieldType
+from app.core.exceptions import RowValidationError
+from app.models.collection import Collection, FieldType
 
 
 def parse_string_bool(value: str) -> bool:

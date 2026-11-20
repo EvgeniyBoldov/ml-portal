@@ -2,19 +2,15 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 from uuid import UUID
 
 from celery import Task
 from sqlalchemy import update, text
 
-from app.adapters.s3_client import s3_manager
 from app.celery_app import app as celery_app
-from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.models.rag import RAGDocument
-from app.models.rag_ingest import Source, RAGIngestStageOutbox
+from app.models.rag_ingest import RAGIngestStageOutbox
 from app.services.hipporag_service import HippoRAGService
 from app.workers.session_factory import get_worker_session
 

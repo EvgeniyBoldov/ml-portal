@@ -213,10 +213,6 @@ class AuditContext:
         self._error_message = message
         self._response_status = "error"
     
-    def set_tokens(self, tokens_in: int, tokens_out: int):
-        """Set token usage for LLM requests."""
-        self._tokens_in = tokens_in
-        self._tokens_out = tokens_out
     
     async def finish(self):
         """Finish and log the request."""

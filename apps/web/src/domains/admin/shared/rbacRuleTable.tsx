@@ -1,4 +1,3 @@
-import React from 'react';
 import { Badge, LifecycleStatusBadge, type DataTableColumn } from '@/shared/ui';
 import {
   RBAC_EFFECT_LABELS,
@@ -18,11 +17,11 @@ interface BuildRbacRuleColumnsArgs {
   instanceById?: Map<string, ToolInstance>;
 }
 
-export function resolveRbacOwnerLabel(row: EnrichedRule): string {
+function resolveRbacOwnerLabel(row: EnrichedRule): string {
   return row.owner.name?.trim() || RBAC_LEVEL_LABELS[row.owner.level] || '—';
 }
 
-export function resolveRbacResourceLabel(
+function resolveRbacResourceLabel(
   row: EnrichedRule,
   agentById?: Map<string, Agent>,
   instanceById?: Map<string, ToolInstance>,

@@ -12,7 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
-from app.core.di import get_llm_client
+from app.core.di import get_llm_client  # noqa: F401  (re-export: routers depend on app.api.deps.get_llm_client)
 from app.core.redis import get_redis
 from app.core.config import is_local
 from app.core.security import UserCtx
@@ -85,9 +85,6 @@ async def resolve_active_user_tenant_ids(
     return tenant_ids
 
 # Client dependencies
-def get_llm_client_mock():
-    """Mock LLM client for testing"""
-    return get_llm_client()
 
 def get_redis_client():
     """Get Redis client for pub/sub and caching"""
@@ -136,21 +133,6 @@ async def get_bearer_user(
     return await _request_user(request, credentials, allow_cookie=False)
 
 
-async def get_current_user_optional(request: Request) -> UserCtx | None:
-    """Allow a local-only dev principal; require authentication elsewhere."""
-    credentials = await bearer_security(request)
-    if request.headers.get("Authorization") or request.cookies.get("access_token"):
-        if not is_local():
-            return await _request_user(request, credentials, allow_cookie=True)
-        try:
-            return await _request_user(request, credentials, allow_cookie=True)
-        except HTTPException:
-            return None
-    if is_local():
-        return UserCtx(id="dev-user", email="dev@localhost", role="reader", tenant_ids=[], scopes=["read"])
-    return await _request_user(request, credentials, allow_cookie=True)
-
-
 async def get_current_user_sse(request: Request) -> UserCtx:
     """Bearer/access cookie auth; retain the existing local SSE query fallback."""
     credentials = await bearer_security(request)
@@ -178,15 +160,6 @@ def get_tenant_id(request: Request) -> str | None:
     """Get tenant_id from request state (set by middleware)"""
     return getattr(request.state, "tenant_id", None)
 
-def require_tenant(request: Request) -> str:
-    """Require tenant_id to be present"""
-    tenant_id = get_tenant_id(request)
-    if not tenant_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Tenant ID required"
-        )
-    return tenant_id
 
 # ── Chat context resolution ───────────────────────────────────────────────────────────
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getDashboard, type DashboardPeriod } from '@/shared/api/dashboard';
@@ -17,7 +17,7 @@ import { UsageChart } from './dashboard/UsageChart';
 import { number, timestamp } from './dashboard/format';
 import styles from './DashboardPage.module.css';
 
-export function DashboardPage() {
+function DashboardPage() {
   const [days, setDays] = useState<DashboardPeriod>(7);
   const { data, isPending, isFetching, isError } = useQuery({
     queryKey: qk.admin.dashboard(days),

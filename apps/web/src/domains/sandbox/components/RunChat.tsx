@@ -14,7 +14,6 @@ import {
 import { useQuery } from '@tanstack/react-query';
 import Button from '@/shared/ui/Button';
 import { Icon } from '@/shared/ui/Icon';
-import { Tooltip } from '@/shared/ui';
 import { qk } from '@/shared/api/keys';
 import type { ActiveRun } from '../hooks/useSandboxRun';
 import type { SandboxBranchListItem, SandboxRunListItem } from '../types';
@@ -192,7 +191,6 @@ export default function RunChat({
   onConfirmPausedRun,
   onCancelPausedRun,
   onStop,
-  onSelectRun,
   onSelectTraceTarget,
   selectedTraceTargetKey,
 }: Props) {

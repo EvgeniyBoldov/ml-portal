@@ -11,7 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.http.clients import LLMClientProtocol
-from app.models.memory import MemoryClaim, MemoryItem, MemoryItemEvaluation, MemoryItemSource
+from app.models.memory import MemoryClaim, MemoryItem, MemoryItemEvaluation
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 

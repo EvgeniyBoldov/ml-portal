@@ -420,10 +420,6 @@ class TurnPreflight:
             text,
         ))
 
-    @classmethod
-    def _routing_request(cls, user_request: str) -> str:
-        """Compatibility helper; routing text is lossless and bounded downstream."""
-        return str(user_request or "")
 
     @staticmethod
     def _is_explicit_fact_memory_write(user_request: str) -> bool:

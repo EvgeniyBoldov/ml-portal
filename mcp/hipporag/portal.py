@@ -141,8 +141,6 @@ def callback(models: Models, operation: str, payload: dict) -> dict:
 
 
 class GatewayLLM(BaseLLM):
-    def _init_llm_config(self):
-        self.llm_config = LLMConfig.from_dict({"model": self.global_config.llm_name})
 
     def __init__(self, config: BaseConfig, models: Models):
         super().__init__(config)

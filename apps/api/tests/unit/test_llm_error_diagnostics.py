@@ -14,7 +14,6 @@ from app.runtime.events import RuntimeEventType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.adapters.interfaces.llm import LLMErrorCode, LLMProviderError
 from app.services.runtime_limits_service import ModelCallLimits
-from app.runtime.error_payloads import build_debug_payload
 
 
 class _Result(BaseModel):
@@ -23,23 +22,6 @@ class _Result(BaseModel):
 
 class _ItemsResult(BaseModel):
     items: list[dict[str, str]]
-
-
-def test_normalized_provider_debug_does_not_expose_sdk_cause():
-    try:
-        try:
-            raise RuntimeError("raw SDK response: Bearer private-key and prompt")
-        except RuntimeError as cause:
-            raise LLMProviderError(
-                code=LLMErrorCode.INVALID_REQUEST, safe_message="LLM rejected the request", retryable=False,
-                provider_message="oneOf is forbidden", status_code=400,
-            ) from cause
-    except LLMProviderError as exc:
-        payload = build_debug_payload(exc=exc)
-        structured = StructuredCallError("failed", original_exception=exc, traceback_text="raw private-key")
-        for debug in (payload, structured.debug_payload()):
-            assert "private-key" not in str(debug)
-            assert debug["provider_message"] == "oneOf is forbidden"
 
 
 @pytest.mark.asyncio
@@ -165,31 +147,6 @@ def test_structured_retry_delay_uses_backoff_and_provider_hint():
     assert StructuredLLMCall._retry_delay_ms(attempt=0, retry_after_ms=None) == 500
     assert StructuredLLMCall._retry_delay_ms(attempt=2, retry_after_ms=3_000) == 3_000
     assert StructuredLLMCall._retry_delay_ms(attempt=0, retry_after_ms=60_000) == 60_000
-
-
-@pytest.mark.asyncio
-async def test_structured_call_preserves_upstream_exception_and_traceback():
-    client = AsyncMock()
-    client.chat = AsyncMock(side_effect=ConnectionError("LiteLLM upstream reset"))
-    call = StructuredLLMCall(session=AsyncMock(), llm_client=client)
-    call.role_service.get_role_config = AsyncMock(
-        return_value={"model": "llama-3.1", "max_retries": 0, "timeout_s": 1}
-    )
-    call.limits_service.resolve_model = AsyncMock(
-        return_value=ModelCallLimits(request_timeout_s=1, max_retries=0)
-    )
-
-    with pytest.raises(StructuredCallError) as raised:
-        await call.invoke(
-            role=SystemLLMRoleType.PLANNER,
-            payload={"input": "hello"},
-            schema=_Result,
-        )
-
-    error = raised.value
-    assert error.error_type == "ConnectionError"
-    assert "LiteLLM upstream reset" in str(error)
-    assert "ConnectionError" in (error.debug_payload() or {}).get("traceback", "")
 
 
 @pytest.mark.asyncio

@@ -476,31 +476,3 @@ class CollectionDocSearchTool(VersionedTool):
                     return f"Unsupported filter value for '{key}'"
         return None
 
-    async def _resolve_filtered_row_ids(self, session: Any, collection: Any, filters: Dict[str, Any]) -> list[str]:
-        if not collection.table_name:
-            return []
-        from sqlalchemy import text as sa_text
-
-        where_parts: list[str] = []
-        params: Dict[str, Any] = {}
-        idx = 0
-        for field, value in filters.items():
-            if isinstance(value, list):
-                if not value:
-                    return []
-                placeholders = []
-                for item in value:
-                    p = f"p{idx}"
-                    idx += 1
-                    params[p] = item
-                    placeholders.append(f":{p}")
-                where_parts.append(f"{field} IN ({', '.join(placeholders)})")
-            else:
-                p = f"p{idx}"
-                idx += 1
-                params[p] = value
-                where_parts.append(f"{field} = :{p}")
-        where_sql = " AND ".join(where_parts) if where_parts else "TRUE"
-        q = sa_text(f"SELECT id::text FROM {collection.table_name} WHERE {where_sql} LIMIT 2001")
-        rows = (await session.execute(q, params)).all()
-        return [str(row[0]) for row in rows if row and row[0]]

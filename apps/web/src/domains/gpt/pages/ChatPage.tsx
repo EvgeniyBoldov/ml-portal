@@ -1,4 +1,3 @@
-import React from 'react';
 import styles from './ChatPage.module.css';
 import ChatSidebar from './ChatSidebar';
 import Chat from './Chat';

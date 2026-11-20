@@ -102,4 +102,3 @@ export function Tags({
   );
 }
 
-export default Tags;

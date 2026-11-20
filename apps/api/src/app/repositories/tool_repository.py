@@ -57,8 +57,3 @@ class ToolRepository:
 
         return list(result.scalars().all()), total
 
-    async def get_by_domain(self, domain: str) -> List[Tool]:
-        """Get all tools for a runtime domain"""
-        stmt = select(Tool).where(Tool.domains.any(domain))
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())

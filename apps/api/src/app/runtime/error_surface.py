@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 
@@ -16,13 +15,6 @@ _INTERNAL_ERROR_PATTERNS = [
     r"\boperation[_\s-]?(unavailable|ambiguous|invalid)\b",
     r"\bagent[_\s-]?(runtime|precheck|wall[_\s-]?time|max[_\s-]?tool)\b",
 ]
-
-
-def looks_internal_error_text(text: str) -> bool:
-    sample = str(text or "").strip().lower()
-    if not sample:
-        return False
-    return any(re.search(pattern, sample) for pattern in _INTERNAL_ERROR_PATTERNS)
 
 
 def build_user_safe_error_message(

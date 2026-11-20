@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { DashboardModel } from '@/shared/api/dashboard';
 import { Badge, Button, EntityCard, type DataTableColumn } from '@/shared/ui';

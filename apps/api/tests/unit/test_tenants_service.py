@@ -2,7 +2,7 @@
 Unit tests for AsyncTenantsService
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 from datetime import datetime, timezone
 
@@ -113,61 +113,6 @@ class TestGetTenant(TestAsyncTenantsService):
         result = await tenants_service.get_tenant(str(uuid4()))
         
         assert result is None
-
-
-class TestListTenants(TestAsyncTenantsService):
-    """Test list_tenants method"""
-    
-    @pytest.mark.asyncio
-    async def test_list_tenants(
-        self, tenants_service, mock_tenants_repo, mock_model_repo,
-        sample_tenant, sample_embed_model, sample_rerank_model
-    ):
-        """Should list all tenants"""
-        mock_tenants_repo.list.return_value = [sample_tenant]
-        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
-        
-        result = await tenants_service.list_tenants()
-        
-        assert len(result) == 1
-        assert result[0]["name"] == sample_tenant.name
-    
-    @pytest.mark.asyncio
-    async def test_list_tenants_empty(self, tenants_service, mock_tenants_repo):
-        """Should return empty list when no tenants"""
-        mock_tenants_repo.list.return_value = []
-        
-        result = await tenants_service.list_tenants()
-        
-        assert result == []
-    
-    @pytest.mark.asyncio
-    async def test_list_tenants_with_limit(self, tenants_service, mock_tenants_repo):
-        """Should pass limit to repository"""
-        mock_tenants_repo.list.return_value = []
-        
-        await tenants_service.list_tenants(limit=50)
-        
-        mock_tenants_repo.list.assert_called_once_with(limit=50)
-
-    @pytest.mark.asyncio
-    async def test_list_tenants_page_passes_filters_and_enriches_only_page(
-        self, tenants_service, mock_tenants_repo, mock_model_repo,
-        sample_tenant, sample_embed_model, sample_rerank_model
-    ):
-        mock_tenants_repo.list_page.return_value = ([sample_tenant], 201)
-        mock_model_repo.get_global_by_type.side_effect = [sample_embed_model, sample_rerank_model]
-
-        items, total = await tenants_service.list_tenants_page(
-            page=3, size=100, search="operations", is_active=True, include_deprecated=True
-        )
-
-        assert total == 201
-        assert len(items) == 1
-        mock_tenants_repo.list_page.assert_awaited_once_with(
-            page=3, size=100, search="operations", is_active=True, include_deprecated=True
-        )
-        assert mock_model_repo.get_global_by_type.await_count == 2
 
 
 class TestCreateTenant(TestAsyncTenantsService):

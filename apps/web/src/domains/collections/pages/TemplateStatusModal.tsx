@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 
 import Modal from '@shared/ui/Modal';
@@ -62,7 +62,7 @@ interface TemplateStatusModalProps {
   onClose: () => void;
 }
 
-export function TemplateStatusModal({ collectionId, tenantId, collection, permissionDenied = false, onPermissionDenied, row, onClose }: TemplateStatusModalProps) {
+function TemplateStatusModal({ collectionId, tenantId, collection, permissionDenied = false, onPermissionDenied, row, onClose }: TemplateStatusModalProps) {
   const queryClient = useQueryClient();
   const { showToast } = useToast();
   const statusQueryKey = useMemo(() => qk.collections.templateStatus(collectionId, row.id, tenantId), [collectionId, row.id, tenantId]);

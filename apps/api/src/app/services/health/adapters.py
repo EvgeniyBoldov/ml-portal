@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import time
 import inspect
-from typing import Any, Dict, Optional
 
 from app.models.model_registry import Model
 from app.models.tool_instance import ToolInstance
@@ -13,7 +12,6 @@ from app.adapters.interfaces.embeddings import EmbeddingInterface
 from app.adapters.embeddings import EmbeddingServiceFactory
 from app.adapters.interfaces.llm import LLMClient
 from app.adapters.interfaces.llm import LLMProviderError
-from app.agents.runtime.rerank_client import rerank_scores
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)

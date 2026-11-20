@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Optional
 
 
@@ -32,14 +31,3 @@ def extract_balanced_json(text: str, start: int) -> Optional[str]:
                 return text[start:idx + 1]
     return None
 
-
-def extract_json_from_text(text: str) -> Optional[str]:
-    """Extract first JSON object from plain text or markdown fence."""
-    fence_match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if fence_match:
-        return fence_match.group(1).strip()
-
-    brace_start = text.find("{")
-    if brace_start < 0:
-        return None
-    return extract_balanced_json(text, brace_start)

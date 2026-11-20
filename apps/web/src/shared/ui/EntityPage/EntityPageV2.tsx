@@ -22,10 +22,9 @@ import { GridLayout } from '../GridLayout';
 import pageStyles from './EntityPage.module.css';
 
 export type EntityPageMode = 'view' | 'edit' | 'create';
-export type { BreadcrumbItem };
 
 /* ─── Tab layout types ─── */
-export type TabLayout = 
+type TabLayout = 
   | 'grid'       // CSS grid with configurable columns (default 1fr 1fr)
   | 'full'       // full width, for tables
   | 'single'     // single centered column (max-width 800px), for create forms
@@ -304,4 +303,3 @@ export function EntityPageV2({
   );
 }
 
-export default EntityPageV2;

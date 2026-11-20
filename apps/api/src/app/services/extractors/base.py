@@ -3,7 +3,6 @@ Base extractor interface and ExtractResult dataclass.
 """
 from __future__ import annotations
 
-import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Set
@@ -16,18 +15,6 @@ class ExtractResult:
     kind: str
     meta: Dict[str, Any] = field(default_factory=dict)
     warnings: List[str] = field(default_factory=list)
-
-    def to_json(self) -> str:
-        return json.dumps(
-            {
-                "text": self.text,
-                "type": "text",
-                "extractor": self.kind,
-                "meta": self.meta,
-                "warnings": self.warnings,
-            },
-            ensure_ascii=False,
-        )
 
 
 class BaseExtractor(ABC):

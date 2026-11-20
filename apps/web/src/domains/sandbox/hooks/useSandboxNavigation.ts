@@ -3,7 +3,7 @@ import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
 import type { SandboxCatalog } from '../types';
 
-export function useSandboxCatalog(sessionId: string | undefined) {
+function useSandboxCatalog(sessionId: string | undefined) {
   return useQuery({
     queryKey: qk.sandbox.catalog.detail(sessionId ?? ''),
     queryFn: () => sandboxApi.getCatalog(sessionId ?? ''),

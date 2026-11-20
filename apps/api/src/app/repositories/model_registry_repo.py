@@ -4,10 +4,8 @@ Model Registry Repository for database operations
 from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func, update
-from sqlalchemy.orm import selectinload
-from app.models.model_registry import ModelRegistry, ModelType, ModelStatus
-from app.models.tenant import Tenants
+from sqlalchemy import select, or_, update
+from app.models.model_registry import ModelRegistry, ModelType
 from app.core.logging import get_logger
 import uuid
 
@@ -64,8 +62,6 @@ class AsyncModelRegistryRepository:
         return result.scalar_one_or_none()
     
     # Deprecated alias for backward compatibility during refactor
-    async def get_by_model(self, model: str) -> Optional[ModelRegistry]:
-        return await self.get_by_alias(model)
 
     async def create(self, data: Dict[str, Any]) -> ModelRegistry:
         """Create a new model registry entry"""
@@ -104,34 +100,7 @@ class AsyncModelRegistryRepository:
         await self.session.delete(model)
         return True
     
-    async def count_tenants_using(self, alias: str) -> int:
-        """Count tenants using a specific model as embedding"""
-        result = await self.session.execute(
-            select(func.count(Tenants.id)).where(Tenants.embedding_model_alias == alias)
-        )
-        return result.scalar() or 0
     
-    async def get_tenants_by_model(self, alias: str) -> List[Tenants]:
-        """Get tenants using a specific model as embedding"""
-        result = await self.session.execute(
-            select(Tenants).where(Tenants.embedding_model_alias == alias)
-        )
-        return result.scalars().all()
-    
-    async def get_models_by_status(self, status: str) -> List[ModelRegistry]:
-        """Get models by status"""
-        result = await self.session.execute(
-            select(ModelRegistry).where(ModelRegistry.status == status)
-        )
-        return result.scalars().all()
-    
-    async def get_global_models(self) -> List[ModelRegistry]:
-        """Get models marked as default/global"""
-        result = await self.session.execute(
-            select(ModelRegistry).where(ModelRegistry.default_for_type == True)
-        )
-        return result.scalars().all()
-
     async def get_global_by_type(self, model_type: ModelType) -> Optional[ModelRegistry]:
         """Get the default model for a given type"""
         result = await self.session.execute(
@@ -141,9 +110,3 @@ class AsyncModelRegistryRepository:
         )
         return result.scalars().first()
     
-    async def count_total(self) -> int:
-        """Get total count of models"""
-        result = await self.session.execute(
-            select(func.count(ModelRegistry.id))
-        )
-        return result.scalar() or 0

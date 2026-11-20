@@ -10,14 +10,6 @@ export const contentFieldLabels: Record<string, string> = {
   verification: 'Проверка результата', rollback: 'Откат', instruction: 'Действие', expected_result: 'Ожидаемый результат',
   confirmation_required: 'Требуется подтверждение', mode: 'Режим', reason: 'Причина', order: 'Порядок',
 };
-export const memoryTypeLabels: Record<string, string> = {
-  term: 'Термин', description: 'Описание', relationship: 'Связь', rule: 'Правило',
-  constraint: 'Ограничение', procedure: 'Процедура', decision: 'Решение',
-};
-export const memoryStateLabels: Record<string, string> = {
-  active: 'Активна', uncertain: 'Есть противоречия', stale: 'Устарела', extracted: 'Извлечена',
-  needs_review: 'На проверке', conflict: 'Есть конфликт', resolved: 'Утверждена', rejected: 'Отклонена', superseded: 'Заменена',
-};
 type Field = { key: string; kind: 'text' | 'list' | 'effect' | 'steps' | 'rollback'; required?: boolean };
 const text = (key: string): Field => ({ key, kind: 'text', required: true });
 const list = (key: string, required = false): Field => ({ key, kind: 'list', required });

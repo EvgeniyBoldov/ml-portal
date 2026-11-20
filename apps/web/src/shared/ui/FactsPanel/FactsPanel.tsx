@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { factsApi, type Fact, type FactInput, type FactOwner } from '@/shared/api/facts';
 import { qk } from '@/shared/api/keys';
@@ -10,7 +10,7 @@ import ConfirmDialog from '../ConfirmDialog';
 import { useErrorToast, useSuccessToast } from '../Toast';
 import styles from './FactsPanel.module.css';
 
-export type FactsPanelMode = 'profile' | 'admin-user' | 'admin-tenant';
+type FactsPanelMode = 'profile' | 'admin-user' | 'admin-tenant';
 
 const FACT_SOURCE_LABELS: Record<string, string> = {
   user_utterance: 'Из сообщения пользователя',

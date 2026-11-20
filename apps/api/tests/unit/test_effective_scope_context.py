@@ -16,7 +16,6 @@ from app.runtime.input_builders import PlannerInputBuilder
 from app.runtime.memory import mechanical_lookup
 from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from app.runtime.turn_preflight import TurnPreflightDecision, _canonical_scope_selection
-from app.runtime.memory.turn_recall import recall_with_stable_scope
 from app.runtime.agent_executor import AgentExecutor
 from app.runtime.orchestrator_contracts import TaskRequest
 
@@ -159,7 +158,6 @@ def test_planner_search_history_keeps_facts_and_all_original_passages():
     assert memory["groups"][0]["items"][0]["text"] == "passage 0"
 
 
-
 def test_agent_receives_planner_search_statements_even_after_many_user_facts():
     recall = {"type": "memory_recall", "applicable_rules": [
         {"subject": "deploy", "scope_keys": ["team.ops"], "content": {"statement": "Approval required"}}
@@ -184,32 +182,6 @@ def test_shared_and_legacy_scope_selections_must_agree():
     with pytest.raises(ValueError, match="conflicting_scope_selection"):
         _canonical_scope_selection(decision({"mode": "replace", "keys": []}, {"scope_keys": ["team.ops"]}))
     assert _canonical_scope_selection(decision({}, {"scope_keys": [" Team.Ops "]})).keys == ["team.ops"]
-
-
-@pytest.mark.asyncio
-async def test_recall_is_repeated_if_final_preflight_changes_scope():
-    a = EffectiveScopeContext(selected=[identity("project.a")], ceiling_keys=["project.a"])
-    b = EffectiveScopeContext(selected=[identity("project.b")], ceiling_keys=["project.b"])
-    first = {"search_scope": {"scope_keys": a.keys}, "items": [{"content": "old answer"}]}
-    second = {"search_scope": {"scope_keys": b.keys}, "items": [{"content": "new answer"}]}
-    search = AsyncMock(side_effect=[first, second])
-    routed = TurnPreflightDecision.model_validate({"route": "planner", "task_brief": {
-        "goal": "goal", "direction": "check", "expected_result": "result"}})
-    recalled, decision, scope = await recall_with_stable_scope(a, search=search,
-        complete=AsyncMock(return_value=routed), select=AsyncMock(return_value=b))
-    assert recalled == second and scope.keys == b.keys
-    assert search.await_count == 2
-    assert search.await_args_list[1].args[0].keys == b.keys
-
-
-@pytest.mark.asyncio
-async def test_recall_rejects_scope_mismatch_before_routing():
-    a = EffectiveScopeContext(selected=[identity("project.a")], ceiling_keys=["project.a"])
-    complete = AsyncMock()
-    with pytest.raises(ValueError, match="recall_scope_mismatch"):
-        await recall_with_stable_scope(a, search=AsyncMock(return_value={"search_scope": {"scope_keys": ["project.b"]}}),
-                                       complete=complete, select=AsyncMock())
-    complete.assert_not_awaited()
 
 
 def test_user_project_defaults_are_not_promoted_to_explicit_chat_focus():
@@ -308,14 +280,6 @@ async def test_planner_search_retains_passages_and_failure_receipts(monkeypatch)
     assert tools.execute.await_count == 3
     from app.runtime.memory.document_memory import search_receipt
     assert planner._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == [search_receipt(record) for record in records]
-
-
-def test_planner_search_recall_requirements_reach_synthesis_guard():
-    from app.runtime.orchestrator import _recall_requires_rag, _recall_requires_tool
-    context = [{"type": "planner_memory_result", "result": {
-        "memory_context": {"type": "memory_recall", "rag_required": True, "tool_required": True}}}]
-    assert _recall_requires_rag(context)
-    assert _recall_requires_tool(context)
 
 
 def test_memory_only_synthesis_keeps_original_passages_without_silent_truncation():

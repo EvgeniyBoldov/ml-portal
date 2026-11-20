@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Tuple, List, Any, Optional, Dict, Type, TypeVar, Generic, Union
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_, or_, desc, asc, update, delete
-from sqlalchemy.exc import IntegrityError, NoResultFound
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 import uuid
 import base64
@@ -25,23 +25,18 @@ T = TypeVar('T')
 # Domain exceptions
 class RepositoryError(Exception):
     """Base repository error"""
-    pass
 
 class NotFoundError(RepositoryError):
     """Entity not found"""
-    pass
 
 class DuplicateError(RepositoryError):
     """Duplicate entity error"""
-    pass
 
 class ConcurrencyError(RepositoryError):
     """Optimistic locking conflict"""
-    pass
 
 class ForeignKeyViolationError(RepositoryError):
     """Foreign key constraint violation"""
-    pass
 
 
 class AsyncRepository(Generic[T]):
@@ -468,32 +463,6 @@ class AsyncTenantRepository(Generic[T]):
             logger.error(f"Error checking existence of {self.model.__name__} {id}: {e}")
             return False
     
-    async def bulk_create(self, tenant_id: uuid.UUID, entities_data: List[Dict[str, Any]]) -> List[T]:
-        """Bulk create entities"""
-        try:
-            entities = []
-            for data in entities_data:
-                data['tenant_id'] = tenant_id
-                entity = self.model(**data)
-                entities.append(entity)
-            
-            self.session.add_all(entities)
-            await self.session.flush()
-            
-            for entity in entities:
-                await self.session.refresh(entity)
-            
-            logger.debug(f"Bulk created {len(entities)} {self.model.__name__} entities")
-            return entities
-            
-        except IntegrityError as e:
-            logger.error(f"Integrity error bulk creating {self.model.__name__}: {e}")
-            await self.session.rollback()
-            self._map_integrity_error(e)
-        except Exception as e:
-            logger.error(f"Error bulk creating {self.model.__name__}: {e}")
-            await self.session.rollback()
-            raise RepositoryError(f"Failed to bulk create {self.model.__name__}: {str(e)}")
     
     async def upsert(self, tenant_id: uuid.UUID, unique_fields: Dict[str, Any], **kwargs) -> T:
         """Upsert entity based on unique fields"""

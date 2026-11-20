@@ -4,7 +4,6 @@
  * Simple table display for entity versions
  * Used across Prompt, Baseline, Policy, Tool, etc.
  */
-import React from 'react';
 import Badge from '../Badge';
 import DataTable from '../DataTable/DataTable';
 import { useStatusConfig } from '@/shared/hooks/useStatusConfig';
@@ -42,10 +41,8 @@ export interface VersionsBlockProps {
 export function VersionsBlock({
   entityType,
   versions,
-  selectedVersion,
   onSelectVersion,
   recommendedVersionId,
-  onSetRecommended,
   columns: customColumns,
   className = '',
 }: VersionsBlockProps) {
@@ -103,4 +100,3 @@ export function VersionsBlock({
   );
 }
 
-export default VersionsBlock;

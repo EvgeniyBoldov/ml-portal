@@ -21,13 +21,6 @@ class JSONRPCRequest(BaseModel):
     params: Optional[Dict[str, Any]] = None
 
 
-class JSONRPCNotification(BaseModel):
-    """JSON-RPC 2.0 notification (no id, no response expected)."""
-    jsonrpc: str = "2.0"
-    method: str
-    params: Optional[Dict[str, Any]] = None
-
-
 class JSONRPCError(BaseModel):
     """JSON-RPC 2.0 error object."""
     code: int
@@ -211,17 +204,6 @@ class MCPResource(BaseModel):
     mimeType: Optional[str] = None
 
 
-class ListResourcesResult(BaseModel):
-    """Result of resources/list request."""
-    resources: List[MCPResource]
-    nextCursor: Optional[str] = None
-
-
-class ReadResourceParams(BaseModel):
-    """Parameters for resources/read request."""
-    uri: str
-
-
 class ResourceContents(BaseModel):
     """Resource contents."""
     uri: str
@@ -229,15 +211,7 @@ class ResourceContents(BaseModel):
     text: Optional[str] = None
 
 
-class ReadResourceResult(BaseModel):
-    """Result of resources/read request."""
-    contents: List[ResourceContents]
-
-
 # =============================================================================
 # Pagination
 # =============================================================================
 
-class PaginatedParams(BaseModel):
-    """Pagination parameters."""
-    cursor: Optional[str] = None

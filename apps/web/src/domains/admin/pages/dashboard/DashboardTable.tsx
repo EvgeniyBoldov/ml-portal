@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { DataTable, type DataTableProps } from '@/shared/ui';
 import styles from './DashboardTables.module.css';
 

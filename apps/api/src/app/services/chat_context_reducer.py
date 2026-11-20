@@ -1,7 +1,6 @@
 """Deterministic translation of verified runtime outcomes into context operations."""
 from __future__ import annotations
 
-from typing import Any
 
 from app.runtime.context_outcome import RuntimeOutcomeProjection
 from app.services.chat_context_contracts import ChatContextOperation

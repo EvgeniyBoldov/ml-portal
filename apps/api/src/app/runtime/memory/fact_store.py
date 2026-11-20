@@ -17,7 +17,6 @@ Conventions
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import List, Optional, Sequence
 from uuid import UUID
 
@@ -198,16 +197,6 @@ class FactStore:
         )
         await self._session.execute(stmt)
 
-    async def forget(self, fact_id: UUID) -> None:
-        """Tombstone a fact (no replacement). superseded_by = self as
-        marker so the active-row partial index excludes it.
-        """
-        stmt = (
-            update(Fact)
-            .where(Fact.id == fact_id, Fact.superseded_by.is_(None))
-            .values(superseded_by=fact_id)
-        )
-        await self._session.execute(stmt)
 
     async def forget_owned(self, *, owner_type: str, owner_id: UUID, fact_ids: Sequence[UUID]) -> int:
         result = await self._session.execute(

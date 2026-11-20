@@ -11,7 +11,6 @@ from app.services.collection.template_contract import (
 from app.services.collection.template_layout_parser import (
     RawLayout,
     SchemaNode,
-    TableRegion,
     TokenOccurrence,
     _build_schema_roots,
 )
@@ -345,26 +344,6 @@ class TemplateSchemaBuilder:
         orientation = str((hint or {}).get("orientation") or "vertical").strip().lower()
         return Orientation.HORIZONTAL if orientation == "horizontal" else Orientation.VERTICAL
 
-    def _columns_from_header(self, header_row: List[str]) -> List[TableColumn]:
-        columns: List[TableColumn] = []
-        seen: set[str] = set()
-        for idx, raw_header in enumerate(header_row, start=1):
-            label = str(raw_header or "").strip() or f"Column {idx}"
-            key = self._normalize_field_key(label, fallback=f"column_{idx}")
-            if key in seen:
-                suffix = 2
-                while f"{key}_{suffix}" in seen:
-                    suffix += 1
-                key = f"{key}_{suffix}"
-            seen.add(key)
-            columns.append(TableColumn(
-                key=key,
-                label=label,
-                type=FieldType.STRING,
-                required=False,
-                source=FieldSource.PARSER,
-            ))
-        return columns
 
     def _first_token(self, layout: RawLayout, key: str) -> Optional[TokenOccurrence]:
         for token in layout.tokens:
@@ -372,57 +351,6 @@ class TemplateSchemaBuilder:
                 return token
         return None
 
-    def _infer_field_type(self, token: Optional[TokenOccurrence]) -> FieldType:
-        hint = (token.hint_type or self._segment_param(token, "type") or "").strip().lower() if token else ""
-        if self._segment_param(token, "choice") is not None:
-            return FieldType.ENUM
-        if hint in {"int", "float", "number", "decimal"}:
-            return FieldType.NUMBER
-        if hint in {"bool", "boolean"}:
-            return FieldType.BOOL
-        if hint in {"date", "datetime"}:
-            return FieldType.DATE
-        return FieldType.STRING
-
-    def _hint_description(self, token: Optional[TokenOccurrence]) -> Optional[str]:
-        if not token:
-            return None
-        hints: list[str] = []
-        hint_type = token.hint_type or self._segment_param(token, "type")
-        hint_args = token.hint_args or self._segment_param(token, "type_args")
-        if hint_type:
-            hint = str(hint_type)
-            if hint_args:
-                hint = f"{hint}({hint_args})"
-            hints.append(hint)
-        params = self._segment_params(token)
-        if params:
-            parts = []
-            for key in ("description", "min", "max", "required", "choice"):
-                if key in params:
-                    parts.append(f"{key}={params[key]}")
-            if parts:
-                hints.append(", ".join(parts))
-        if not hints:
-            return None
-        return f"Template hint: {'; '.join(hints)}"
-
-    def _label_for_token(
-        self,
-        key: str,
-        token: Optional[TokenOccurrence],
-        *,
-        default_key: Optional[str] = None,
-        context: str = "scalar",
-    ) -> str:
-        label = None
-        params = self._segment_params(token, context=context)
-        if params:
-            label = params.get("name") or params.get("label")
-        if not label:
-            tail = (default_key or key).split(".")[-1]
-            label = tail.replace("_", " ").capitalize()
-        return str(label)
 
     def _token_for_placeholder(self, layout: RawLayout, placeholder: str) -> Optional[TokenOccurrence]:
         for token in layout.tokens:
@@ -432,21 +360,6 @@ class TemplateSchemaBuilder:
         clean = clean.replace("[]", "")
         return self._first_token(layout, clean)
 
-    def _first_table_token(
-        self,
-        layout: RawLayout,
-        prefix: str,
-        region: Optional[TableRegion],
-    ) -> Optional[TokenOccurrence]:
-        if region and region.loop_tokens:
-            for placeholder in region.loop_tokens:
-                token = self._token_for_placeholder(layout, placeholder)
-                if token is not None:
-                    return token
-        for token in layout.tokens:
-            if token.table_prefix == prefix or token.token.startswith(f"{prefix}."):
-                return token
-        return self._first_token(layout, prefix)
 
     def _segment_params(
         self,
@@ -474,27 +387,6 @@ class TemplateSchemaBuilder:
     ) -> Any:
         return self._segment_params(token, context=context).get(key)
 
-    def _is_required(self, token: Optional[TokenOccurrence], *, context: str) -> bool:
-        value = self._segment_param(token, "required", context=context)
-        return bool(value) if value is not None else False
-
-    def _min_rows(self, token: Optional[TokenOccurrence]) -> int:
-        value = self._segment_param(token, "min", context="table")
-        return int(value) if isinstance(value, (int, float)) else 0
-
-    def _max_rows(self, token: Optional[TokenOccurrence]) -> Optional[int]:
-        value = self._segment_param(token, "max", context="table")
-        return int(value) if isinstance(value, (int, float)) else None
-
-    def _table_description(self, token: Optional[TokenOccurrence]) -> Optional[str]:
-        value = self._segment_param(token, "description", context="table")
-        return str(value) if value else None
-
-    def _region_label(self, region: TableRegion, counter: int) -> str:
-        if region.loop_prefix:
-            return region.loop_prefix.replace("_", " ").capitalize()
-        first = next((str(h).strip() for h in region.header_row if str(h).strip()), "")
-        return first or f"Table {counter}"
 
     def _normalize_field_key(self, value: str, *, fallback: str) -> str:
         normalized = value.strip().lower()

@@ -11,7 +11,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 from app.schemas.runtime_events import RuntimeJournalEventResponse
-from app.schemas.runtime_trace import RunTraceResponse
 
 
 # ── Session ──────────────────────────────────────────────────────────────────

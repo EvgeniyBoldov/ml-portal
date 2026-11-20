@@ -2,7 +2,7 @@ import { apiRequest } from './http';
 
 export type DashboardPeriod = 1 | 7 | 30;
 
-export interface UsageSummary {
+interface UsageSummary {
   requests: number;
   chat_requests: number;
   shadow_requests: number;
@@ -69,7 +69,7 @@ export interface DashboardMemoryScope {
   edges: number | null;
   indexed_at: string | null;
 }
-export interface DashboardProblem {
+interface DashboardProblem {
   key: string;
   severity: 'warning' | 'danger';
   title: string;

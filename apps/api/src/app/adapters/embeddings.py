@@ -432,13 +432,3 @@ class EmbeddingServiceFactory:
         
         cls._raise_unconfigured_model(model_alias)
     
-    @classmethod
-    def list_available_models(cls) -> List[str]:
-        """List available model aliases"""
-        return list(cls._model_configs.keys())
-    
-    @classmethod
-    def clear_cache(cls) -> None:
-        """Clear all cached services and configs"""
-        cls._services.clear()
-        cls._model_configs.clear()

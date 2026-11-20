@@ -1,7 +1,3 @@
-export type ErrorEnvelope = {
-  error: { code: string; message: string; details?: unknown };
-  request_id?: string;
-};
 
 export class ApiError extends Error {
   status: number;

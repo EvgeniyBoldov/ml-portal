@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.exceptions import (
     SystemLLMRoleNotFoundError,
     SystemLLMRoleValidationError,
-    AppError as SystemLLMRoleError,
     ConflictError,
 )
 from app.models.system_llm_role import SystemLLMRole, SystemLLMRoleType
@@ -19,8 +18,6 @@ from app.repositories.system_llm_role_repository import SystemLLMRoleRepository
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate,
     OrchestratorRoleSettingsUpdate,
-    PlannerRoleUpdate, SynthesizerRoleUpdate,
-    FactExtractorRoleUpdate, FactCompactorRoleUpdate,
 )
 from app.services.runtime_limits_service import ActorLimits, ResolvedActorLimits, RuntimeLimitsService
 
@@ -132,24 +129,6 @@ class SystemLLMRoleService:
         resolution = await limit_service.resolve_orchestrator(role_type.value)
         return role, resolution
 
-    async def update_planner_role(self, data: PlannerRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Planner role."""
-        return await self.update_active_role(SystemLLMRoleType.PLANNER, data)
-
-    async def update_turn_preflight_role(self, data: SystemLLMRoleUpdate) -> Optional[SystemLLMRole]:
-        return await self.update_active_role(SystemLLMRoleType.TURN_PREFLIGHT, data)
-
-    async def update_synthesizer_role(self, data: SynthesizerRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Synthesizer role."""
-        return await self.update_active_role(SystemLLMRoleType.SYNTHESIZER, data)
-
-    async def update_fact_extractor_role(self, data: FactExtractorRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Fact Extractor role."""
-        return await self.update_active_role(SystemLLMRoleType.FACT_EXTRACTOR, data)
-
-    async def update_fact_compactor_role(self, data: FactCompactorRoleUpdate) -> Optional[SystemLLMRole]:
-        """Update the active Fact Compactor role."""
-        return await self.update_active_role(SystemLLMRoleType.FACT_COMPACTOR, data)
 
     async def delete_role(self, role_id: UUID) -> bool:
         """Delete a role."""

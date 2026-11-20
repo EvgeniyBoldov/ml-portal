@@ -17,9 +17,7 @@ from app.core.db import get_session_factory
 from app.core.logging import get_logger
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
-from app.services.file_delivery_service import FileDeliveryService
 from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
-from app.core.config import get_settings
 
 logger = get_logger(__name__)
 

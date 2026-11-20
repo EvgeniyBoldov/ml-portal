@@ -10,7 +10,6 @@ Flow:
 from __future__ import annotations
 
 import asyncio
-import json
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -188,11 +187,6 @@ def _chunk_text_for_embedding(text: str, chunk_size: int, overlap: int) -> list[
             break
         start += step
     return chunks
-
-
-def _needs_revectorization_for_model(vector_config: Any, model_alias: str) -> bool:
-    target = [str(model_alias or "").strip()] if str(model_alias or "").strip() else []
-    return _needs_revectorization_for_models(vector_config, target)
 
 
 def _needs_revectorization_for_models(vector_config: Any, model_aliases: list[str]) -> bool:

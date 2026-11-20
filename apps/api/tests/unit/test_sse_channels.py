@@ -12,8 +12,7 @@ Verifies:
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
 import pytest
@@ -72,21 +71,6 @@ async def test_document_archived_goes_to_agg_and_doc_channels():
     tenant_id = uuid4()
 
     await pub.publish_document_archived(doc_id, tenant_id, archived=True)
-
-    channels = [c.args[0] for c in redis.publish.call_args_list]
-    assert RAGEventPublisher.CHANNEL_AGG_ADMIN in channels
-    assert RAGEventPublisher.CHANNEL_DOC_FMT.format(doc_id=str(doc_id)) in channels
-
-
-@pytest.mark.asyncio
-async def test_document_added_goes_to_agg_and_doc_channels():
-    redis = _make_redis()
-    pub = RAGEventPublisher(redis_client=redis)
-    doc_id = uuid4()
-    tenant_id = uuid4()
-    collection_id = uuid4()
-
-    await pub.publish_document_added(doc_id, tenant_id, collection_id)
 
     channels = [c.args[0] for c in redis.publish.call_args_list]
     assert RAGEventPublisher.CHANNEL_AGG_ADMIN in channels

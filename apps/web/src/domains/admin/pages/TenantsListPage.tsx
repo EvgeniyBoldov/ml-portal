@@ -12,7 +12,7 @@ import { DataTable, type DataTableColumn, Badge, Button, Input, LifecycleStatusB
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
 import type { Tenant } from '@shared/api/tenant';
 
-export function TenantsListPage() {
+function TenantsListPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');

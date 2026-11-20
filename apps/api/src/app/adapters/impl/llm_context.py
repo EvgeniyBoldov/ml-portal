@@ -55,13 +55,6 @@ def inspect_context(request: Mapping[str, Any], context_window: int) -> ContextA
     return ContextAllocation(context_window, estimated, reserved, minimum, available)
 
 
-def allocate_context(request: Mapping[str, Any], context_window: int) -> ContextAllocation:
-    allocation = inspect_context(request, context_window)
-    if allocation.max_output_tokens < allocation.minimum_output_tokens:
-        raise context_exhausted()
-    return allocation
-
-
 def context_exhausted() -> LLMProviderError:
     return LLMProviderError(
         code=LLMErrorCode.CONTEXT_WINDOW_EXCEEDED,

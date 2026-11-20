@@ -217,36 +217,6 @@ class FactExtractor:
 
     # --- mapping -----------------------------------------------------------
 
-    @staticmethod
-    def _to_dtos(
-        out: _LLMFactOutput,
-        *,
-        user_message: str,
-        evidence: Sequence[FactEvidence],
-        user_id: Optional[UUID],
-        tenant_id: Optional[UUID],
-        chat_id: Optional[UUID],
-        max_facts_per_turn: int = MAX_FACTS_PER_TURN,
-        max_subject_len: int = MAX_SUBJECT_LEN,
-        max_value_len: int = MAX_VALUE_LEN,
-        confidence_min: float = CONFIDENCE_MIN,
-        max_value_words: int = MAX_VALUE_WORDS,
-    ) -> List[FactDTO]:
-        """Validate + map LLM candidates to FactDTOs.
-
-        * Drop unknown scopes.
-        * Drop candidates missing scope-required owner id (e.g. a
-          `scope=user` fact when we don't have a user_id for this turn
-          would be nonsense to persist).
-        * Clip too-long subjects/values.
-        * Cap count at MAX_FACTS_PER_TURN.
-        """
-        return FactExtractor._to_dtos_with_decisions(
-            out, user_message=user_message, evidence=evidence, user_id=user_id,
-            tenant_id=tenant_id, chat_id=chat_id, max_facts_per_turn=max_facts_per_turn,
-            max_subject_len=max_subject_len, max_value_len=max_value_len,
-            confidence_min=confidence_min, max_value_words=max_value_words,
-        ).facts
 
     @staticmethod
     def _to_dtos_with_decisions(

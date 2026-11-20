@@ -754,10 +754,6 @@ class ValidationReport(BaseModel):
     def ok(self) -> bool:
         return len(self.errors) == 0
 
-    def raise_if_invalid(self) -> None:
-        if not self.ok:
-            raise ValueError(f"Contract validation failed: {'; '.join(self.errors)}")
-
 
 class ValidationIssue(BaseModel):
     path: str = ""

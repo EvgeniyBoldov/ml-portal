@@ -5,7 +5,6 @@ import time
 import traceback
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Dict, List, Literal, Optional
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 

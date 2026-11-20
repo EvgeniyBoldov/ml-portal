@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -28,7 +27,6 @@ from app.runtime.assembler import PipelineAssembler
 from app.runtime.budgets import BudgetExceededError, BudgetRegistry, BudgetResolver
 from app.runtime.contracts import ExecutionMode, PipelineRequest, PipelineStopReason
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot, serialize_limits
-from app.runtime.envelope import PhasedEvent
 from app.runtime.entity_ids import (
     interaction_id as _interaction_id,
     memory_component_entity_id as _memory_component_entity_id,
@@ -48,14 +46,13 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.memory.recall import MemoryRecallContext
 from app.runtime.memory.mechanical_lookup import MechanicalLookupService
 from app.runtime.memory.project_context import ProjectContextResolver
-from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity, ScopeSelection, merge_selection
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity, merge_selection
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
 from app.runtime.root_route_policy import RootRoutePolicy, RootRouteRecommendation
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, interaction_from_context, require_interaction_allowed
-from app.runtime.input_builders import compact_memory_tool_records
 from app.services.agent_service import AgentService
 from app.services.permission_service import PermissionService
 from app.services.system_llm_role_service import SystemLLMRoleService

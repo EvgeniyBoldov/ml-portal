@@ -1,2 +1,2 @@
-export { useAgentList, useAgentDetail, useAgentVersionEditor } from './useAgents';
+export { useAgentList, useAgentVersionEditor } from './useAgents';
 export { useCollectionVersionEditor } from './useCollections';

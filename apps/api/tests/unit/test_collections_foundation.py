@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -19,7 +18,7 @@ from app.services.document_artifacts import (
     normalize_document_source_meta,
     upsert_document_artifact,
 )
-from app.services.collection_service import CollectionService, InvalidSchemaError, RowValidationError
+from app.services.collection_service import CollectionService
 from app.services.collection.row_service import CollectionRowService
 from app.workers.tasks_collection_vectorize import _build_point_id
 
@@ -376,52 +375,6 @@ def test_collection_field_layers_hide_system_and_limit_business_fields():
     assert [field["name"] for field in collection.get_row_writable_fields()] == ["file", "file_name", "title"]
 
 
-def test_document_collection_presets_include_immutable_specific_fields():
-    service = CollectionService(session=None)
-
-    preset_fields = service._ensure_document_preset_fields(  # noqa: SLF001
-        [
-            {
-                "name": "vendor",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.TEXT.value,
-                "required": False,
-                "description": "Vendor",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": True,
-                "used_in_prompt_context": True,
-            }
-        ]
-    )
-
-    field_map = {field["name"]: field for field in preset_fields}
-    assert field_map["file"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["title"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["source"]["category"] == FieldCategory.SPECIFIC.value
-    assert field_map["vendor"]["category"] == FieldCategory.USER.value
-
-
-def test_document_collection_rejects_admin_defined_specific_fields():
-    service = CollectionService(session=None)
-
-    try:
-        service._validate_admin_defined_fields(  # noqa: SLF001
-            [
-                {
-                    "name": "title",
-                    "category": FieldCategory.USER.value,
-                    "data_type": FieldType.INTEGER.value,
-                }
-            ],
-            CollectionType.DOCUMENT.value,
-        )
-    except InvalidSchemaError as exc:
-        assert "reserved for document-specific immutable fields" in str(exc)
-    else:
-        raise AssertionError("Expected InvalidSchemaError for reserved document-specific field")
-
-
 def test_schema_operation_contract_for_rename_and_alter():
     rename_op = SchemaOperation(op="rename", name="vendor", new_name="supplier")
     assert rename_op.op == "rename"
@@ -656,30 +609,6 @@ def test_collection_doc_search_rejects_nested_filter_value():
     assert error == "Unsupported filter value for 'title'"
 
 
-async def test_collection_doc_search_filtered_row_ids_limits_scan():
-    tool = CollectionDocSearchTool()
-    collection = _table_collection()
-
-    rows = [(str(uuid4()),) for _ in range(2001)]
-
-    class _Result:
-        def all(self):
-            return rows
-
-    class _Session:
-        async def execute(self, query, params):  # noqa: ARG002
-            assert "LIMIT 2001" in str(query)
-            return _Result()
-
-    ids = await tool._resolve_filtered_row_ids(  # noqa: SLF001
-        _Session(),
-        collection,
-        {"priority": [1, 2]},
-    )
-
-    assert len(ids) == 2001
-
-
 def test_collection_public_row_serialization_hides_operational_fields():
     collection = _table_collection()
     row = {
@@ -706,153 +635,3 @@ def test_collection_public_row_serialization_hides_operational_fields():
     assert "_vector_status" not in serialized
     assert "_vector_chunk_count" not in serialized
 
-
-def test_row_payload_validation_enforces_required_and_known_fields():
-    service = CollectionService(session=None)
-    collection = _table_collection()
-
-    try:
-        service._validate_and_prepare_row_payload(  # noqa: SLF001
-            collection,
-            {"priority": 1},
-            partial=False,
-        )
-    except RowValidationError as exc:
-        assert "Required field 'title' is missing" in str(exc)
-    else:
-        raise AssertionError("Expected RowValidationError for missing required field")
-
-    try:
-        service._validate_and_prepare_row_payload(  # noqa: SLF001
-            collection,
-            {"title": "ok", "unknown": "x"},
-            partial=False,
-        )
-    except RowValidationError as exc:
-        assert "Unknown fields: unknown" in str(exc)
-    else:
-        raise AssertionError("Expected RowValidationError for unknown field")
-
-
-def test_row_payload_validation_coerces_supported_types():
-    service = CollectionService(session=None)
-    collection = Collection(
-        id=uuid4(),
-        data_instance_id=uuid4(),
-        tenant_id=uuid4(),
-        collection_type=CollectionType.TABLE.value,
-        slug="typed_rows",
-        name="Typed Rows",
-        description="Schema with all main types",
-        table_name="coll_test_typed_rows",
-        fields=[
-            {
-                "name": "title",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.TEXT.value,
-                "required": True,
-                "description": "Title",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": True,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "count",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.INTEGER.value,
-                "required": False,
-                "description": "Count",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "ratio",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.FLOAT.value,
-                "required": False,
-                "description": "Ratio",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "enabled",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.BOOLEAN.value,
-                "required": False,
-                "description": "Enabled",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "opened_at",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.DATETIME.value,
-                "required": False,
-                "description": "Opened at",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "due_date",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.DATE.value,
-                "required": False,
-                "description": "Due date",
-                "filterable": True,
-                "sortable": True,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": True,
-            },
-            {
-                "name": "meta",
-                "category": FieldCategory.USER.value,
-                "data_type": FieldType.JSON.value,
-                "required": False,
-                "description": "Meta",
-                "filterable": False,
-                "sortable": False,
-                "used_in_retrieval": False,
-                "used_in_prompt_context": False,
-            },
-        ],
-        status="ready",
-        total_rows=0,
-        vectorized_rows=0,
-        total_chunks=0,
-        failed_rows=0,
-        is_active=True,
-        allow_unfiltered_search=False,
-        max_limit=100,
-        query_timeout_seconds=10,
-    )
-
-    prepared = service._validate_and_prepare_row_payload(  # noqa: SLF001
-        collection,
-        {
-            "title": 42,
-            "count": "12",
-            "ratio": "1.25",
-            "enabled": "true",
-            "opened_at": "2026-03-22T12:34:56Z",
-            "due_date": "2026-03-25",
-            "meta": "{\"team\":\"ops\"}",
-        },
-        partial=False,
-    )
-
-    assert prepared["title"] == "42"
-    assert prepared["count"] == 12
-    assert prepared["ratio"] == 1.25
-    assert prepared["enabled"] is True
-    assert isinstance(prepared["opened_at"], datetime)
-    assert isinstance(prepared["due_date"], date)
-    assert prepared["meta"] == {"team": "ops"}

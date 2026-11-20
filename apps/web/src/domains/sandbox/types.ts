@@ -49,7 +49,7 @@ export interface SandboxSessionUpdate {
 
 // ── Override ────────────────────────────────────────────────────────────────
 
-export type OverrideEntityType =
+type OverrideEntityType =
   | 'agent_version'
   | 'discovered_tool'
   | 'tool_release'
@@ -187,8 +187,6 @@ export interface SandboxFinalAttachment {
   sizeBytes?: number;
 }
 
-export type SandboxSSEEvent = SandboxPause;
-
 export type SandboxStreamEvent =
   | { type: 'run_started'; runId: string }
   | { type: 'progress'; progress: RuntimeProgress }
@@ -215,13 +213,13 @@ export interface RuntimeResumeRequest {
 
 // ── Catalog (sidebar data) ──────────────────────────────────────────────────
 
-export interface SandboxCatalogToolVersion {
+interface SandboxCatalogToolVersion {
   id: string;
   version: number;
   status: string;
 }
 
-export interface SandboxCatalogTool {
+interface SandboxCatalogTool {
   id: string;
   tool_id: string | null;
   slug: string;
@@ -236,7 +234,7 @@ export interface SandboxCatalogTool {
   versions: SandboxCatalogToolVersion[];
 }
 
-export interface SandboxCatalogDomainGroup {
+interface SandboxCatalogDomainGroup {
   domain: string;
   tools: SandboxCatalogTool[];
 }
@@ -273,13 +271,13 @@ export interface SandboxResolverBlueprint {
   sections: SandboxResolverSectionSpec[];
 }
 
-export interface SandboxCatalogAgentVersion {
+interface SandboxCatalogAgentVersion {
   id: string;
   version: number;
   status: string;
 }
 
-export interface SandboxCatalogAgent {
+interface SandboxCatalogAgent {
   id: string;
   slug: string;
   name: string;
@@ -287,7 +285,7 @@ export interface SandboxCatalogAgent {
   versions: SandboxCatalogAgentVersion[];
 }
 
-export interface SandboxCatalogRouter {
+interface SandboxCatalogRouter {
   id: string;
   name: string;
   description: string;
@@ -304,7 +302,7 @@ export interface SandboxCatalog {
   resolver_blueprints: SandboxResolverBlueprint[];
 }
 
-export type SandboxSelectableType =
+type SandboxSelectableType =
   | 'agent'
   | 'tool'
   | 'router'

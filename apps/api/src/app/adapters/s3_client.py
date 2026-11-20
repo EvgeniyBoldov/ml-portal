@@ -268,31 +268,6 @@ class S3Client:
             logger.error(f"Unexpected error checking {key}: {e}")
             return False
     
-    async def get_object_metadata(self, bucket: str, key: str) -> Optional[Dict[str, Any]]:
-        """Get object metadata from S3/MinIO"""
-        try:
-            client = self._get_client()
-            
-            # Run in executor to avoid blocking event loop
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: client.head_object(Bucket=bucket, Key=key)
-            )
-            
-            return {
-                'size': response.get('ContentLength'),
-                'last_modified': response.get('LastModified'),
-                'etag': response.get('ETag'),
-                'metadata': response.get('Metadata', {})
-            }
-            
-        except ClientError as e:
-            logger.error(f"S3 head object error for {key}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Unexpected error getting metadata for {key}: {e}")
-            return None
     
     async def generate_presigned_url(
         self, 

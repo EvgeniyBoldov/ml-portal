@@ -4,12 +4,9 @@ LLM Service - AI content generation for versions
 import json
 import logging
 from typing import Dict, List, Any, Optional
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
 
-from app.models.model_registry import Model
 from app.core.di import get_llm_client
 
 logger = logging.getLogger(__name__)

@@ -16,15 +16,14 @@ from app.runtime.entity_ids import (
 from app.runtime.orchestrator_contracts import (
     AgentTaskContract, TaskContractRef, TaskContractMode, TaskExecutionReceipt, IterationProposal, PlanRequest, PlannerContext,
     SchedulerActionKind, TaskAttemptFailure, TaskConfirmationRequired, TaskExecutionError, TaskRequest,
-    FreshnessPolicy, ResponseSpec, TaskOutputFulfillment, TaskOutputSpec, TerminalKind,
+    FreshnessPolicy, ResponseSpec, TaskOutputSpec,
 )
 from app.runtime.interaction import InteractionRequired, RuntimeInteraction, InteractionQuestion, InteractionRequester, interaction_history
 from app.runtime.plan_store import PlanValidationError, StaleTaskClaimError, _validate_compiled_inputs
 from app.runtime.synthesis_context import SynthesisContextBuilder, SynthesisContextError
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.task_result_reducer import TaskAttemptResultReducer
-from app.runtime.memory.tool_ledger import canonical_operation_name, document_search_evidence_document_ids
-from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, project_memory_context, task_scope, scope_selection_changes
+from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, task_scope, scope_selection_changes
 from app.runtime.memory.document_memory import DOCUMENT_MEMORY_TYPES, document_memory
 from app.runtime.memory.execution_context import memory_execution_context
 
@@ -96,62 +95,10 @@ def _memory_recalls(memory_context: Any) -> list[dict[str, Any]]:
     return recalls
 
 
-def _recall_requires_rag(memory_context: Any) -> bool:
-    return any(
-        isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("rag_required")
-        for item in _memory_recalls(memory_context)
-    )
-
-
-def _recall_requires_tool(memory_context: Any) -> bool:
-    return any(
-        isinstance(item, dict) and item.get("type") == "memory_recall" and item.get("tool_required")
-        for item in _memory_recalls(memory_context)
-    )
-
-
 def _same_user_question(candidate: str, goal: str) -> bool:
     """Compare immutable questions while ignoring formatting-only endings."""
     terminal_punctuation = " \t\r\n.!?…。！？"
     return candidate.strip().rstrip(terminal_punctuation).strip() == goal.strip().rstrip(terminal_punctuation).strip()
-
-
-def _has_successful_runtime_observation(runtime_state: Any) -> bool:
-    """Accept only successful read observations, never arbitrary tool calls."""
-    read_markers = (".get", ".get_", ".read", ".list", ".search", ".query", ".status", ".info", ".describe", ".aggregate")
-    write_markers = (".create", ".update", ".delete", ".write", ".fill", ".apply", ".change", ".set", ".run", ".execute")
-    entries = getattr(getattr(runtime_state, "tool_ledger", None), "entries", [])
-    for entry in entries:
-        if getattr(entry, "status", None) != "succeeded":
-            continue
-        operation = canonical_operation_name(str(getattr(entry, "operation", "")))
-        if operation in {"collection.document.search", "collection.table.search"}:
-            continue
-        if any(marker in operation for marker in read_markers) and not any(marker in operation for marker in write_markers):
-            return True
-    return False
-
-
-def _has_successful_rag_evidence(runtime_state: Any, memory_context: Any = None) -> bool:
-    """Require a document-search receipt relevant to recalled source evidence."""
-    expected_document_ids = {
-        str(ref.get("document_id") or "").strip()
-        for item in _memory_recalls(memory_context)
-        if isinstance(item, dict) and item.get("type") == "memory_recall"
-        for ref in item.get("source_references") or []
-        if isinstance(ref, dict) and str(ref.get("document_id") or "").strip()
-    }
-    entries = getattr(getattr(runtime_state, "tool_ledger", None), "entries", [])
-    for entry in entries:
-        if (
-            getattr(entry, "status", None) != "succeeded"
-            or canonical_operation_name(str(getattr(entry, "operation", ""))) != "collection.document.search"
-        ):
-            continue
-        matched_document_ids = document_search_evidence_document_ids(getattr(entry, "result_data", None))
-        if not expected_document_ids or expected_document_ids & matched_document_ids:
-            return True
-    return False
 
 
 class Planner(Protocol):

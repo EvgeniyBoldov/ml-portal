@@ -67,7 +67,7 @@ vi.mock('@/shared/ui/GridLayout', async importOriginal => {
   };
 });
 
-import { TenantPage } from './TenantPage';
+import TenantPage from './TenantPage';
 
 afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); mocks.create.mockResolvedValue({}); });

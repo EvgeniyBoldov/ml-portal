@@ -3,7 +3,6 @@ from uuid import UUID
 
 from sqlalchemy import select, desc, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.models.prompt import Prompt, PromptVersion, PromptStatus
 
@@ -113,16 +112,6 @@ class PromptVersionRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
-    async def get_latest_by_prompt(self, prompt_id: UUID) -> Optional[PromptVersion]:
-        """Get latest version of a prompt (any status)"""
-        stmt = (
-            select(PromptVersion)
-            .where(PromptVersion.prompt_id == prompt_id)
-            .order_by(desc(PromptVersion.version))
-            .limit(1)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
 
     async def get_all_by_prompt(self, prompt_id: UUID) -> List[PromptVersion]:
         """Get all versions of a prompt ordered by version desc"""
@@ -171,11 +160,3 @@ class PromptVersionRepository:
         await self.session.flush()
         return version
 
-    async def has_draft(self, prompt_id: UUID) -> bool:
-        """Check if prompt has a draft version"""
-        stmt = select(func.count()).where(
-            PromptVersion.prompt_id == prompt_id,
-            PromptVersion.status == PromptStatus.DRAFT.value
-        )
-        count = await self.session.scalar(stmt)
-        return count > 0

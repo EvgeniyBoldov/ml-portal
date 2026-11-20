@@ -7,7 +7,6 @@ the transaction containing the upload/status/run has committed.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -195,9 +194,6 @@ class RAGIngestService:
 
     # ── progress ─────────────────────────────────────────
 
-    async def get_progress(self, document_id: UUID) -> IngestProgress:
-        """Get ingest progress for document (reads real status nodes)."""
-        return await self._get_progress(document_id)
 
     async def _get_progress(self, document_id: UUID) -> IngestProgress:
         """Build IngestProgress from real status nodes via RAGStatusManager."""
@@ -297,15 +293,3 @@ class RAGIngestService:
 
     # ── cancel ───────────────────────────────────────────
 
-    async def cancel_ingest(self, document_id: UUID) -> Dict[str, Any]:
-        """Cancel ingest pipeline."""
-        logger.info(f"Canceling ingest for document {document_id}")
-
-        await self.status_manager.stop_ingest(document_id)
-        await self.session.commit()
-
-        return {
-            "document_id": str(document_id),
-            "status": "cancelled",
-            "canceled_at": datetime.now(timezone.utc).isoformat(),
-        }

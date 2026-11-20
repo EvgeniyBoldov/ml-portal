@@ -57,7 +57,7 @@ export async function fetchAllCollections(search: string): Promise<Collection[]>
   return items;
 }
 
-export function CollectionListPage() {
+function CollectionListPage() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const [search, setSearch] = useState('');

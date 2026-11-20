@@ -8,7 +8,7 @@ import time
 from typing import Dict, List, Any, Optional, Union
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
-from qdrant_client.http.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue
+from qdrant_client.http.models import Distance, VectorParams, Filter, FieldCondition, MatchValue
 from app.core.config import get_settings
 
 logger = get_logger(__name__)
@@ -270,33 +270,6 @@ class QdrantAdapter:
             logger.error(f"Search with filter error in {collection_name}: {e}")
             return []
     
-    async def upsert_points(self, collection_name: str, points: List[Dict[str, Any]]) -> bool:
-        """Upsert points to collection"""
-        try:
-            point_structs = [
-                PointStruct(
-                    id=point['id'],
-                    vector=point['vector'],
-                    payload=point.get('payload', {})
-                )
-                for point in points
-            ]
-            
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: self.client.upsert(
-                    collection_name=collection_name,
-                    points=point_structs
-                )
-            )
-            
-            logger.debug(f"Upserted {len(points)} points to {collection_name}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to upsert points to {collection_name}: {e}")
-            return False
     
     async def delete_points(self, collection_name: str, point_ids: List[Union[str, int]]) -> bool:
         """Delete points from collection"""
@@ -338,10 +311,6 @@ class QdrantAdapter:
             logger.error(f"Failed to delete points by filter from {collection_name}: {e}")
             return False
     
-    async def get_collection_info(self, collection_name: str) -> Optional[Dict[str, Any]]:
-        """Get collection information"""
-        await self._refresh_collection_cache()
-        return self._collection_cache.get(collection_name)
     
     async def health_check(self) -> bool:
         """Check Qdrant connectivity"""

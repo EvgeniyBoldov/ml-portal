@@ -77,7 +77,3 @@ class PublicCollectionResponse(BaseModel):
     capabilities: CollectionCapabilities = Field(default_factory=CollectionCapabilities)
     capability_reasons: dict[str, str] = Field(default_factory=dict)
 
-
-class PublicCollectionListResponse(BaseModel):
-    items: list[PublicCollectionResponse]
-    total: int

@@ -17,7 +17,7 @@ export interface ToastProps {
   onClose?: () => void;
 }
 
-export function Toast({ message, type, duration = 6000, onClose }: ToastProps) {
+function Toast({ message, type, duration = 6000, onClose }: ToastProps) {
   const [visible, setVisible] = useState(true);
   const [isExiting, setIsExiting] = useState(false);
   const cleanupTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -143,12 +143,12 @@ export function Toast({ message, type, duration = 6000, onClose }: ToastProps) {
   );
 }
 
-export interface ToastContainerProps {
+interface ToastContainerProps {
   toasts: Array<ToastProps & { id: string }>;
   onRemoveToast: (id: string) => void;
 }
 
-export function ToastContainer({ toasts, onRemoveToast }: ToastContainerProps) {
+function ToastContainer({ toasts, onRemoveToast }: ToastContainerProps) {
   if (toasts.length === 0) return null;
   const node = (
     <div className={styles.toastContainer}>
@@ -238,14 +238,4 @@ export function useSuccessToast() {
     showToast(message, 'success', duration);
 }
 
-export function useInfoToast() {
-  const { showToast } = useToast();
-  return (message: string, duration?: number) =>
-    showToast(message, 'info', duration);
-}
 
-export function useWarningToast() {
-  const { showToast } = useToast();
-  return (message: string, duration?: number) =>
-    showToast(message, 'warning', duration);
-}

@@ -4,10 +4,9 @@ Unit tests for ModelService
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from datetime import datetime, timezone
 
 from app.services.model_service import ModelService
-from app.models.model_registry import Model, ModelType, ModelStatus, HealthStatus
+from app.models.model_registry import ModelType, ModelStatus, HealthStatus
 
 
 class TestModelService:
@@ -358,33 +357,6 @@ class TestDeleteModel(TestModelService):
             await model_service.delete_model(sample_model.id)
         
         assert "Cannot delete system model" in str(exc_info.value)
-
-
-class TestGetDefaultModel(TestModelService):
-    """Test getting default model"""
-    
-    @pytest.mark.asyncio
-    async def test_get_default_model_found(self, model_service, mock_session, sample_model):
-        """Should return default model for type"""
-        sample_model.default_for_type = True
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = sample_model
-        mock_session.execute.return_value = mock_result
-        
-        result = await model_service.get_default_model(ModelType.LLM_CHAT)
-        
-        assert result == sample_model
-    
-    @pytest.mark.asyncio
-    async def test_get_default_model_not_found(self, model_service, mock_session):
-        """Should return None when no default"""
-        mock_result = MagicMock()
-        mock_result.scalar_one_or_none.return_value = None
-        mock_session.execute.return_value = mock_result
-        
-        result = await model_service.get_default_model(ModelType.EMBEDDING)
-        
-        assert result is None
 
 
 class TestUpdateHealthStatus(TestModelService):

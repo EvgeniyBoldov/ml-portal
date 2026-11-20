@@ -2,7 +2,7 @@ import React from 'react';
 
 import styles from './ConfirmationPrompt.module.css';
 
-export interface ChatConfirmationItem {
+interface ChatConfirmationItem {
   operationFingerprint: string;
   toolSlug: string;
   operation: string;

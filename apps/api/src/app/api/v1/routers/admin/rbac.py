@@ -8,7 +8,7 @@ Architecture:
 """
 from typing import List, Optional
 from uuid import UUID
-from fastapi import APIRouter, Depends, Query, Path, status, HTTPException
+from fastapi import APIRouter, Depends, Query, Path, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin

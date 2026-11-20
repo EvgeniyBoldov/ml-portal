@@ -8,17 +8,15 @@ import time
 import os
 import json
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from enum import Enum
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from pydantic import BaseModel, Field, validator
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 import uvicorn
 from sentence_transformers import SentenceTransformer
-import torch
-import numpy as np
 
 logger = logging.getLogger(__name__)
 DEFAULT_MODEL_ALIAS = "default"
@@ -243,9 +241,6 @@ class EmbeddingEngine:
             # Keep the service unavailable when model weights fail to load.
             self.model = None
     
-    def _get_model_name(self) -> str:
-        """Deprecated: kept for compatibility, prefer config.path."""
-        return self.config.path or self.config.alias
     
     async def _call_model(self, texts: List[str]) -> List[List[float]]:
         """Call the actual model"""

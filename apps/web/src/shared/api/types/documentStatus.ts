@@ -24,16 +24,6 @@ export type StageState =
   | 'unknown'
   | 'pending';
 
-export const STAGE_ORDER: StageKey[] = [
-  'upload',
-  'extract',
-  'normalize',
-  'chunk',
-  'embedding',
-  'index',
-  'archive',
-];
-
 export interface StageStatus {
   stage: StageKey;
   state: StageState;
@@ -56,7 +46,7 @@ export interface IndexModelStatus {
   error?: string;
 }
 
-export interface IngestPolicyControl {
+interface IngestPolicyControl {
   stage: string;
   node_type: string;
   status: string;
@@ -65,7 +55,7 @@ export interface IngestPolicyControl {
   can_stop: boolean;
 }
 
-export interface IngestPolicy {
+interface IngestPolicy {
   archived: boolean;
   start_allowed: boolean;
   start_reason?: string | null;
@@ -88,7 +78,7 @@ export interface DocStatus {
 
 // ─── API response types (StatusGraph) ──────────────────────────
 
-export interface PipelineNode {
+interface PipelineNode {
   key: string;
   status: string;
   error?: string;
@@ -98,7 +88,7 @@ export interface PipelineNode {
   updated_at: string;
 }
 
-export interface EmbeddingNode {
+interface EmbeddingNode {
   model: string;
   version?: string;
   status: string;

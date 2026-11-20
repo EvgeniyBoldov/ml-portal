@@ -191,11 +191,6 @@ class AgentRuntimeError(AppError):
     code = "RUNTIME_ERROR"
 
 
-class SystemLLMExecutorError(AgentRuntimeError):
-    """System LLM executor failure."""
-    code = "LLM_EXECUTOR_ERROR"
-
-
 class StatusTransitionError(ConflictError):
     """Invalid state machine transition."""
     code = "INVALID_STATUS_TRANSITION"
@@ -295,10 +290,6 @@ class LocalInstanceProtectedError(ProtectedError):
     """Local instances cannot be manually created or deleted."""
 
 
-class InstanceInUseError(InUseError):
-    """Instance is referenced and cannot be deleted."""
-
-
 # — Collections ───────────────────────────────────────────────────────────────
 
 class CollectionNotFoundError(NotFoundError):
@@ -336,50 +327,6 @@ class RbacRuleNotFoundError(NotFoundError):
 class RbacRuleDuplicateError(AlreadyExistsError):
     def __init__(self, identifier: Any = None) -> None:
         super().__init__("RbacRule", identifier)
-
-
-# — Limits ────────────────────────────────────────────────────────────────────
-
-class LimitNotFoundError(NotFoundError):
-    def __init__(self, limit_id: Any = None) -> None:
-        super().__init__("Limit", limit_id)
-
-
-class LimitVersionNotFoundError(NotFoundError):
-    def __init__(self, version: Any = None) -> None:
-        super().__init__("LimitVersion", version)
-
-
-class LimitAlreadyExistsError(AlreadyExistsError):
-    def __init__(self, slug: Any = None) -> None:
-        super().__init__("Limit", slug)
-
-
-class LimitVersionNotEditableError(NotEditableError):
-    def __init__(self, state: str = "") -> None:
-        super().__init__("LimitVersion", state)
-
-
-# — Policies ──────────────────────────────────────────────────────────────────
-
-class PolicyNotFoundError(NotFoundError):
-    def __init__(self, policy_id: Any = None) -> None:
-        super().__init__("Policy", policy_id)
-
-
-class PolicyVersionNotFoundError(NotFoundError):
-    def __init__(self, version: Any = None) -> None:
-        super().__init__("PolicyVersion", version)
-
-
-class PolicyAlreadyExistsError(AlreadyExistsError):
-    def __init__(self, slug: Any = None) -> None:
-        super().__init__("Policy", slug)
-
-
-class PolicyVersionNotEditableError(NotEditableError):
-    def __init__(self, state: str = "") -> None:
-        super().__init__("PolicyVersion", state)
 
 
 # — System LLM Roles ──────────────────────────────────────────────────────────
@@ -432,10 +379,6 @@ class CSVValidationError(AppError):
 
 class ConnectorError(ExternalServiceError):
     """Generic connector / adapter error."""
-
-
-class UpstreamError(ConnectorError):
-    """Upstream returned an error response."""
 
 
 # ──────────────────────────────────────────────────────────────────────────────

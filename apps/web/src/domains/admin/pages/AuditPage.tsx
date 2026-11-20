@@ -1,7 +1,7 @@
 /**
  * AuditPage - Audit logs viewer with DataTable
  */
-import React, { useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { adminApi, type AuditLog } from '@shared/api';
 import { qk } from '@shared/api/keys';
@@ -14,7 +14,7 @@ const AUDIT_STATUS_OPTIONS = [
   { value: 'error', label: 'Error' },
 ];
 
-export function AuditPage() {
+function AuditPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [action, setAction] = useState('');

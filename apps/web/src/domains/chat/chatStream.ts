@@ -11,7 +11,7 @@ export interface ChatStreamPause {
   interaction?: Record<string, unknown>;
 }
 
-export interface ChatStreamFinal {
+interface ChatStreamFinal {
   messageId: string;
   content: string;
   createdAt?: string;

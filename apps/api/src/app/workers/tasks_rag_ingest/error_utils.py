@@ -1,7 +1,6 @@
 from __future__ import annotations
 from app.core.logging import get_logger
 import uuid
-from typing import Optional
 
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager, StageStatus

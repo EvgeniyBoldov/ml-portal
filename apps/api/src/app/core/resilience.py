@@ -1,7 +1,7 @@
 from __future__ import annotations
 import asyncio
 import time
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Callable, Dict, TypeVar
 from enum import Enum
 from app.core.exceptions import CircuitBreakerOpen as CircuitBreakerOpenError
 from app.core.logging import get_logger

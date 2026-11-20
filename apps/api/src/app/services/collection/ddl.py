@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from typing import List
 
-from sqlalchemy import text, bindparam, TextClause
+from sqlalchemy import bindparam, TextClause
 from sqlalchemy.dialects.postgresql import JSONB
 
-from app.models.collection import FieldCategory, FieldType
+from app.models.collection import FieldType
 
 
 FIELD_TYPE_TO_PG: dict[str, str] = {

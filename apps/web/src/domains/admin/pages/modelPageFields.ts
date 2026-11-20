@@ -1,6 +1,6 @@
 import type { FieldConfig } from '@/shared/ui/GridLayout';
 
-export const hasModelCharacteristic = (value: unknown): boolean =>
+const hasModelCharacteristic = (value: unknown): boolean =>
   typeof value === 'number'
     ? Number.isFinite(value) && value > 0
     : typeof value === 'string' && value.trim().length > 0;

@@ -5,17 +5,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   platformSettingsApi,
   executionLimitsApi,
-  orchestrationApi,
+  
   systemLLMRolesApi,
-  type PlatformSettings,
   type PlatformSettingsUpdate,
-  type OrchestrationSettings,
-  type ExecutorSettingsUpdate,
-  type PlannerRoleUpdate,
-  type TurnPreflightRoleUpdate,
-  type SynthesizerRoleUpdate,
-  type FactExtractorRoleUpdate,
-  type FactCompactorRoleUpdate,
+  
+  
+  
+  
+  
+  
+  
   type DocumentMemoryExtractorRoleUpdate,
   type ActorLimits,
   type ActorLimitsResolution,
@@ -35,29 +34,7 @@ export function usePlatformSettings() {
   });
 }
 
-export function useOrchestrationSettings() {
-  return useQuery({
-    queryKey: qk.admin.orchestration.settings(),
-    queryFn: () => orchestrationApi.get(),
-    staleTime: 30_000,
-  });
-}
 
-export function useUpdateOrchestrationSettings() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: ExecutorSettingsUpdate): Promise<OrchestrationSettings> =>
-      orchestrationApi.updateExecutor(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.orchestration.all() });
-      showSuccess('Настройки оркестрации обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
 export function useUpdatePlatformSettings() {
   const queryClient = useQueryClient();
@@ -174,25 +151,6 @@ export function useOrchestratorExecutionLimits(role?: string) {
   });
 }
 
-export function useUpdateOrchestratorExecutionLimits(role?: string) {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: ActorLimits): Promise<ActorLimitsResolution> => {
-      if (!role) {
-        return Promise.reject(new Error('orchestrator role is required'));
-      }
-      return executionLimitsApi.updateOrchestrator(role, data);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['admin', 'execution-limits', 'orchestrator', role ?? ''] });
-      showSuccess('Лимиты оркестратора обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
 export function useUpdateOrchestratorRoleSettings(role: SystemLLMRoleType) {
   const queryClient = useQueryClient();
@@ -229,34 +187,7 @@ export function useActiveTurnPreflightRole() {
   });
 }
 
-export function useUpdateTurnPreflightRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-  return useMutation({
-    mutationFn: (data: TurnPreflightRoleUpdate) => systemLLMRolesApi.updateActive('turn_preflight', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('turn_preflight') });
-      showSuccess('Настройки Preflight обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
-export function useUpdatePlannerRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: PlannerRoleUpdate) => systemLLMRolesApi.updateActive('planner', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('planner') });
-      showSuccess('Настройки Planner обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
 export function useActiveSynthesizerRole() {
   return useQuery({
@@ -290,50 +221,8 @@ export function useActiveDocumentMemoryExtractorRole() {
   });
 }
 
-export function useUpdateSynthesizerRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
 
-  return useMutation({
-    mutationFn: (data: SynthesizerRoleUpdate) => systemLLMRolesApi.updateActive('synthesizer', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('synthesizer') });
-      showSuccess('Настройки Synthesizer обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
-export function useUpdateFactExtractorRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: FactExtractorRoleUpdate) => systemLLMRolesApi.updateActive('fact_extractor', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('fact_extractor') });
-      showSuccess('Настройки Fact Extractor обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
-
-export function useUpdateFactCompactorRole() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
-
-  return useMutation({
-    mutationFn: (data: FactCompactorRoleUpdate) => systemLLMRolesApi.updateActive('fact_compactor', data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.systemLlmRoles.active('fact_compactor') });
-      showSuccess('Настройки Fact Compactor обновлены');
-    },
-    onError: (err: Error) => showError(err.message),
-  });
-}
 
 export function useUpdateDocumentMemoryExtractorRole() {
   const queryClient = useQueryClient();

@@ -105,18 +105,6 @@ class ToolHandler(ABC):
         """SHA256 hash of input_schema + output_schema for observability"""
         return _compute_hash(self.input_schema, self.output_schema)
     
-    def to_llm_schema(self) -> Dict[str, Any]:
-        """
-        Преобразовать tool в формат для LLM (JSON в промпте).
-        """
-        return {
-            "type": "function",
-            "function": {
-                "name": self.slug,
-                "description": self.description,
-                "parameters": self.input_schema
-            }
-        }
 
     def to_mcp_descriptor(self) -> Dict[str, Any]:
         """

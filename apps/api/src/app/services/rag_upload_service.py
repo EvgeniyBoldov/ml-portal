@@ -4,7 +4,6 @@ RAG Upload Service - сервис для загрузки и инициализ�
 from __future__ import annotations
 from typing import Optional, List
 from uuid import UUID, uuid4
-import json
 import io
 from datetime import datetime
 

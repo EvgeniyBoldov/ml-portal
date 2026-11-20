@@ -1,7 +1,7 @@
 """Safe, typed journal projections for conversational memory writeback."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app.runtime.memory.dto import FactDTO

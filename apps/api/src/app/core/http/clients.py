@@ -1,7 +1,7 @@
 from __future__ import annotations
-from typing import Protocol, AsyncIterator, Mapping, Any, Optional
+from typing import Protocol, AsyncIterator, Mapping, Optional
 import httpx
-from ..circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from ..circuit_breaker import CircuitBreaker
 from app.adapters.interfaces.llm import LLMCallOptions
 
 class LLMClientProtocol(Protocol):
@@ -10,7 +10,6 @@ class LLMClientProtocol(Protocol):
 
 class EmbClientProtocol(Protocol):
     async def embed_texts(self, texts: list[str], model: str = "default") -> list[list[float]]: ...
-    async def embed_query(self, query: str, model: str = "default") -> list[float]: ...
 
 class HTTPEmbClient:
     def __init__(self, base_url: str, *, timeout: int = 30, max_retries: int = 2, breaker: CircuitBreaker | None = None):
@@ -26,10 +25,6 @@ class HTTPEmbClient:
         data = await self._post_json("/embed/batch", payload)
         return data.get("vectors", [])
 
-    async def embed_query(self, query: str, model: str = "default") -> list[float]:
-        resolved_model = self._default_model if not model or model == "default" else model
-        data = await self._post_json("/embed/query", {"query": query, "model": resolved_model})
-        return data.get("vector", [])
 
     async def _post_json(self, path: str, payload: dict) -> dict:
         attempts = self._retries + 1

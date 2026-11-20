@@ -40,14 +40,6 @@ class ScopePayload(_Payload):
     source: Literal["explicit", "inferred"] = "explicit"
 
 
-class TopicScopePayload(BaseModel):
-    """The compactor may infer a topic, never a project or entity identity."""
-    model_config = ConfigDict(extra="forbid")
-    topic: str = Field(min_length=1, max_length=600)
-    topic_trust_class: Literal["model_inferred"] = "model_inferred"
-    source: Literal["inferred"] = "inferred"
-
-
 class GoalPayload(_Payload):
     text: str = Field(min_length=1, max_length=1200)
     status: Literal["active", "completed"] = "active"

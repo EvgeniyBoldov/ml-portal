@@ -17,15 +17,10 @@ import { adminApi } from '@/shared/api/admin';
 import { agentsApi, type Agent } from '@/shared/api/agents';
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { tenantApi } from '@/shared/api/tenant';
-import { rbacApi, type EnrichedRule, type RbacEffect, type RbacRuleCreate, type ResourceType } from '@/shared/api/rbac';
-import collectionsApi from '@/shared/api/collections';
+import { rbacApi, type RbacEffect, type RbacRuleCreate, type ResourceType } from '@/shared/api/rbac';
+import { collectionsApi } from '@/shared/api/collections';
 import { buildRbacRuleColumns, resolveRbacSearchText } from '../shared/rbacRuleTable';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
-
-const EFFECT_OPTIONS = [
-  { value: 'allow', label: 'Разрешён' },
-  { value: 'deny', label: 'Запрещён' },
-];
 
 export function RbacListPage() {
   const navigate = useNavigate();
@@ -322,4 +317,3 @@ export function RbacListPage() {
   );
 }
 
-export default RbacListPage;

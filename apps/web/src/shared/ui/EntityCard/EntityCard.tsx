@@ -37,7 +37,7 @@ export function EntityCard({
   );
 }
 
-export interface EntityCardItemProps {
+interface EntityCardItemProps {
   title: string;
   subtitle?: string;
   badge?: React.ReactNode;
@@ -46,7 +46,7 @@ export interface EntityCardItemProps {
   className?: string;
 }
 
-export function EntityCardItem({
+function EntityCardItem({
   title,
   subtitle,
   badge,
@@ -73,4 +73,3 @@ export function EntityCardItem({
 
 EntityCard.Item = EntityCardItem;
 
-export default EntityCard;

@@ -5,7 +5,7 @@ Provides consistent transaction management across all workers.
 Workers should NEVER call session.commit() directly - use these helpers instead.
 """
 from __future__ import annotations
-from typing import AsyncContextManager, TypeVar, Callable, Any
+from typing import TypeVar
 from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
@@ -39,22 +39,6 @@ async def worker_transaction(session: AsyncSession, task_name: str):
         raise
     finally:
         await session.close()
-
-
-async def flush_for_sse(session: AsyncSession, task_name: str, operation: str):
-    """
-    Flush session to send SSE events immediately.
-    
-    Use this instead of commit() when you need to trigger SSE events
-    but want to keep the transaction open.
-    
-    Args:
-        session: Database session
-        task_name: Name of the task (for logging)
-        operation: Description of what was flushed (for logging)
-    """
-    await session.flush()
-    logger.debug(f"[{task_name}] Flushed for SSE: {operation}")
 
 
 async def checkpoint_commit(session: AsyncSession, task_name: str, checkpoint: str):

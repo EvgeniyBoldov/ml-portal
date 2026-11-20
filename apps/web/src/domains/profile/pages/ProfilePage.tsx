@@ -2,7 +2,7 @@
  * ProfilePage - Личный кабинет пользователя
  * Управление профилем и персональными API токенами
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { apiRequest } from '@shared/api/http';
 import { qk } from '@/shared/api/keys';
@@ -10,7 +10,7 @@ import { ProfileMemoryScopes } from '../components/ProfileMemoryScopes';
 import { ProfileTenantManagement } from '../components/ProfileTenantManagement';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
-import Select from '@shared/ui/Select';
+import { Select } from '@shared/ui/Select';
 import Modal from '@shared/ui/Modal';
 import ConfirmDialog from '@shared/ui/ConfirmDialog';
 import { useErrorToast, useSuccessToast } from '@shared/ui/Toast';

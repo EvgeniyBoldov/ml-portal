@@ -7,7 +7,7 @@ import { apiRequest } from './http';
 // TYPES
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type AgentType = 'regular' | 'shadow';
+type AgentType = 'regular' | 'shadow';
 
 export interface Agent {
   agent_type?: AgentType;
@@ -34,7 +34,7 @@ export interface Agent {
   updated_at: string;
 }
 
-export interface AgentVersionInfo {
+interface AgentVersionInfo {
   id: string;
   version: number;
   status: string;

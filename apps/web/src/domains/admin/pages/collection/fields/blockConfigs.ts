@@ -1,7 +1,7 @@
 import type { CollectionType } from '@/shared/api';
 import type { FieldConfig } from '@/shared/ui/GridLayout';
 
-export const COLLECTION_TYPE_OPTIONS = [
+const COLLECTION_TYPE_OPTIONS = [
   { value: 'table', label: 'Таблица' },
   { value: 'document', label: 'Документы (RAG)' },
   { value: 'sql', label: 'SQL' },
@@ -205,24 +205,3 @@ export const VECTOR_STATS_FIELDS: FieldConfig[] = [
   },
 ];
 
-export const STATUS_FIELDS: FieldConfig[] = [
-  {
-    key: 'status',
-    type: 'badge',
-    label: 'Статус',
-    badgeTone: 'neutral',
-    editable: false,
-  },
-  {
-    key: 'qdrant_collection_name',
-    type: 'code',
-    label: 'Qdrant collection',
-    editable: false,
-  },
-  {
-    key: 'status_details',
-    type: 'json',
-    label: 'Status details',
-    editable: false,
-  },
-];

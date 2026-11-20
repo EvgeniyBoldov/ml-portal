@@ -186,4 +186,3 @@ export function StatusFlowDetails({
   );
 }
 
-export default StatusFlowDetails;

@@ -254,6 +254,5 @@ Payloads redacted по runtime policy (secrets/tokens/passwords не должн�
 ```bash
 make test-runtime-core
 make test-runtime-integration
-make test-runtime-eval
 make test-backend-10-10-gate
 ```

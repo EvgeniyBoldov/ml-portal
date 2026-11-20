@@ -1,4 +1,3 @@
-import React from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { Icon } from '@shared/ui/Icon';
 import styles from './AdminSidebar.module.css';

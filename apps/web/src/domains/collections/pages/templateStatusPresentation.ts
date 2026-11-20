@@ -1,4 +1,4 @@
-export interface TemplateDescriptionSection {
+interface TemplateDescriptionSection {
   heading: 'Поля' | 'Таблицы';
   items: string[];
 }
@@ -60,9 +60,6 @@ export function formatTemplateFormat(value: unknown): string | null {
   return FORMAT_LABELS[normalized] ?? value.trim();
 }
 
-export function truncateTemplateIdentifier(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 8)}…` : value;
-}
 
 export function parseTemplateDescription(description: string): ParsedTemplateDescription {
   const headingPattern = /(?:^|\s)(Поля|Таблицы):\s*/gi;

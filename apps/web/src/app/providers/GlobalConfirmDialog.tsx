@@ -1,7 +1,6 @@
 /**
  * GlobalConfirmDialog - Renders confirm dialog from Zustand store
  */
-import React from 'react';
 import { useAppStore } from '../store/app.store';
 import ConfirmDialog from '@shared/ui/ConfirmDialog';
 

@@ -46,11 +46,6 @@ class EntityLedger:
             raise BudgetExceededError(scope="orchestrator", metric=metric, used=next_used, limit=limit)
         self.own[metric] = next_used
 
-    def can_consume(self, metric: MetricName, amount: int = 1) -> bool:
-        limit = self._limit_of(metric)
-        if limit is None:
-            return True
-        return int(self.own.get(metric, 0)) + max(0, int(amount)) <= limit
 
     def _limit_of(self, metric: MetricName) -> Optional[int]:
         if self.limits is None:

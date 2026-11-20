@@ -41,6 +41,3 @@ class LifecycleMixin:
         UUID(as_uuid=True), nullable=True, index=True
     )
 
-    @property
-    def is_deprecated(self) -> bool:
-        return self.lifecycle_status == "deprecated"

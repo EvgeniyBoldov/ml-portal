@@ -2,25 +2,22 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Type, TypeVar, Union
+from typing import Dict, Optional, TypeVar, Union
 from uuid import UUID
 
 from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_logger
 from app.models.model_registry import Model
 from app.models.tool_instance import ToolInstance
 from app.services.health.base import (
     HealthCheckAdapter,
-    HealthCheckTarget,
     HealthProbeResult,
     HealthStatus,
     BackoffPolicy,
     add_jitter,
     BACKOFF_POLICY_1M,
-    BACKOFF_POLICY_10M,
 )
 
 logger = get_logger(__name__)

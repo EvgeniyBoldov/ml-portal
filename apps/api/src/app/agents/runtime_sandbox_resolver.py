@@ -9,7 +9,6 @@ from app.services.sandbox_override_resolver import SandboxOverrideResolver
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
-    from app.agents.execution_preflight import ExecutionRequest
 
 logger = get_logger(__name__)
 

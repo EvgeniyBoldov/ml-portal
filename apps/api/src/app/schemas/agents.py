@@ -177,19 +177,6 @@ class AgentVersionResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class AgentVersionInfo(BaseModel):
-    """Short version info for list views"""
-    id: UUID
-    version: int
-    status: str
-    identity: Optional[str] = None
-    mission: Optional[str] = None
-    planner_short_info: Optional[str] = None
-    notes: Optional[str] = None
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # AGENT DETAIL (container + versions)
 # ─────────────────────────────────────────────────────────────────────────────

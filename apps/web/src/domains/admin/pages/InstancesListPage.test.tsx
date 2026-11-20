@@ -80,7 +80,7 @@ vi.mock('@/shared/ui', async importOriginal => {
   };
 });
 
-import { InstancesListPage } from './InstancesListPage';
+import InstancesListPage from './InstancesListPage';
 
 afterEach(() => {
   cleanup();

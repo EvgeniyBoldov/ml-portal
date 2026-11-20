@@ -12,13 +12,11 @@ Behavior checks should prefer explicit bindings (for example collection binding 
 from typing import List, Optional, Dict, Any, Tuple
 from uuid import UUID
 from datetime import datetime, timezone
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
     ToolInstanceNotFoundError,
     LocalInstanceProtectedError,
-    InstanceInUseError,
     AppError as ToolInstanceError,
 )
 from app.core.logging import get_logger
@@ -68,22 +66,6 @@ class ToolInstanceService:
     }
     logger = logger
 
-    @staticmethod
-    def _infer_service_provider_kind(
-        *,
-        placement: str,
-        domain: str,
-        slug: str,
-    ) -> Optional[str]:
-        return ToolInstanceValidationService.infer_service_provider_kind(
-            placement=placement,
-            domain=domain,
-            slug=slug,
-            local_table_service_slug=ToolInstanceService.LOCAL_TABLE_SERVICE_SLUG,
-            local_document_service_slug=ToolInstanceService.LOCAL_DOCUMENT_SERVICE_SLUG,
-            local_template_service_slug=ToolInstanceService.LOCAL_TEMPLATE_SERVICE_SLUG,
-            local_runtime_service_slug=ToolInstanceService.LOCAL_RUNTIME_SERVICE_SLUG,
-        )
 
     @classmethod
     def _normalize_config(
@@ -465,52 +447,9 @@ class ToolInstanceService:
 
     # ─── Instance resolution ────────────────────────────────────────────
 
-    async def resolve_instance(
-        self,
-        tool_slug: str,
-        user_id: Optional[UUID] = None,
-        tenant_id: Optional[UUID] = None,
-    ) -> Optional[ToolInstance]:
-        """Resolve instance by slug."""
-        instance = await self.repo.get_by_slug(tool_slug)
-        if instance and instance.is_active:
-            return instance
-        return None
 
     # ─── Local instance management (internal) ─────────────────────────
 
-    async def create_local_instance(
-        self,
-        slug: str,
-        name: str,
-        description: Optional[str] = None,
-        config: Optional[Dict[str, Any]] = None,
-        domain: str = "rag",
-        instance_kind: str = "data",
-        connector_type: str = "data",
-        connector_subtype: Optional[str] = None,
-        access_via_instance_id: Optional[UUID] = None,
-    ) -> ToolInstance:
-        """Create a LOCAL instance (internal use only, not exposed via API)."""
-        instance = await self.create_instance(
-            slug=slug,
-            name=name,
-            description=description,
-            instance_kind=instance_kind,
-            connector_type=connector_type,
-            connector_subtype=connector_subtype,
-            placement=InstancePlacement.LOCAL.value,
-            domain=domain,
-            url="",
-            config=config,
-            access_via_instance_id=access_via_instance_id,
-            allow_local=True,
-        )
-        instance.health_status = "healthy"
-        instance.is_active = True
-        result = await self.repo.update(instance)
-        logger.info(f"Created local instance: {slug} (domain: {domain})")
-        return result
 
     async def _ensure_local_service_instance(
         self,
@@ -579,9 +518,6 @@ class ToolInstanceService:
         """Perform health check on a tool instance."""
         return await self.health.check_health(instance_id)
 
-    async def _perform_health_check(self, instance: ToolInstance) -> HealthCheckResult:
-        """Perform actual health check using instance url."""
-        return await self.health.perform_health_check(instance)
 
     # ─── Rescan ───────────────────────────────────────────────────────
 

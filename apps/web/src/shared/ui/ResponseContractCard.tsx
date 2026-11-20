@@ -300,4 +300,3 @@ export function ResponseContractCard({ contract, rulesText, outputRequirementsTe
   );
 }
 
-export default ResponseContractCard;

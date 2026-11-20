@@ -20,7 +20,6 @@ from app.core.exceptions import (
     InvalidSchemaError,
     ValidationError as DomainValidationError,
 )
-from app.models.tool_instance import ToolInstance
 from app.core.logging import get_logger
 from app.services.tool_instance_service import ToolInstanceService
 from app.services.collection.ddl import (
@@ -32,8 +31,6 @@ from app.services.collection.ddl import (
 )
 from app.services.collection.field_coercion import (
     RowValidationError,
-    coerce_value as _coerce_value,
-    validate_and_prepare_payload as _validate_and_prepare_payload,
 )
 from app.services.collection.version_service import CollectionVersionService
 from app.services.collection.row_service import CollectionRowService
@@ -81,11 +78,6 @@ class CollectionService:
     def _validate_slug(self, slug: str) -> None:
         self.contract.validate_slug(slug)
 
-    def _validate_fields(self, fields: List[dict], collection_type: str) -> None:
-        self.contract.validate_fields(fields, collection_type)
-
-    def _validate_admin_defined_fields(self, fields: List[dict], collection_type: str) -> None:
-        self.contract.validate_admin_defined_fields(fields, collection_type)
 
     def _build_create_table_sql(self, table_name: str, fields: List[dict]) -> str:
         return _build_create_table_sql(table_name, fields)
@@ -93,13 +85,6 @@ class CollectionService:
     def _build_indexes_sql(self, table_name: str, fields: List[dict]) -> List[str]:
         return _build_indexes_sql(table_name, fields)
 
-    def _coerce_row_value(self, field_name: str, field_type: str, value: Any) -> Any:
-        return _coerce_value(field_name, field_type, value)
-
-    def _validate_and_prepare_row_payload(
-        self, collection: Collection, payload: dict, *, partial: bool
-    ) -> dict:
-        return _validate_and_prepare_payload(collection, payload, partial=partial)
 
     @staticmethod
     def _apply_typed_binds(sql, field_defs: List[dict]):
@@ -136,13 +121,6 @@ class CollectionService:
         """Reset row-level and collection-level table vector state after schema-affecting changes."""
         await self.vector.reset_table_vector_state(collection)
 
-    async def _resolve_primary_vector_model(self, tenant_id: uuid.UUID) -> Optional[str]:
-        """Resolve primary embedding model alias for vector collection provisioning."""
-        return await self.vector.resolve_primary_vector_model(tenant_id)
-
-    async def _resolve_embedding_dimensions(self, model_alias: str) -> int:
-        """Resolve vector dimensions for embedding model; fallback to 384."""
-        return await self.vector.resolve_embedding_dimensions(model_alias)
 
     async def _provision_qdrant_collection(
         self,
@@ -206,14 +184,6 @@ class CollectionService:
         for create_sql in self._build_indexes_sql(table_name, current_fields):
             await self.session.execute(text(create_sql))
 
-    def _normalize_default_sort(self, collection: Collection, fields: List[dict]) -> None:
-        self.contract.normalize_default_sort(collection, fields)
-
-    def _ensure_document_preset_fields(self, fields: List[dict]) -> List[dict]:
-        return self.contract.ensure_document_preset_fields(fields)
-
-    def _ensure_sql_preset_fields(self, fields: List[dict]) -> List[dict]:
-        return self.contract.ensure_sql_preset_fields(fields)
 
     async def ensure_sql_storage_table(self, collection: Collection) -> None:
         """
@@ -309,51 +279,6 @@ class CollectionService:
         await self.session.flush()
         return collection
 
-    async def _create_local_collection(
-        self,
-        tenant_id: uuid.UUID,
-        slug: str,
-        name: str,
-        fields: List[dict],
-        source_contract: Optional[dict] = None,
-        vector_config: Optional[dict] = None,
-        collection_type: str = CollectionType.TABLE.value,
-        data_instance_id: Optional[uuid.UUID] = None,
-    ) -> Collection:
-        return await self.lifecycle.create_local_collection(
-            tenant_id=tenant_id,
-            slug=slug,
-            name=name,
-            fields=fields,
-            source_contract=source_contract,
-            vector_config=vector_config,
-            collection_type=collection_type,
-            data_instance_id=data_instance_id,
-        )
-
-    async def _create_remote_collection(
-        self,
-        tenant_id: uuid.UUID,
-        slug: str,
-        name: str,
-        fields: List[dict],
-        source_contract: Optional[dict] = None,
-        collection_type: str = CollectionType.SQL.value,
-        data_instance_id: Optional[uuid.UUID] = None,
-        table_name: Optional[str] = None,
-        table_schema: Optional[dict] = None,
-    ) -> Collection:
-        return await self.lifecycle.create_remote_collection(
-            tenant_id=tenant_id,
-            slug=slug,
-            name=name,
-            fields=fields,
-            source_contract=source_contract,
-            collection_type=collection_type,
-            data_instance_id=data_instance_id,
-            table_name=table_name,
-            table_schema=table_schema,
-        )
 
     def _build_initial_version(self, collection: Collection) -> CollectionVersion:
         return CollectionVersionService.build_initial_version(collection)
@@ -569,18 +494,6 @@ class CollectionService:
         return await self.schema_evolution.apply_schema_operations(collection, schema_ops)
     
 
-    async def _create_tool_instance_for_collection(self, collection: Collection) -> Optional[ToolInstance]:
-        """
-        Resolve canonical local service instance for a collection.
-
-        Collection no longer creates dedicated local DATA instances.
-        It is linked directly to the shared local SERVICE provider by type.
-        """
-        local_service = await self.tool_instance_service.resolve_local_service_for_collection_type(
-            collection.collection_type
-        )
-        return local_service
-
     async def get_by_id(self, collection_id: uuid.UUID) -> Optional[Collection]:
         return await self.query.get_by_id(collection_id)
 
@@ -736,16 +649,6 @@ class CollectionService:
             slug, drop_table=drop_table
         )
 
-    async def _delete_tool_instance_for_collection(self, instance_id: uuid.UUID) -> None:
-        """Auto-delete the ToolInstance linked to a collection."""
-        try:
-            instance = await self.tool_instance_service.get_instance(instance_id)
-            if instance.connector_type != "data":
-                return
-            await self.tool_instance_service.delete_local_instance(instance_id)
-            logger.info(f"Deleted tool instance '{instance.slug}' for collection")
-        except Exception as e:
-            logger.error(f"Failed to delete tool instance {instance_id}: {e}")
 
     async def update_row_count(self, collection_id: uuid.UUID) -> int:
         return await self.query.update_row_count(collection_id)

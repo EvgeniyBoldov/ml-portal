@@ -38,10 +38,6 @@ def _jira_host(base_url: str) -> str:
     return urlparse(base_url).hostname or "unknown"
 
 
-def _auth_scheme(headers: dict[str, str]) -> str:
-    return headers.get("Authorization", "").split(" ", 1)[0].lower() or "none"
-
-
 @app.on_event("startup")
 async def log_startup() -> None:
     logger.info(

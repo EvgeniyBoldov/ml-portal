@@ -1,44 +1,11 @@
 import { useQuery } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { collectionsApi, type Collection } from '@/shared/api/collections';
+import { collectionsApi } from '@/shared/api/collections';
 import { qk } from '@/shared/api/keys';
 import Button from '@/shared/ui/Button';
-import Select from '@/shared/ui/Select';
+import { Select } from '@/shared/ui/Select';
 import styles from './CollectionPresentation.module.css';
 
-export const typeLabels: Record<string, string> = {
-  table: 'Таблица',
-  document: 'Документы',
-  template: 'Шаблоны',
-  sql: 'SQL-источник',
-  api: 'API-источник',
-};
-const readinessLabels: Record<string, string> = {
-  created: 'Настройка',
-  discovered: 'Источник описан',
-  ingesting: 'Обработка',
-  ready: 'Готова',
-  degraded: 'Частично доступна',
-  error: 'Ошибка',
-  unknown: 'Готовность не подтверждена',
-};
-export function collectionReadiness(collection: Collection) {
-  return (
-    readinessLabels[collection.readiness?.status || 'unknown'] ||
-    readinessLabels.unknown
-  );
-}
-export function collectionDescription(collection: Collection) {
-  return collection.version?.status === 'published'
-    ? collection.description || 'Описание не задано'
-    : 'Описание не задано';
-}
-export function collectionCount(collection: Collection) {
-  const count = collection.count;
-  if (!count || count.value === null || !count.kind || !count.unit)
-    return 'Количество не указано';
-  return `${count.value.toLocaleString('ru-RU')} ${count.unit}`;
-}
 export function useCollectionWorkspace() {
   const [params, setParams] = useSearchParams();
   const tenantId = params.get('tenant_id') || '';

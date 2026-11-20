@@ -68,22 +68,6 @@ class FieldType(str, Enum):
     FILE = "file"
 
 
-class FilterOperator(str, Enum):
-    """Supported filter operators for DSL"""
-    EQ = "eq"              # Equal
-    NEQ = "neq"            # Not equal
-    IN = "in"              # In list
-    NOT_IN = "not_in"      # Not in list
-    LIKE = "like"          # LIKE pattern
-    CONTAINS = "contains"  # Contains substring (ILIKE %value%)
-    GT = "gt"              # Greater than
-    GTE = "gte"            # Greater than or equal
-    LT = "lt"              # Less than
-    LTE = "lte"            # Less than or equal
-    RANGE = "range"        # Range (gte + lt)
-    IS_NULL = "is_null"    # Is null / is not null
-
-
 class Collection(Base, LifecycleMixin):
     """
     First-class data asset of the platform.
@@ -273,9 +257,6 @@ class Collection(Base, LifecycleMixin):
         schema = self._ensure_schema()
         schema.schema_status = value
 
-    def get_required_fields(self) -> List[dict]:
-        """Return required explicit fields."""
-        return [f for f in self.fields if f.get("required", False)]
 
     def get_system_fields(self) -> List[dict]:
         """Return derived platform-owned record fields."""
@@ -340,17 +321,11 @@ class Collection(Base, LifecycleMixin):
         """Fields that participate in business semantics."""
         return [*self.get_specific_fields(), *self.get_user_fields()]
 
-    def get_schema_mutable_fields(self) -> List[dict]:
-        """Fields whose schema may evolve through controlled admin changes."""
-        return self.get_user_fields()
 
     def get_row_writable_fields(self) -> List[dict]:
         """Fields writable through normal admin/data ingest paths."""
         return self.get_business_fields()
 
-    def get_mutable_fields(self) -> List[dict]:
-        """Backward-compatible alias for writable non-system fields."""
-        return self.get_row_writable_fields()
 
     def get_filterable_fields(self) -> List[dict]:
         """Business fields allowed in filtering."""
@@ -379,14 +354,6 @@ class Collection(Base, LifecycleMixin):
         """Check if this is a document collection."""
         return self.collection_type == CollectionType.DOCUMENT.value
 
-    @property
-    def file_fields(self) -> List[str]:
-        """Get names of explicit file fields."""
-        return [
-            field["name"]
-            for field in self.fields
-            if field.get("data_type") == FieldType.FILE.value
-        ]
 
     @property
     def has_vector_search(self) -> bool:

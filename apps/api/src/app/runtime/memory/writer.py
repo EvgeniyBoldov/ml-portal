@@ -19,7 +19,6 @@ from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.prometheus_metrics import memory_writer_component_status_total
 from app.models.chat import Chats
-from app.models.memory import FactScope, FactSource
 from app.models.sandbox import SandboxBranch
 from app.runtime.memory.fact_extractor import (
     FactExtractor, FactExtractionResult,
@@ -528,23 +527,6 @@ def _resolve_sandbox_branch_id(sandbox_overrides: Optional[dict]) -> Optional[UU
         return UUID(str(raw))
     except (TypeError, ValueError):
         return None
-
-
-def _fact_to_artifact_row(fact: Any) -> dict[str, Any]:
-    scope_value = getattr(fact, "scope", FactScope.USER)
-    if hasattr(scope_value, "value"):
-        scope_value = scope_value.value
-    source_value = getattr(fact, "source", "user_utterance")
-    if hasattr(source_value, "value"):
-        source_value = source_value.value
-    return {
-        "scope": str(scope_value),
-        "subject": str(getattr(fact, "subject", "")),
-        "value": str(getattr(fact, "value", "")),
-        "source": str(source_value),
-        "confidence": float(getattr(fact, "confidence", 1.0)),
-        "source_ref": getattr(fact, "source_ref", None),
-    }
 
 
 def _looks_non_retryable_limit_error(text: str) -> bool:

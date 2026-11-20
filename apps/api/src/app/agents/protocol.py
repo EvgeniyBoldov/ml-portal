@@ -85,10 +85,6 @@ class ParsedResponse:
     tool_calls: List[ToolCall]
     has_tool_calls: bool
 
-    @property
-    def is_final(self) -> bool:
-        return not self.has_tool_calls
-
 
 def parse_llm_response(content: str, *, strict: bool = False) -> ParsedResponse:
     """Parse a text model response and extract canonical tool calls."""
@@ -237,26 +233,6 @@ def _prompt_label(labels: Dict[str, Any], key: str, default: str) -> str:
     if isinstance(value, str) and value.strip():
         return value.strip()
     return default
-
-
-def _prompt_budget(budgets: Dict[str, Any], key: str) -> Optional[int]:
-    def _coerce(value: Any) -> Optional[int]:
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError):
-            return None
-        return parsed if parsed > 0 else None
-
-    direct = _coerce(budgets.get(key))
-    if direct is not None:
-        return direct
-    for section in ("operations", "prompt_assembler", "capability_card", "json_schema"):
-        section_value = budgets.get(section)
-        if isinstance(section_value, dict):
-            nested = _coerce(section_value.get(key))
-            if nested is not None:
-                return nested
-    return None
 
 
 def build_tool_results_message(results: List[Tuple[ToolCall, str]]) -> str:

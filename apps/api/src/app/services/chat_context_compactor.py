@@ -13,7 +13,7 @@ from app.core.logging import get_logger
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredLLMCall
 from app.services.chat_context_contracts import (
-    ChatContextOperation, DecisionPayload, GoalPayload, RecentAnchorPayload, TopicScopePayload, ScopePayload,
+    ChatContextOperation, DecisionPayload, GoalPayload, RecentAnchorPayload, ScopePayload,
 )
 
 logger = get_logger(__name__)

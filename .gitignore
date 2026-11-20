@@ -204,3 +204,4 @@ AGENTS.md
 !.codex/agents/
 .codex/agents/*
 !.codex/agents/designer.toml
+.cleanup-tmp/

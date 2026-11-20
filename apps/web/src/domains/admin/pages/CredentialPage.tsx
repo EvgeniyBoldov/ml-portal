@@ -10,10 +10,10 @@ import { credentialsApi, type Credential, type CredentialCreate } from '@/shared
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
 import { useEntityEditor } from '@/shared/hooks/useEntityEditor';
-import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
-import { Badge, Button, ConfirmDialog } from '@/shared/ui';
+import { Badge, ConfirmDialog } from '@/shared/ui';
 
 const AUTH_TYPE_LABELS: Record<string, string> = {
   token: 'API Token',

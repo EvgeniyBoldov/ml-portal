@@ -104,16 +104,6 @@ function getVersionStatusTone(status: string): 'success' | 'neutral' | 'warn' | 
   return 'neutral';
 }
 
-const TYPE_LABELS: Record<string, string> = {
-  agent_version: 'Версия агента',
-  tool_release: 'Релиз инструмента',
-  discovered_tool: 'Инструмент',
-  orchestration: 'Оркестрация',
-  policy: 'Политика',
-  limit: 'Лимиты',
-  model: 'Модель',
-};
-
 interface FieldsSection {
   title: string;
   fields: SandboxConfigField[];
@@ -169,16 +159,6 @@ const SANDBOX_PROMPT_EDITOR_KEYS = new Set([
   ...ORCHESTRATOR_PROMPT_KEYS,
   ...(AGENT_SECTIONS.find((section) => section.title === 'Prompt')?.keys ?? []),
 ]);
-
-const PLATFORM_LIMIT_KEYS = [
-  'abs_max_timeout_s',
-  'abs_max_retries',
-  'abs_max_steps',
-  'abs_max_plan_steps',
-  'abs_max_concurrency',
-  'abs_max_task_runtime_s',
-  'abs_max_tool_calls_per_step',
-] as const;
 
 const RISK_LEVEL_OPTIONS: SelectOption[] = [
   { value: 'low', label: 'low' },
@@ -292,7 +272,7 @@ function buildSectionsFromBlueprint(
     .filter((section) => section.fields.length > 0);
 }
 
-export function ConfigPanel({
+function ConfigPanel({
   ...props
 }: SessionConfigPanelProps) {
   const { overrides, selectedItem, catalog, sessionId, isReadOnly, activeBranchId, traceTarget, traceState } = props;
@@ -742,26 +722,6 @@ export function ConfigPanel({
       entity_id: selectedEntityMeta.entityId,
     });
     setDrafts({});
-  };
-
-  const handleAgentVersionChange = async (versionId: string): Promise<void> => {
-    setSelectedAgentVersionId(versionId);
-    if (!activeBranchId || !selectedAgent) return;
-    if (!versionId || versionId === selectedAgent.current_version_id) {
-      await clearMutation.mutateAsync({
-        entity_type: 'orchestration',
-        entity_id: null,
-        field_path: 'agent.version_id',
-      });
-      return;
-    }
-    await upsertMutation.mutateAsync({
-      entity_type: 'orchestration',
-      entity_id: null,
-      field_path: 'agent.version_id',
-      value_json: versionId,
-      value_type: 'select',
-    });
   };
 
   const handleSetBranchPrimary = async (): Promise<void> => {

@@ -1,9 +1,9 @@
 import React from 'react';
 import { Button } from '@/shared/ui';
 
-export type UnifiedVersionStatus = 'draft' | 'published' | 'archived';
+type UnifiedVersionStatus = 'draft' | 'published' | 'archived';
 
-export interface VersionLifecycleCallbacks {
+interface VersionLifecycleCallbacks {
   onEdit?: () => void;
   onPublish?: () => void;
   onSetPrimary?: () => void;
@@ -12,7 +12,7 @@ export interface VersionLifecycleCallbacks {
   onDelete?: () => void;
 }
 
-export interface VersionLifecycleLoadingState {
+interface VersionLifecycleLoadingState {
   publish?: boolean;
   primary?: boolean;
   archive?: boolean;
@@ -27,7 +27,7 @@ export interface UseVersionLifecycleActionsOptions {
   loading?: VersionLifecycleLoadingState;
 }
 
-export function normalizeVersionStatus(status: string | undefined): UnifiedVersionStatus | null {
+function normalizeVersionStatus(status: string | undefined): UnifiedVersionStatus | null {
   if (!status) return null;
   if (status === 'draft') return 'draft';
   if (status === 'published' || status === 'active') return 'published';
@@ -149,4 +149,3 @@ export function useVersionLifecycleActions({
   return <>{buttons}</>;
 }
 
-export default useVersionLifecycleActions;

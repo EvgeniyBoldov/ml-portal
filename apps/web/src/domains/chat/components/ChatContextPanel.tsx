@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { useChatContext, useResetChatContext } from '@/shared/api/hooks/useChats';
 import { Button, ConfirmDialog, Icon, Modal } from '@/shared/ui';

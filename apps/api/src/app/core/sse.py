@@ -1,8 +1,7 @@
 from __future__ import annotations
 import asyncio
 import json
-from typing import Any, AsyncGenerator, Dict, Optional, Callable
-from fastapi import HTTPException, status
+from typing import Any, AsyncGenerator, Optional, Callable
 from fastapi.responses import StreamingResponse
 from app.core.logging import get_logger
 
@@ -93,58 +92,6 @@ class SSEStream:
         """Close the stream"""
         self._closed = True
 
-async def create_sse_stream(generator: AsyncGenerator[SSEMessage, None], heartbeat_interval: int = 30) -> StreamingResponse:
-    """Create SSE stream from generator"""
-    sse_stream = SSEStream(heartbeat_interval)
-    return await sse_stream.stream(generator)
-
-async def heartbeat_generator(interval: int = 30) -> AsyncGenerator[SSEMessage, None]:
-    """Generator that sends heartbeat messages"""
-    while True:
-        await asyncio.sleep(interval)
-        yield SSEMessage(data="heartbeat", event="heartbeat")
-
-async def progress_generator(task_id: str, progress_callback) -> AsyncGenerator[SSEMessage, None]:
-    """Generator for progress updates"""
-    try:
-        # Send initial message
-        yield SSEMessage(
-            data={"task_id": task_id, "status": "started"},
-            event="progress",
-            id=task_id
-        )
-        
-        # Get progress updates
-        async for progress in progress_callback():
-            yield SSEMessage(
-                data={"task_id": task_id, "progress": progress},
-                event="progress",
-                id=task_id
-            )
-            
-            # Check if task is complete
-            if progress.get("status") == "completed":
-                break
-        
-        # Send completion message
-        yield SSEMessage(
-            data={"task_id": task_id, "status": "completed"},
-            event="done",
-            id=task_id
-        )
-        
-    except Exception as e:
-        logger.error(f"Progress generator error: {e}")
-        yield SSEMessage(
-            data={"task_id": task_id, "error": str(e)},
-            event="error",
-            id=task_id
-        )
-
-def validate_sse_request(request) -> bool:
-    """Validate that request can handle SSE"""
-    accept_header = request.headers.get("Accept", "")
-    return "text/event-stream" in accept_header or "*/*" in accept_header
 
 async def _data_to_sse_generator(data: dict, event: Optional[str], serialize_func: Callable) -> AsyncGenerator[str, None]:
     """Convert data to SSE generator"""
@@ -160,17 +107,6 @@ async def _data_to_sse_generator(data: dict, event: Optional[str], serialize_fun
         )
         yield error_message.to_sse_format()
 
-def wrap_sse_stream(generator: AsyncGenerator[SSEMessage, None], heartbeat_interval: int = 30) -> StreamingResponse:
-    """Wrap generator in SSE stream"""
-    return StreamingResponse(
-        _sse_generator(generator, heartbeat_interval),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
-    )
 
 async def _sse_generator(generator: AsyncGenerator[SSEMessage, None], heartbeat_interval: int):
     """Internal SSE generator with heartbeat"""
@@ -198,14 +134,3 @@ def format_sse(data: Any, event: Optional[str] = None, id: Optional[str] = None)
     message = SSEMessage(data=data, event=event, id=id)
     return message.to_sse_format()
 
-def sse_response(data: dict, event: Optional[str] = None, serialize_func: Callable = json.dumps) -> Response:
-    """Create SSE response from data"""
-    return StreamingResponse(
-        _data_to_sse_generator(data, event, serialize_func),
-        media_type="text/event-stream"
-    )
-
-
-def sse_error(message: str, *, status: int = 500, title: str | None = None) -> str:
-    t = title or "error"
-    return f"event: {t}\ndata: {{\"status\":{status},\"error\":{message!r}}}\n\n"

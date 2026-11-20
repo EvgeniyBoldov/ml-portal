@@ -36,7 +36,7 @@ function isSystemInstance(inst: ToolInstance): boolean {
   return providerKind === 'local_documents' || providerKind === 'local_tables';
 }
 
-export function InstancesListPage() {
+function InstancesListPage() {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
 

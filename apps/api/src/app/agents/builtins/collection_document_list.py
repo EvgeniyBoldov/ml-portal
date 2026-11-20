@@ -8,7 +8,7 @@ Each result carries artifact_id that can be passed to file.read.
 from __future__ import annotations
 
 import uuid
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict, List
 
 from sqlalchemy import select, func, text as sa_text
 
@@ -19,7 +19,6 @@ from app.core.logging import get_logger
 from app.models.rag import RAGDocument
 from app.models.rag_ingest import DocumentCollectionMembership, Source
 from app.services.collection_service import CollectionService
-from app.services.file_delivery_service import FileDeliveryService
 from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
 from app.core.config import get_settings
 

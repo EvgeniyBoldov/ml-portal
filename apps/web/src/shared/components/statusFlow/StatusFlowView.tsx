@@ -329,4 +329,3 @@ export function StatusFlowView({
   );
 }
 
-export default StatusFlowView;

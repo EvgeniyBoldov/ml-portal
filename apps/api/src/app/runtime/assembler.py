@@ -14,7 +14,6 @@ test or a new backend — override the corresponding `_build_*` method.
 from __future__ import annotations
 
 from functools import cached_property
-from typing import Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -53,12 +52,6 @@ class PipelineAssembler:
         """Read path for cross-turn memory — facts + structured summary."""
         return MemoryBuilder(session=self._session)
 
-    @cached_property
-    def memory_writer(self) -> MemoryWriter:
-        """Write path — extracts facts + compacts summary at turn end."""
-        return MemoryWriter(
-            session=self._session, llm_client=self._llm_client
-        )
 
     def build_memory_writer(self, **kwargs: object) -> MemoryWriter:
         """Build an observed writer for an inline post-turn memory tail."""

@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update as sa_update, delete as sa_delete, event
+from sqlalchemy import select, update as sa_update, event
 from sqlalchemy.orm import Session
 from app.models.model_registry import Model, ModelType, ModelStatus, HealthStatus
 from app.core.logging import get_logger
@@ -315,17 +315,6 @@ class ModelService:
             self._enqueue_embedding_status_reconcile()
         return True
     
-    async def get_default_model(self, type: ModelType) -> Optional[Model]:
-        """Get default model for type"""
-        result = await self.session.execute(
-            select(Model).where(
-                Model.type == type,
-                Model.default_for_type == True,
-                Model.enabled == True,
-                Model.deleted_at.is_(None)
-            ).limit(1)
-        )
-        return result.scalar_one_or_none()
     
     async def update_health_status(
         self,

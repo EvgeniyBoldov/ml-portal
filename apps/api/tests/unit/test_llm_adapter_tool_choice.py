@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from app.agents.runtime.llm import LLMAdapter
 from app.agents.runtime.llm_errors import (
     LLMRequestTooLargeError,
     LLMToolCallingUnsupportedError,
@@ -26,21 +25,6 @@ def _provider_error() -> Exception:
         },
         __str__=lambda self: "tool_choice=none tool_use_failed",
     )
-
-
-def test_coerces_groq_failed_generation_with_escaped_single_quotes() -> None:
-    fallback = LLMAdapter._coerce_tool_choice_error_to_tool_call(_provider_error())
-
-    assert fallback is not None
-    assert '"tool": "container.exec"' in fallback
-
-
-def test_coerces_same_payload_to_native_tool_call() -> None:
-    fallback = LLMAdapter._coerce_tool_choice_error_to_native_response(_provider_error())
-
-    assert fallback is not None
-    function = fallback["choices"][0]["message"]["tool_calls"][0]["function"]
-    assert function["name"] == "container.exec"
 
 
 def test_classifies_tool_choice_mismatch_for_plaintext_fallback() -> None:

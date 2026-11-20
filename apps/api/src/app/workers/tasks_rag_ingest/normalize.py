@@ -10,7 +10,6 @@ from app.celery_app import app as celery_app
 from app.core.logging import get_logger
 from app.repositories.rag_ingest_repos import AsyncSourceRepository
 from app.services.document_artifacts import (
-    get_document_artifact,
     normalize_document_source_meta,
 )
 from app.services.document_source_metadata_service import DocumentSourceMetadataService

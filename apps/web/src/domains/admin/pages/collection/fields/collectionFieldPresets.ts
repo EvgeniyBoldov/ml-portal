@@ -1,12 +1,12 @@
 import type { CollectionField, CollectionType } from '@/shared/api';
 
-export const DOCUMENT_PRESET_FIELDS: CollectionField[] = [
+const DOCUMENT_PRESET_FIELDS: CollectionField[] = [
   { name: 'file', type: 'file', required: true, search_modes: [], description: 'Файл документа', category: 'specific', data_type: 'file' },
   { name: 'title', type: 'text', required: false, search_modes: [], description: 'Название документа', category: 'specific', data_type: 'text' },
   { name: 'source', type: 'text', required: false, search_modes: [], description: 'Источник документа', category: 'specific', data_type: 'string' },
 ];
 
-export const TEMPLATE_PRESET_FIELDS: CollectionField[] = [
+const TEMPLATE_PRESET_FIELDS: CollectionField[] = [
   { name: 'file', type: 'file', required: true, search_modes: [], description: 'Файл шаблона', category: 'specific', data_type: 'file' },
   { name: 'title', type: 'text', required: false, search_modes: ['exact', 'like'], description: 'Название шаблона', category: 'specific', data_type: 'text', filterable: true, used_in_prompt_context: true },
   { name: 'source', type: 'text', required: true, search_modes: [], description: 'Источник шаблона', category: 'specific', data_type: 'string' },
@@ -16,7 +16,7 @@ export const TEMPLATE_PRESET_FIELDS: CollectionField[] = [
   { name: 'status', type: 'text', required: true, search_modes: ['exact', 'like'], description: 'Статус шаблона', category: 'specific', data_type: 'string', filterable: true },
 ];
 
-export const SQL_PRESET_FIELDS: CollectionField[] = [
+const SQL_PRESET_FIELDS: CollectionField[] = [
   {
     name: 'table_name',
     type: 'text',
@@ -38,8 +38,8 @@ export const SQL_PRESET_FIELDS: CollectionField[] = [
 ];
 
 export const SQL_SPECIFIC_FIELD_NAMES = new Set(SQL_PRESET_FIELDS.map((field) => field.name));
-export const DOCUMENT_SPECIFIC_FIELD_NAMES = new Set(DOCUMENT_PRESET_FIELDS.map((field) => field.name));
-export const TEMPLATE_SPECIFIC_FIELD_NAMES = new Set(TEMPLATE_PRESET_FIELDS.map((field) => field.name));
+const DOCUMENT_SPECIFIC_FIELD_NAMES = new Set(DOCUMENT_PRESET_FIELDS.map((field) => field.name));
+const TEMPLATE_SPECIFIC_FIELD_NAMES = new Set(TEMPLATE_PRESET_FIELDS.map((field) => field.name));
 export const DOCUMENT_FULLY_LOCKED_FIELD_NAMES = new Set(DOCUMENT_PRESET_FIELDS.map((field) => field.name));
 export const TEMPLATE_FULLY_LOCKED_FIELD_NAMES = new Set(TEMPLATE_PRESET_FIELDS.map((field) => field.name));
 

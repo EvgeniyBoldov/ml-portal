@@ -314,22 +314,3 @@ def _get_last_index_error(index_nodes: List[RAGStatus]) -> Optional[str]:
     latest_error = max(error_nodes, key=lambda n: n.updated_at)
     return latest_error.error_short
 
-
-def is_document_stale(doc_id: UUID, embedding_nodes: List[RAGStatus], current_model_versions: Dict[str, str]) -> bool:
-    """
-    Check if document is stale (model versions changed)
-    
-    Args:
-        doc_id: Document ID
-        embedding_nodes: List of embedding status nodes
-        current_model_versions: Current model versions from registry
-        
-    Returns:
-        True if document needs reindexing due to model version changes
-    """
-    for node in embedding_nodes:
-        if node.node_type == 'embedding' and node.model_version:
-            current_version = current_model_versions.get(node.node_key)
-            if current_version and current_version != node.model_version:
-                return True
-    return False

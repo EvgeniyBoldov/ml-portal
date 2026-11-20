@@ -2,20 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional, List, Dict
 
-from pydantic import BaseModel, ConfigDict, Field
-
-
-class StatusNode(BaseModel):
-    key: str
-    status: str
-    error: Optional[str] = None
-    metrics: Optional[Dict[str, Any]] = None
-    started_at: Optional[str] = None
-    finished_at: Optional[str] = None
-    updated_at: str
-    model_version: Optional[str] = None
-
-    model_config = ConfigDict(protected_namespaces=())
+from pydantic import BaseModel, Field
 
 
 class PipelineStage(BaseModel):

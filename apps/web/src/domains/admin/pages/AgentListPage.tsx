@@ -175,5 +175,3 @@ export function AgentListPage() {
     </EntityPageV2>
   );
 }
-
-export default AgentListPage;

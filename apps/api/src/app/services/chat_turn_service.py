@@ -274,19 +274,6 @@ class ChatTurnService:
         )
         return result.scalar_one_or_none()
 
-    async def is_in_flight(
-        self,
-        *,
-        chat_id: str | uuid.UUID,
-        user_id: str | uuid.UUID,
-        idempotency_key: str,
-    ) -> bool:
-        turn = await self.get_latest_by_idempotency_key(
-            chat_id=chat_id,
-            user_id=user_id,
-            idempotency_key=idempotency_key,
-        )
-        return bool(turn and turn.status in ACTIVE_STATUSES)
 
     async def has_payload_mismatch(
         self,

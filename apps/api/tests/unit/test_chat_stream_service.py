@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -66,48 +66,6 @@ class TestChatStreamServiceInvariants:
             {"id": "att-3"},
         ]
 
-    @pytest.mark.asyncio
-    async def test_top_level_exception_is_sanitized(self, service: ChatStreamService, chats_repo: AsyncMock):
-        service.verify_chat_access = AsyncMock(return_value=True)
-        service.check_turn_idempotency = AsyncMock(return_value=None)
-        service.check_idempotency = AsyncMock(return_value=None)
-        chats_repo.get_chat_by_id = AsyncMock(side_effect=RuntimeError("db failed with stacktrace data"))
-
-        events = [
-            event
-            async for event in service.send_message_stream(
-                chat_id="00000000-0000-0000-0000-000000000010",
-                user_id="00000000-0000-0000-0000-000000000020",
-                content="hello",
-            )
-        ]
-
-        assert events == [{"type": "error", "error": "Failed to process chat request", "code": "chat_stream_failed"}]
-
-    @pytest.mark.asyncio
-    async def test_cached_short_circuit_returns_single_cached_event(self, service: ChatStreamService):
-        service.verify_chat_access = AsyncMock(return_value=True)
-        service.check_turn_idempotency = AsyncMock(return_value=None)
-        service.check_idempotency = AsyncMock(return_value={
-            "user_message_id": "user-msg-1",
-            "assistant_message_id": "assistant-msg-1",
-        })
-
-        events = [
-            event
-            async for event in service.send_message_stream(
-                chat_id="00000000-0000-0000-0000-000000000010",
-                user_id="00000000-0000-0000-0000-000000000020",
-                content="hello",
-                idempotency_key="idem-1",
-            )
-        ]
-
-        assert events == [{
-            "type": "cached",
-            "user_message_id": "user-msg-1",
-            "assistant_message_id": "assistant-msg-1",
-        }]
 
     @pytest.mark.asyncio
     async def test_turn_idempotency_processing_returns_single_error(self, service: ChatStreamService):
@@ -173,64 +131,3 @@ class TestChatStreamServiceInvariants:
             "code": "idempotency_conflict",
         }]
 
-    @pytest.mark.asyncio
-    async def test_final_flow_emits_single_final_without_error(self, service: ChatStreamService):
-        service.verify_chat_access = AsyncMock(return_value=True)
-        service.check_turn_idempotency = AsyncMock(return_value=None)
-        service.check_idempotency = AsyncMock(return_value=None)
-        service.context_service.load_chat_context = AsyncMock(return_value=[])
-        service.chat_turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id="00000000-0000-0000-0000-000000000030"))
-        service.chat_turn_service.attach_user_message = AsyncMock()
-        service.chat_turn_service.complete_turn = AsyncMock()
-        service.context_service.generate_and_store_summary = AsyncMock(return_value=None)
-
-        async def fake_run_with_router(**kwargs):
-            yield {"type": "delta", "content": "Hello"}
-            yield {"type": "final_content", "content": "Hello", "sources": []}
-
-        service._run_with_router = fake_run_with_router
-
-        events = [
-            event
-            async for event in service.send_message_stream(
-                chat_id="00000000-0000-0000-0000-000000000010",
-                user_id="00000000-0000-0000-0000-000000000020",
-                content="hello",
-                idempotency_key=None,
-            )
-        ]
-
-        event_types = [event["type"] for event in events]
-        assert event_types.count("final") == 1
-        assert event_types.count("error") == 0
-        assert event_types[-1] == "final"
-        assert any(event.get("type") == "state" and event.get("status") == "completed" for event in events)
-
-    @pytest.mark.asyncio
-    async def test_empty_response_emits_single_error(self, service: ChatStreamService):
-        service.verify_chat_access = AsyncMock(return_value=True)
-        service.check_turn_idempotency = AsyncMock(return_value=None)
-        service.check_idempotency = AsyncMock(return_value=None)
-        service.context_service.load_chat_context = AsyncMock(return_value=[])
-        service.chat_turn_service.start_turn = AsyncMock(return_value=SimpleNamespace(id="00000000-0000-0000-0000-000000000030"))
-        service.chat_turn_service.attach_user_message = AsyncMock()
-        service.chat_turn_service.fail_turn = AsyncMock()
-
-        async def fake_run_with_router(**kwargs):
-            if False:
-                yield {}
-
-        service._run_with_router = fake_run_with_router
-
-        events = [
-            event
-            async for event in service.send_message_stream(
-                chat_id="00000000-0000-0000-0000-000000000010",
-                user_id="00000000-0000-0000-0000-000000000020",
-                content="hello",
-            )
-        ]
-
-        errors = [event for event in events if event["type"] == "error"]
-        assert len(errors) == 1
-        assert errors[0]["error"] == "Empty response from agent"

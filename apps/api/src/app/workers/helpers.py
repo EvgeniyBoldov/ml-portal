@@ -1,23 +1,15 @@
 """
 Worker helpers and utilities
 """
-import hashlib
-import json
 import re
 from app.core.logging import get_logger
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone
 from uuid import UUID
 
-from app.schemas.common import ChunkProfile, Step
-from app.storage.paths import get_idempotency_key, get_lock_key
+from app.schemas.common import ChunkProfile
 
 logger = get_logger(__name__)
-
-
-def generate_content_hash(content: str) -> str:
-    """Generate content hash for idempotency"""
-    return hashlib.sha256(content.encode('utf-8')).hexdigest()[:16]
 
 
 def chunk_text_by_tokens(text: str, chunk_size: int = 512, overlap: int = 50) -> List[Dict[str, Any]]:
@@ -270,40 +262,3 @@ def create_chunk_payload(
         "tags": metadata.get("tags", []) if metadata else []
     }
 
-
-def log_step_progress(
-    document_id: UUID,
-    step: Step,
-    progress: float,
-    message: str = None,
-    metadata: Optional[Dict[str, Any]] = None
-):
-    """Log step progress"""
-    log_data = {
-        "document_id": str(document_id),
-        "step": step.value,
-        "progress": progress,
-        "timestamp": datetime.now(timezone.utc).isoformat()
-    }
-    
-    if message:
-        log_data["message"] = message
-    
-    if metadata:
-        log_data["metadata"] = metadata
-    
-    logger.info(f"Step progress: {json.dumps(log_data)}")
-
-
-def calculate_progress(completed_steps: List[Step], current_step: Step, step_progress: float = 0.0) -> float:
-    """Calculate overall progress"""
-    total_steps = len(Step)
-    completed_count = len(completed_steps)
-    
-    if current_step in completed_steps:
-        return 100.0
-    
-    base_progress = (completed_count / total_steps) * 100
-    step_progress_weight = (1 / total_steps) * 100
-    
-    return min(base_progress + (step_progress * step_progress_weight), 100.0)

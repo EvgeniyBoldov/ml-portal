@@ -203,20 +203,6 @@ async def sync_discovered_tools(session_factory: async_sessionmaker[AsyncSession
         logger.error(f"Failed to sync discovered tools: {exc}")
 
 
-async def seed_default_agents(session_factory: async_sessionmaker[AsyncSession]) -> None:
-    """Upsert seed agents (rag-search, data-analyst, …)."""
-    try:
-        from app.services.agent_seed_service import AgentSeedService
-
-        async with session_factory() as session:
-            stats = await AgentSeedService(session).seed_all()
-            await session.commit()
-            if stats["created"] > 0:
-                logger.info(f"Agent seed: {stats}")
-    except Exception as exc:
-        logger.error(f"Failed to seed agents: {exc}")
-
-
 async def validate_connectors(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """
     Validate all connectors against subtype templates.

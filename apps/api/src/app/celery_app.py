@@ -1,5 +1,4 @@
 from __future__ import annotations
-from app.core.logging import get_logger
 from app.core.config import get_settings
 from celery import Celery
 from celery.schedules import crontab

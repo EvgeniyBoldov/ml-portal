@@ -29,11 +29,11 @@ import styles from './GridLayout.module.css';
 
 /* ─── Types ─── */
 
-export type BlockWidth = 'full' | '1/2' | '1/3' | '2/3' | '1/4' | '3/4';
-export type BlockHeight = 'auto' | 'stretch';
-export type IconVariant = 'primary' | 'success' | 'warning' | 'warn' | 'danger' | 'info' | 'neutral';
+type BlockWidth = 'full' | '1/2' | '1/3' | '2/3' | '1/4' | '3/4';
+type BlockHeight = 'auto' | 'stretch';
+type IconVariant = 'primary' | 'success' | 'warning' | 'warn' | 'danger' | 'info' | 'neutral';
 
-export type FieldType =
+type FieldType =
   | 'text'
   | 'password'
   | 'textarea'
@@ -47,7 +47,7 @@ export type FieldType =
   | 'tags'
   | 'custom';
 
-export interface FieldOption {
+interface FieldOption {
   value: string;
   label: string;
 }
@@ -507,4 +507,3 @@ function FieldEditor({ field, value, editable, onChange }: FieldEditorProps) {
   }
 }
 
-export default GridLayout;

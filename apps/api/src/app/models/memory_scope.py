@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
-from enum import Enum
 
 from sqlalchemy import Boolean, CheckConstraint, DateTime, Float, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import ARRAY, ENUM, UUID
@@ -11,10 +10,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 from app.models.mixins.lifecycle import LifecycleMixin
-
-
-class MemoryScopeType(str, Enum):
-    PROJECT = "project"
 
 
 class MemoryScope(Base, LifecycleMixin):

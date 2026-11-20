@@ -246,29 +246,6 @@ class RbacService:
         logger.info(f"Auto-created platform deny for {resource_type}:{resource_id}")
         return result
 
-    async def set_platform_effect(
-        self,
-        resource_type: str,
-        resource_id: UUID,
-        effect: str,
-    ) -> RbacRule:
-        """
-        Set or update the platform-level effect for a resource.
-        Used for global release (allow) or rollback (deny).
-        """
-        existing = await self.rule_repo._find_platform_rule(resource_type, resource_id)
-        if existing:
-            existing.effect = effect
-            return await self.rule_repo.update(existing)
-
-        rule = RbacRule(
-            level=RbacLevel.PLATFORM.value,
-            owner_platform=True,
-            resource_type=resource_type,
-            resource_id=resource_id,
-            effect=effect,
-        )
-        return await self.rule_repo.create(rule)
 
     # ─── Enriched listing ─────────────────────────────────────────────
 

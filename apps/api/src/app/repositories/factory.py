@@ -8,14 +8,10 @@ from fastapi import Depends, HTTPException
 from sqlalchemy import select
 import uuid
 
-from app.repositories.base import AsyncTenantRepository
 from app.repositories.chats_repo import AsyncChatsRepository, AsyncChatMessagesRepository
-from app.repositories.idempotency_repo import AsyncIdempotencyRepository
-from app.repositories.documents_repo import AsyncRAGDocumentsRepository, AsyncRAGChunksRepository
-from app.repositories.users_repo import AsyncUsersRepository
-from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncChunkRepository, AsyncEmbStatusRepository, AsyncModelRegistryRepository
+from app.repositories.documents_repo import AsyncRAGDocumentsRepository
+from app.repositories.rag_ingest_repos import AsyncSourceRepository, AsyncEmbStatusRepository
 from app.repositories.rag_status_repo import AsyncRAGStatusRepository
-from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.api.deps import db_uow, get_current_user
 from app.core.security import UserCtx
 from app.core.logging import get_logger
@@ -57,24 +53,6 @@ class AsyncRepositoryFactory:
             self._repositories['rag_documents'] = AsyncRAGDocumentsRepository(self.session, self.tenant_id, self.user_id)
         return self._repositories['rag_documents']
     
-    def get_rag_chunks_repository(self) -> AsyncRAGChunksRepository:
-        """Get async RAG chunks repository with tenant isolation"""
-        if 'rag_chunks' not in self._repositories:
-            self._repositories['rag_chunks'] = AsyncRAGChunksRepository(self.session, self.tenant_id, self.user_id)
-        return self._repositories['rag_chunks']
-    
-    def get_users_repository(self) -> AsyncUsersRepository:
-        """Get users repository without tenant isolation"""
-        if 'users' not in self._repositories:
-            self._repositories['users'] = AsyncUsersRepository(self.session)
-        return self._repositories['users']
-    
-    def get_idempotency_repository(self) -> AsyncIdempotencyRepository:
-        """Get async idempotency repository with tenant isolation"""
-        if 'idempotency' not in self._repositories:
-            self._repositories['idempotency'] = AsyncIdempotencyRepository(self.session, self.tenant_id, self.user_id)
-        return self._repositories['idempotency']
-    
     
     def get_source_repository(self) -> AsyncSourceRepository:
         """Get async source repository with tenant isolation"""
@@ -82,11 +60,6 @@ class AsyncRepositoryFactory:
             self._repositories['source'] = AsyncSourceRepository(self.session, self.tenant_id, self.user_id)
         return self._repositories['source']
     
-    def get_chunk_repository(self) -> AsyncChunkRepository:
-        """Get async chunk repository with tenant isolation"""
-        if 'chunk' not in self._repositories:
-            self._repositories['chunk'] = AsyncChunkRepository(self.session, self.tenant_id, self.user_id)
-        return self._repositories['chunk']
     
     def get_emb_status_repository(self) -> AsyncEmbStatusRepository:
         """Get async embedding status repository with tenant isolation"""
@@ -94,59 +67,12 @@ class AsyncRepositoryFactory:
             self._repositories['emb_status'] = AsyncEmbStatusRepository(self.session, self.tenant_id, self.user_id)
         return self._repositories['emb_status']
     
-    def get_model_registry_repository(self) -> AsyncModelRegistryRepository:
-        """Get async model registry repository with tenant isolation"""
-        if 'model_registry' not in self._repositories:
-            self._repositories['model_registry'] = AsyncModelRegistryRepository(self.session, self.tenant_id, self.user_id)
-        return self._repositories['model_registry']
-    
-    async def get_emb_status_by_source_id(self, source_id: uuid.UUID):
-        """Get embedding statuses by source ID"""
-        emb_status_repo = self.get_emb_status_repository()
-        return await emb_status_repo.get_by_source_id(source_id)
     
     async def create_chat(self, owner_id: uuid.UUID, name: Optional[str] = None, tags: Optional[list] = None):
         """Create chat with tenant isolation"""
         chats_repo = self.get_chats_repository()
         return await chats_repo.create_chat(owner_id, name, tags)
     
-    async def create_chat_message(self, chat_id: uuid.UUID, role: str, content: Dict[str, Any], **kwargs):
-        """Create chat message with tenant isolation"""
-        messages_repo = self.get_chat_messages_repository()
-        return await messages_repo.create_message(chat_id, role, content, **kwargs)
-    
-    async def create_rag_document(self, uploaded_by: uuid.UUID, name: str, **kwargs):
-        """Create RAG document with tenant isolation"""
-        rag_repo = self.get_rag_documents_repository()
-        
-        return await rag_repo.create_document(
-            user_id=uploaded_by,
-            filename=kwargs.get('filename', name),
-            title=name,
-            **{k: v for k, v in kwargs.items() if k != 'filename'}
-        )
-    
-    async def get_rag_documents(self, user_id: uuid.UUID, status: Optional[str] = None, 
-                              search: Optional[str] = None, limit: int = 50, offset: int = 0):
-        """Get RAG documents with filtering"""
-        rag_repo = self.get_rag_documents_repository()
-        return await rag_repo.get_user_documents(
-            user_id=user_id,
-            status=status,
-            search=search,
-            limit=limit,
-            offset=offset
-        )
-    
-    async def count_rag_documents(self, user_id: uuid.UUID, status: Optional[str] = None, 
-                                search: Optional[str] = None):
-        """Count RAG documents with filtering"""
-        rag_repo = self.get_rag_documents_repository()
-        return await rag_repo.count_user_documents(
-            user_id=user_id,
-            status=status,
-            search=search
-        )
     
     async def get_rag_document_by_id(self, doc_id: uuid.UUID) -> Optional[Any]:
         """Get RAG document by ID with tenant isolation"""
@@ -170,11 +96,6 @@ class AsyncRepositoryFactory:
             logger.error(f"Failed to delete RAG document {doc_id}: {e}")
             raise
     
-    def get_tenants_repository(self) -> AsyncTenantsRepository:
-        """Get tenants repository"""
-        if 'tenants' not in self._repositories:
-            self._repositories['tenants'] = AsyncTenantsRepository(self.session)
-        return self._repositories['tenants']
     
     def get_rag_status_repository(self) -> AsyncRAGStatusRepository:
         """Get RAG status repository"""

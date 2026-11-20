@@ -3,11 +3,11 @@ RAG documents and chunks models
 """
 from __future__ import annotations
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from enum import Enum
 from sqlalchemy import String, Integer, BigInteger, DateTime, ForeignKey, Text, Index
 from sqlalchemy.dialects.postgresql import UUID, ARRAY, ENUM, JSONB as PostgresJSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy import event
 from sqlalchemy.sql import func
 import uuid

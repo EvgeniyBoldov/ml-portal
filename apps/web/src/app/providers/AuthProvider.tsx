@@ -14,7 +14,7 @@ interface AuthProviderProps {
  * - Sets up global auth failure handler for redirect to login
  */
 export function AuthProvider({ children }: AuthProviderProps) {
-  const { hydrate, isAuthReady, logout } = useAuth();
+  const { hydrate, isAuthReady } = useAuth();
 
   // Handle auth failure - redirect to login without throwing errors
   const handleAuthFailure = useCallback(() => {

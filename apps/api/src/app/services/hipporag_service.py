@@ -140,10 +140,6 @@ class HippoRAGService:
             response.raise_for_status()
             return response.json()
 
-    async def index_document(self, *, document_id: UUID, text: str, metadata: dict[str, Any]) -> dict[str, Any]:
-        return await self.index_documents([
-            {"id": str(document_id), "content": text, "metadata": metadata},
-        ])
 
     async def index_documents(self, documents: list[dict[str, Any]]) -> dict[str, Any]:
         return await self._call("corpus/index", {"documents": documents})

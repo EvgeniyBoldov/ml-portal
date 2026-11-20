@@ -5,7 +5,7 @@ import uuid
 import base64
 import json
 from datetime import datetime
-from sqlalchemy import select, insert, func, or_, tuple_
+from sqlalchemy import select, func, or_, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.user import Users
 from app.models.tenant import UserTenants
@@ -77,15 +77,6 @@ class AsyncUsersRepository:
         )
         self.session.add(user_tenant)
     
-    async def is_user_in_tenant(self, user_id: uuid.UUID, tenant_id: uuid.UUID) -> bool:
-        """Check if user is in tenant"""
-        result = await self.session.execute(
-            select(UserTenants).where(
-                    UserTenants.user_id == user_id,
-                    UserTenants.tenant_id == tenant_id
-            )
-        )
-        return result.scalar_one_or_none() is not None
     
     async def list_by_tenant(self, tenant_id: uuid.UUID, limit: int = 10, cursor: Optional[uuid.UUID] = None):
         """List users by tenant with pagination"""

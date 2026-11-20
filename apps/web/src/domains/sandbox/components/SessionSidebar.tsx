@@ -4,7 +4,6 @@
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Badge from '@/shared/ui/Badge';
-import Button from '@/shared/ui/Button';
 import ConfirmDialog from '@/shared/ui/ConfirmDialog';
 import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
@@ -56,7 +55,6 @@ function toVersionStateLabel(versionStatus: string, isCurrent: boolean): string 
 
 export default function SessionSidebar({
   sessionId,
-  session,
   branches,
   activeBranchId,
   selectedItem,

@@ -259,7 +259,7 @@ async def list_collection_documents(
 ):
     from sqlalchemy import func as sa_func
     from app.models.rag import RAGDocument
-    from app.models.rag_ingest import Source, DocumentCollectionMembership, RAGStatus
+    from app.models.rag_ingest import Source, DocumentCollectionMembership
 
     try:
         collection = await _resolve_collection(collection_id, session, user)

@@ -6,9 +6,6 @@ from types import SimpleNamespace
 from app.runtime.agent_executor import _render_memory_recall
 from app.runtime.memory.preparer import PreparedMemoryContext, _term_matches_query
 from app.runtime.memory.recall import MemoryRecallService, _item_is_applicable, _query_project_ids
-from app.runtime.orchestrator import (
-    _has_successful_rag_evidence, _has_successful_runtime_observation, _recall_requires_rag,
-)
 
 
 def _prepared(*, reasons: list[str], intent: str = "informational") -> PreparedMemoryContext:
@@ -121,39 +118,3 @@ def test_agent_renderer_keeps_structured_procedure_atomic() -> None:
 def test_short_abbreviation_is_kept_by_deterministic_selector_guard() -> None:
     assert _term_matches_query("dc", "как изменить dc") is True
 
-
-def test_rag_guard_requires_successful_document_search() -> None:
-    context = [{"type": "memory_recall", "rag_required": True}]
-    state = SimpleNamespace(tool_ledger=SimpleNamespace(entries=[
-        SimpleNamespace(operation="collection.document.search", status="failed"),
-        SimpleNamespace(operation="collection.document.search", status="succeeded"),
-    ]))
-
-    assert _recall_requires_rag(context) is True
-    assert _has_successful_rag_evidence(state) is True
-    assert _has_successful_rag_evidence(SimpleNamespace(tool_ledger=SimpleNamespace(entries=[]))) is False
-
-
-def test_rag_guard_accepts_instance_operation_only_for_recalled_source() -> None:
-    state = SimpleNamespace(tool_ledger=SimpleNamespace(entries=[
-        SimpleNamespace(
-            operation="instance.docs.collection.document.search", status="succeeded",
-            result_data={"hits": [{"document_id": "doc-1", "text": "evidence"}]},
-        ),
-    ]))
-    context = [{"type": "memory_recall", "source_references": [{"document_id": "doc-1"}]}]
-    wrong_context = [{"type": "memory_recall", "source_references": [{"document_id": "doc-2"}]}]
-
-    assert _has_successful_rag_evidence(state, context) is True
-    assert _has_successful_rag_evidence(state, wrong_context) is False
-
-
-def test_runtime_observation_does_not_accept_rag_search_as_current_state() -> None:
-    rag_only = SimpleNamespace(tool_ledger=SimpleNamespace(entries=[
-        SimpleNamespace(operation="collection.document.search", status="succeeded"),
-    ]))
-    observed = SimpleNamespace(tool_ledger=SimpleNamespace(entries=[
-        SimpleNamespace(operation="network.switch.get_status", status="succeeded"),
-    ]))
-    assert _has_successful_runtime_observation(rag_only) is False
-    assert _has_successful_runtime_observation(observed) is True

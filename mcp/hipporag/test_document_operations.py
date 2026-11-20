@@ -1,5 +1,4 @@
 """Document lifecycle regression checks; use only temporary worker data."""
-import json
 import tempfile
 import unittest
 from pathlib import Path

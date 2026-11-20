@@ -140,4 +140,3 @@ export function useStatusConfig(type: EntityType): StatusConfig {
   return useMemo(() => STATUS_CONFIGS[type], [type]);
 }
 
-export default useStatusConfig;

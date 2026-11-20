@@ -273,22 +273,6 @@ def _normalize_text(value: Any) -> str:
     return str(value or "").strip()
 
 
-def _normalize_str_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        raw_items = value
-    elif isinstance(value, str):
-        raw_items = value.splitlines()
-    else:
-        raw_items = []
-
-    result: list[str] = []
-    for item in raw_items:
-        normalized = _normalize_text(item)
-        if normalized and normalized not in result:
-            result.append(normalized)
-    return result
-
-
 class CollectionVersionCreate(BaseModel):
     data_description: Optional[str] = Field(
         default=None,

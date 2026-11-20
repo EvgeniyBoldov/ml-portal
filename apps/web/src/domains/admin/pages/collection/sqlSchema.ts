@@ -1,4 +1,4 @@
-export function formatSchemaPropertyType(property: unknown): string {
+function formatSchemaPropertyType(property: unknown): string {
   if (!property || typeof property !== 'object') return 'unknown';
   const entry = property as Record<string, unknown>;
   const jsonType = entry.type;

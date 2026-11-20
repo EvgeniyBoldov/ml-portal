@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 
-from app.services.collection_document_ingest_service import CollectionDocumentUploadService
 from app.services.collection_service import CollectionService
 
 
@@ -58,63 +57,6 @@ async def test_provision_qdrant_collection_requires_configured_model(monkeypatch
         await service._provision_qdrant_collection(uuid4(), "coll_test_vector")
 
     ensure_collection.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_create_collection_cleans_up_sql_and_qdrant_on_late_failure(monkeypatch):
-    session = MagicMock()
-    session.execute = AsyncMock()
-    session.add = MagicMock()
-    session.flush = AsyncMock()
-
-    service = CollectionService(session=session)
-    tenant_id = uuid4()
-    slug = "docs"
-    expected_qdrant = "coll_docs"
-
-    monkeypatch.setattr(service, "_validate_slug", lambda _slug: None)
-    monkeypatch.setattr(service, "_validate_admin_defined_fields", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "_validate_fields", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(service, "get_by_slug", AsyncMock(return_value=None))
-    monkeypatch.setattr(service, "_generate_table_name", lambda *_args, **_kwargs: "coll_test_docs")
-    monkeypatch.setattr(service, "_build_create_table_sql", lambda *_args, **_kwargs: "CREATE TABLE coll_test_docs (id UUID)")
-    monkeypatch.setattr(service, "_build_indexes_sql", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(service, "_provision_qdrant_collection", AsyncMock())
-    monkeypatch.setattr(
-        service.lifecycle,
-        "_resolve_and_validate_data_instance",
-        AsyncMock(return_value=SimpleNamespace(id=uuid4(), connector_type="data", is_active=True, config={})),
-    )
-    monkeypatch.setattr(
-        service,
-        "sync_collection_status",
-        AsyncMock(side_effect=RuntimeError("status sync boom")),
-    )
-    cleanup_qdrant = AsyncMock()
-    monkeypatch.setattr(service, "_cleanup_qdrant_collection", cleanup_qdrant)
-
-    with pytest.raises(RuntimeError, match="status sync boom"):
-        await service.create_collection(
-            tenant_id=tenant_id,
-            slug=slug,
-            name="Docs",
-            fields=[
-                {
-                    "name": "title",
-                    "category": "user",
-                    "data_type": "text",
-                    "used_in_retrieval": True,
-                }
-            ],
-            collection_type="table",
-            data_instance_id=uuid4(),
-        )
-
-    assert any(
-        "DROP TABLE IF EXISTS coll_test_docs CASCADE" in str(item.args[0])
-        for item in session.execute.await_args_list
-    )
-    cleanup_qdrant.assert_awaited_once_with(expected_qdrant)
 
 
 @pytest.mark.asyncio

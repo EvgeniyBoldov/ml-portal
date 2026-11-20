@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from dataclasses import replace
 from typing import Optional, Sequence
 from uuid import UUID
 
@@ -13,14 +12,6 @@ from app.runtime.memory.fact_store import FactStore
 MAX_PROFILE_ITEMS = 12
 MAX_PROFILE_CHARS = 2_400
 MAX_PROFILE_ITEM_CHARS = 240
-
-
-@dataclass(frozen=True)
-class MemorySubject:
-    scope: FactScope
-    owner_type: str
-    owner_id: UUID
-    tenant_id: Optional[UUID] = None
 
 
 @dataclass(frozen=True)
@@ -44,11 +35,6 @@ class MemorySnapshot:
         ordered = [fact for fact in anchors if fact is not None]
         ordered.extend(fact for fact in ranked if fact not in ordered)
         return _context(ordered[:limit])
-
-    def agent_context(self, *, query: str, limit: int = MAX_PROFILE_ITEMS) -> list[dict[str, object]]:
-        terms = {word.lower() for word in query.split() if len(word) > 2}
-        ranked = sorted(self.entries, key=lambda item: sum(term in f"{item.subject} {item.value}".lower() for term in terms), reverse=True)
-        return _context(ranked[:limit])
 
 
 class MemoryService:
@@ -74,18 +60,6 @@ class MemoryService:
         subjects = {fact.subject for fact in defaults}
         return [*defaults, *(fact for fact in recent if fact.subject not in subjects)]
 
-    async def write_extracted(self, *, facts: Sequence[FactDTO], user_id: Optional[UUID], tenant_id: Optional[UUID]) -> int:
-        saved = 0
-        for fact in facts:
-            if fact.scope == FactScope.USER and user_id is not None:
-                entry = replace(fact, tenant_id=tenant_id, owner_type="user", owner_id=user_id, kind=fact.kind or "fact")
-            elif fact.scope == FactScope.TENANT and tenant_id is not None:
-                entry = replace(fact, tenant_id=tenant_id, owner_type="tenant", owner_id=tenant_id, kind=fact.kind or "fact")
-            else:
-                continue
-            await self._facts.upsert_with_supersede(entry)
-            saved += 1
-        return saved
 
     async def list_user_visible(self, *, user_id: UUID, limit: int, offset: int) -> list[FactDTO]:
         return await self._facts.list_user_visible(user_id=user_id, limit=limit, offset=offset)

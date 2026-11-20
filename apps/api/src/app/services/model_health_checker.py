@@ -15,7 +15,6 @@ import asyncio
 import time
 from typing import Optional, Tuple
 from dataclasses import dataclass
-from enum import Enum
 import httpx
 
 from sqlalchemy.ext.asyncio import AsyncSession

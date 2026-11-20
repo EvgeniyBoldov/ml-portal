@@ -3,7 +3,7 @@
  *
  * Использует useEntityEditor для стандартной CRUD логики.
  */
-import { useEffect, useMemo, useState as useReactState } from 'react';
+import { useMemo, useState as useReactState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -206,7 +206,7 @@ const TOOL_COLUMNS: DataTableColumn<RuntimeOperationRow>[] = [
 
 /* ─── Component ─── */
 
-export function CollectionPage() {
+function CollectionPage() {
   const navigate = useNavigate();
   const { data: tenantsData } = useQuery({
     queryKey: qk.admin.tenants.list(),
@@ -394,7 +394,6 @@ export function CollectionPage() {
   const activeCollectionType = (String(blockData.collection_type || 'table') as CollectionType);
   const isApiType = activeCollectionType === 'api';
   const isDocumentType = activeCollectionType === 'document';
-  const isTemplateType = activeCollectionType === 'template';
 
   const connectorSubtypeFilter = activeCollectionType === 'sql'
     ? 'sql'

@@ -167,23 +167,6 @@ class DocumentSourceMetadataService:
         await self.session.flush()
         return enabled, document
 
-    async def set_scope_unassigned(
-        self,
-        source_id: UUID,
-        tenant_id: UUID,
-        *,
-        unassigned: bool,
-    ) -> bool:
-        def update(meta: dict[str, Any]) -> dict[str, Any]:
-            memory = dict(meta.get("memory") or {})
-            if unassigned:
-                memory["scope_unassigned"] = True
-            else:
-                memory.pop("scope_unassigned", None)
-            meta["memory"] = memory
-            return meta
-
-        return await self.mutate(source_id, tenant_id, update) is not None
 
     async def reconcile_scope_assignment(self, source_id: UUID, tenant_id: UUID) -> bool | None:
         locked = await self._lock(source_id, tenant_id)

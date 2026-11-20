@@ -1,4 +1,3 @@
-import React from 'react';
 import { Link } from 'react-router-dom';
 import styles from './Breadcrumbs.module.css';
 
@@ -48,5 +47,3 @@ export function Breadcrumbs({ items, className = '' }: BreadcrumbsProps) {
     </nav>
   );
 }
-
-export default Breadcrumbs;

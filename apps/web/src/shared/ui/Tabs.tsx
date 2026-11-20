@@ -59,15 +59,4 @@ export function Tabs({
   );
 }
 
-interface TabPanelProps {
-  id: string;
-  activeTab: string;
-  children: React.ReactNode;
-}
 
-export function TabPanel({ id, activeTab, children }: TabPanelProps) {
-  if (id !== activeTab) return null;
-  return <>{children}</>;
-}
-
-export default Tabs;

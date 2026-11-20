@@ -8,8 +8,7 @@ from datetime import datetime, timezone
 from app.core.logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete
-from sqlalchemy.orm import selectinload
+from sqlalchemy import select, delete
 
 from app.models.rag_ingest import RAGStatus
 from app.models.rag import RAGDocument
@@ -177,33 +176,3 @@ class AsyncRAGStatusRepository(AsyncRepository):
         result = await self.session.execute(stmt)
         return result.scalars().all()
     
-    async def get_nodes_by_status(self, status: str) -> List[RAGStatus]:
-        """Get all nodes with specific status and tenant isolation"""
-        stmt = select(RAGStatus).where(RAGStatus.status == status)
-        stmt = self._build_tenant_filter(stmt)
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
-    
-    async def update_node_status(
-        self, 
-        doc_id: UUID, 
-        node_type: str, 
-        node_key: str, 
-        status: str,
-        error_short: Optional[str] = None,
-        metrics_json: Optional[Dict[str, Any]] = None
-    ) -> bool:
-        """Update node status and related fields"""
-        result = await self.session.execute(
-            update(RAGStatus).where(
-                RAGStatus.doc_id == doc_id,
-                RAGStatus.node_type == node_type,
-                RAGStatus.node_key == node_key
-            ).values(
-                status=status,
-                error_short=error_short,
-                metrics_json=metrics_json,
-                updated_at=datetime.now(timezone.utc)
-            )
-        )
-        return result.rowcount > 0

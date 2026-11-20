@@ -86,4 +86,3 @@ export const TableHeader = React.forwardRef<HTMLTableCellElement, TableHeaderPro
 
 TableHeader.displayName = 'TableHeader';
 
-export default TableHeader;

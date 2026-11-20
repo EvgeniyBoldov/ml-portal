@@ -9,7 +9,6 @@ from typing import Optional
 from sqlalchemy import or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.adapters.s3_client import PresignOptions, s3_manager
 from app.core.cache import get_cache
 from app.core.config import get_settings
 from app.models.chat_attachment import ChatAttachment
@@ -66,13 +65,6 @@ class FileDeliveryService:
     def make_collection_export_file_id(export_id: str) -> str:
         return f"{COLLECTION_EXPORT_PREFIX}_{export_id}"
 
-    @classmethod
-    def make_storage_uri(cls, bucket: str, key: str) -> str:
-        normalized_bucket = str(bucket or "").strip()
-        normalized_key = str(key or "").strip().lstrip("/")
-        if not normalized_bucket or not normalized_key:
-            raise ValueError("bucket and key are required to build storage_uri")
-        return f"s3://{normalized_bucket}/{normalized_key}"
 
     @classmethod
     def parse_storage_uri(cls, storage_uri: str) -> tuple[str, str]:
@@ -138,48 +130,6 @@ class FileDeliveryService:
 
         raise FileDeliveryNotFoundError(f"Unsupported file id: {file_id}")
 
-    async def resolve_storage_uri(self, storage_uri: str, *, owner_id: str) -> ResolvedDownload:
-        bucket, key = self.parse_storage_uri(storage_uri)
-
-        collection_export = await self._resolve_collection_export_by_storage(
-            bucket=bucket,
-            key=key,
-            owner_id=owner_id,
-        )
-        if collection_export:
-            return collection_export
-
-        rag_document = await self._resolve_rag_document_by_storage(bucket=bucket, key=key)
-        if rag_document:
-            return rag_document
-
-        template_upload = await self._resolve_template_upload_by_storage(bucket=bucket, key=key)
-        if template_upload:
-            return template_upload
-
-        chat_attachment = await self._resolve_chat_attachment_by_storage(
-            bucket=bucket,
-            key=key,
-            owner_id=owner_id,
-        )
-        if chat_attachment:
-            return chat_attachment
-
-        raise FileDeliveryNotFoundError(f"Storage uri not found or access denied: {storage_uri}")
-
-    async def get_presigned_url(self, resolved: ResolvedDownload, expires_in: int = 3600) -> str:
-        return await s3_manager.generate_presigned_url(
-            bucket=resolved.bucket,
-            key=resolved.key,
-            options=PresignOptions(
-                method="GET",
-                expires_in=expires_in,
-                response_headers={
-                    "ResponseContentDisposition": f'attachment; filename="{resolved.file_name}"',
-                    "ResponseContentType": resolved.content_type or "application/octet-stream",
-                },
-            ),
-        )
 
     async def _resolve_chat_attachment(self, *, file_id: str, attachment_id: str, owner_id: str) -> ResolvedDownload:
         try:

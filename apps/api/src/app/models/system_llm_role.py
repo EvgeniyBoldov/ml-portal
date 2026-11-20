@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
 from enum import Enum
 
-from sqlalchemy import String, DateTime, Text, Boolean, Integer, Float, CheckConstraint
+from sqlalchemy import String, DateTime, Text, Boolean, Float, CheckConstraint
 from sqlalchemy.dialects.postgresql import UUID, JSONB
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
 

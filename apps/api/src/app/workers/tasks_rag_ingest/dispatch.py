@@ -9,7 +9,7 @@ from celery import Task
 from sqlalchemy import select
 
 from app.celery_app import app as celery_app
-from app.models.rag_ingest import RAGIngestOutbox, RAGIngestRun
+from app.models.rag_ingest import RAGIngestRun
 from app.repositories.factory import AsyncRepositoryFactory
 from app.services.rag_status_manager import RAGStatusManager
 from app.workers.session_factory import get_worker_session

@@ -11,7 +11,7 @@ import { StoredResultCard } from './StoredResultCard';
 import { ToolResultMeta } from './ToolResultMeta';
 import styles from './CallViews.module.css';
 
-export function LlmTokenUsage({ input, output, total }: { input?: number; output?: number; total?: number }) {
+function LlmTokenUsage({ input, output, total }: { input?: number; output?: number; total?: number }) {
   const format = (value: number | undefined) => value === undefined ? '—' : new Intl.NumberFormat('ru-RU').format(value);
   return <div className={styles.tokenUsage} aria-label="Расход токенов">
     <span className={styles.tokensIn}>Вход: {format(input)}</span>
@@ -123,8 +123,6 @@ export function LlmResponseSnapshotView({ call, toolNames }: { call: TraceCall; 
   </InspectorFieldRow></InspectorFieldGroup></InspectorStack>;
 }
 
-export const LlmRequestView = LlmRequestSnapshotView;
-export const LlmResponseView = LlmResponseSnapshotView;
 
 export function ToolRequest({ value }: { value: unknown }) {
   const empty = value === undefined || value === null || (typeof value === 'object' && !Array.isArray(value) && !Object.keys(value).length);
@@ -187,4 +185,3 @@ export function ToolResponse({ call, sessionId, runId }: { call: TraceCall; sess
   </InspectorStack>;
 }
 
-export const ToolResponseView = ToolResponse;

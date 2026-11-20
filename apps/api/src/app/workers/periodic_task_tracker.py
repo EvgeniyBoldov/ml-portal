@@ -15,14 +15,6 @@ from app.workers.session_factory import get_worker_session
 _TASK_TIMES: dict[str, float] = {}
 
 
-async def _get_by_task_path(task_path: str) -> PeriodicTask | None:
-    async with get_worker_session() as session:
-        row = (
-            await session.execute(select(PeriodicTask).where(PeriodicTask.task_path == task_path))
-        ).scalar_one_or_none()
-        return row
-
-
 async def _update_start(task_path: str) -> bool:
     async with get_worker_session() as session:
         row = (

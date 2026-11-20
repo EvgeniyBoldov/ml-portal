@@ -18,7 +18,6 @@ import { sandboxApi } from '../api';
 import SessionSidebar from '../components/SessionSidebar';
 import RunChat from '../components/RunChat';
 import ConfigPanel from '../components/ConfigPanel';
-import ConfirmWriteDialog from '../components/ConfirmWriteDialog';
 import type { SandboxSelectedItem } from '../types';
 import type { SandboxTraceState } from '../traceState';
 import {

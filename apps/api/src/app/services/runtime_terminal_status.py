@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 from app.runtime.events import RuntimeEvent, RuntimeEventType
 
@@ -39,20 +39,6 @@ def normalize_run_terminal_status(reason: Optional[str]) -> RunTerminalStatus:
     return RunTerminalStatus.STOPPED
 
 
-def normalize_run_status_for_storage(status: Optional[str]) -> str:
-    """
-    Normalize terminal runtime status values persisted in DB.
-
-    Keeps lifecycle statuses used outside finish flow (running/resumed/cancelled),
-    and normalizes runtime terminal statuses to canonical values.
-    """
-    value = str(status or "").strip()
-    passthrough = {"running", "resumed", "cancelled"}
-    if value in passthrough:
-        return value
-    return normalize_run_terminal_status(value).value
-
-
 def planner_terminal_from_event(event: RuntimeEvent) -> Optional[Tuple[RunTerminalStatus, Optional[str]]]:
     if event.type == RuntimeEventType.FINAL:
         stop_reason = str(event.data.get("stop_reason") or "").strip()
@@ -68,23 +54,3 @@ def planner_terminal_from_event(event: RuntimeEvent) -> Optional[Tuple[RunTermin
         return status, message
     return None
 
-
-def continuation_terminal_from_event(event: Dict[str, Any]) -> Optional[Tuple[ContinuationTerminalStatus, Optional[str]]]:
-    event_type = str(event.get("type") or "")
-    if event_type == "error":
-        return ContinuationTerminalStatus.ERROR, str(event.get("error") or "Unknown continuation error")
-    if event_type == "run_paused":
-        return ContinuationTerminalStatus.PAUSED, str(event.get("reason") or "")
-    if event_type == "final":
-        if event.get("stop_reason") == RunTerminalStatus.FAILED.value:
-            return ContinuationTerminalStatus.ERROR, None
-        return ContinuationTerminalStatus.COMPLETED, None
-    return None
-
-
-def continuation_api_status_from_terminal(status: ContinuationTerminalStatus) -> ContinuationApiStatus:
-    if status == ContinuationTerminalStatus.ERROR:
-        return ContinuationApiStatus.RESUMED_WITH_ERROR
-    if status == ContinuationTerminalStatus.PAUSED:
-        return ContinuationApiStatus.RESUMED_PAUSED_AGAIN
-    return ContinuationApiStatus.RESUMED_COMPLETED

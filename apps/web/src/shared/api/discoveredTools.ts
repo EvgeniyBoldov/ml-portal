@@ -40,7 +40,7 @@ export interface DiscoveredToolUpdateRequest {
   result_delivery?: 'direct' | 'store';
 }
 
-export interface McpProbeToolItem {
+interface McpProbeToolItem {
   slug: string;
   name: string;
   description?: string | null;

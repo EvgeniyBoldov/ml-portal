@@ -16,9 +16,9 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import Settings
-from app.core.ldap_client import LDAPAuthResult, LDAPUserProfile, LDAPClient
+from app.core.ldap_client import LDAPUserProfile, LDAPClient
 from app.core.logging import get_logger
-from app.models.tenant import Tenants, UserTenants
+from app.models.tenant import Tenants
 from app.models.user import Users
 from app.repositories.users_repo import AsyncUsersRepository
 from sqlalchemy import select

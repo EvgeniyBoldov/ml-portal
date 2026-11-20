@@ -642,4 +642,3 @@ export function InstancePage() {
   );
 }
 
-export default InstancePage;

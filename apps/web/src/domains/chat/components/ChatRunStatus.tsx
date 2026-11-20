@@ -3,7 +3,7 @@ import { Icon } from '@/shared/ui/Icon';
 import type { ActiveChatRun, ChatRuntimeProgress } from '../types';
 import styles from './ChatRunStatus.module.css';
 
-export function getRecentDistinctProgress(run: ActiveChatRun, limit = 2) {
+function getRecentDistinctProgress(run: ActiveChatRun, limit = 2) {
   const recent = run.progress
     .slice()
     .reverse()

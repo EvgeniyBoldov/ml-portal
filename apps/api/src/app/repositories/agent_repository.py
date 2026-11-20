@@ -149,17 +149,6 @@ class AgentVersionRepository:
         await self.session.execute(stmt)
         await self.session.flush()
 
-    async def archive_published_version(self, agent_id: UUID) -> None:
-        stmt = (
-            update(AgentVersion)
-            .where(
-                AgentVersion.agent_id == agent_id,
-                AgentVersion.status == AgentVersionStatus.PUBLISHED.value,
-            )
-            .values(status=AgentVersionStatus.ARCHIVED.value)
-        )
-        await self.session.execute(stmt)
-        await self.session.flush()
 
     async def delete(self, version: AgentVersion) -> None:
         await self.session.delete(version)

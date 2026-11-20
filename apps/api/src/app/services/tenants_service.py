@@ -45,13 +45,6 @@ class AsyncTenantsService:
         
         return await self._build_tenant_response(tenant)
     
-    async def list_tenants(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """List all tenants"""
-        tenants = await self.repo.list(limit=limit)
-        results: List[Dict[str, Any]] = []
-        for t in tenants:
-            results.append(await self._build_tenant_response(t))
-        return results
 
     async def list_tenants_page(
         self,

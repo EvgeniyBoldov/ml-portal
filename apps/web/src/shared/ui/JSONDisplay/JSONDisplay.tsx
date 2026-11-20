@@ -8,7 +8,7 @@
  * - Copy to clipboard functionality
  * - Expandable/collapsible
  */
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { Button } from '@/shared/ui';
 import styles from './JSONDisplay.module.css';
 
@@ -86,4 +86,3 @@ export function JSONDisplay({
   );
 }
 
-export default JSONDisplay;

@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 import inspect
 
-from sqlalchemy import String, delete, func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.agent import Agent

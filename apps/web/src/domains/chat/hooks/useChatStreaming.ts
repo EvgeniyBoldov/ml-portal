@@ -26,7 +26,6 @@ import {
 import type {
   ActiveChatRun,
   ChatHistory,
-  ChatRuntimeProgress,
   ChatRuntimeProgressSnapshot,
   ChatTimelineMessage,
 } from '../types';

@@ -214,17 +214,6 @@ class CredentialRepository:
         )
         return (await self.session.execute(stmt)).scalar_one_or_none()
 
-    async def get_all_for_instance(
-        self,
-        instance_id: UUID,
-    ) -> List[Credential]:
-        """Get all credentials for a tool instance"""
-        stmt = select(Credential).where(
-            Credential.instance_id == instance_id
-        ).order_by(Credential.created_at.desc())
-
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
 
     async def has_credentials(
         self,

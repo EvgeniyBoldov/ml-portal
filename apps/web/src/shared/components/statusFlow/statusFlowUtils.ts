@@ -86,7 +86,7 @@ function isActive(status: FlowStatus): boolean {
   return status === 'processing' || status === 'queued';
 }
 
-export function compareFlowNodePriority(a: FlowNode, b: FlowNode): number {
+function compareFlowNodePriority(a: FlowNode, b: FlowNode): number {
   const statusDelta = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
   if (statusDelta !== 0) return statusDelta;
 

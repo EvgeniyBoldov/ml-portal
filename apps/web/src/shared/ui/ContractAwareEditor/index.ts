@@ -1,1 +1,0 @@
-export { ContractAwareEditor } from './ContractAwareEditor';

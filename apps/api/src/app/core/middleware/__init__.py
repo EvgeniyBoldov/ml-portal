@@ -255,31 +255,3 @@ class TenantMiddleware(BaseHTTPMiddleware):
         )
         return any(path.startswith(prefix) for prefix in protected_prefixes)
 
-
-class TracingMiddleware(BaseHTTPMiddleware):
-    """Middleware for adding trace IDs to requests."""
-
-    async def dispatch(self, request: Request, call_next):
-        trace_id = request.headers.get("X-Trace-ID") or str(uuid.uuid4())
-        span_id = str(uuid.uuid4())
-
-        request.state.trace_id = trace_id
-        request.state.span_id = span_id
-
-        response = await call_next(request)
-
-        response.headers["X-Trace-ID"] = trace_id
-        response.headers["X-Span-ID"] = span_id
-
-        return response
-
-
-class IdempotencyMiddleware(BaseHTTPMiddleware):
-    """Middleware for handling idempotency keys."""
-
-    async def dispatch(self, request: Request, call_next):
-        idempotency_key = request.headers.get("Idempotency-Key")
-        if idempotency_key and request.method in ["POST", "PUT", "PATCH"]:
-            pass
-        response = await call_next(request)
-        return response

@@ -35,7 +35,7 @@ function renderPanel() {
 }
 
 beforeEach(() => {
-  vi.mocked(apiRequest).mockImplementation(async (path, init) => init?.method === 'PUT' ? {} : tenantSettings as never);
+  vi.mocked(apiRequest).mockImplementation(async (_path, init) => init?.method === 'PUT' ? {} : tenantSettings as never);
 });
 afterEach(() => { cleanup(); vi.clearAllMocks(); });
 

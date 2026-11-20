@@ -4,7 +4,6 @@ Collection Info Tool - schema/data-shape inspection for any collection type.
 from __future__ import annotations
 
 import re
-import uuid
 from typing import Any, ClassVar, Dict, List
 
 from sqlalchemy import text

@@ -101,16 +101,6 @@ class FileCodecRegistry:
     def supported_formats(cls) -> tuple[str, ...]:
         return tuple(sorted(cls._codecs))
 
-    @classmethod
-    def format_for_filename(cls, filename: str) -> FileFormat | None:
-        extension = PurePosixPath(str(filename or "").strip()).suffix.lower().lstrip(".")
-        if not extension:
-            return None
-        try:
-            return cls.get(extension).format
-        except ValueError:
-            return None
-
 
 def _normalize_filename(filename: str, extension: str) -> str:
     raw = PurePosixPath(str(filename or "file").strip()).name or "file"

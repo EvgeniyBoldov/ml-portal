@@ -1,8 +1,6 @@
 # app/models/rag_ingest.py
 from __future__ import annotations
-from datetime import datetime
-from typing import Optional, Dict, Any, List
-from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, CheckConstraint, UniqueConstraint, Index
+from sqlalchemy import Column, String, Integer, Text, DateTime, ForeignKey, UniqueConstraint, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func

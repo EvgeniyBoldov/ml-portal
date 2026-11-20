@@ -1,17 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Badge, Button, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Select, Tab, LifecycleDeleteDialog, type DataTableColumn } from '@/shared/ui';
-import { adminApi, type AdminGlossaryTerm, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type SemanticMemoryAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
+import { Button, ConfirmDialog, DataTable, EntityPageV2, Input, Modal, Tab, LifecycleDeleteDialog } from '@/shared/ui';
+import { adminApi, type MemoryScopeAdminItem, type MemoryScopeProposalAdminItem, type ShadowMemoryCandidate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
 import MemoryBulkRejectDialog from '@/domains/admin/components/MemoryBulkRejectDialog';
 import MemoryScopeProposalDialog from '@/domains/admin/components/MemoryScopeProposalDialog';
-import MemoryActionsMenu from '@/domains/admin/components/MemoryActionsMenu';
 import LongMemoryTab from '@/domains/admin/components/LongMemoryTab';
 import LongMemorySearchModal from '@/domains/admin/components/LongMemorySearchModal';
-import { reviewColumns } from '@/domains/admin/components/MemoryReviewTable';
-import { scopeColumns, scopeTypeLabels, type ScopeTableRow } from '@/domains/admin/components/MemoryScopeTable';
+import { scopeColumns, type ScopeTableRow } from '@/domains/admin/components/MemoryScopeTable';
 import styles from './MemoryPage.module.css';
 
 const slugifyScopeName = (value: string) => {
@@ -20,26 +18,8 @@ const slugifyScopeName = (value: string) => {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 };
 
-const glossaryColumns: DataTableColumn<AdminGlossaryTerm>[] = [
-  { key: 'canonical_term', label: 'ТЕРМИН', sortable: true, filter: { kind: 'text', placeholder: 'Термин' }, render: (row) => <strong>{row.canonical_term}</strong> },
-  { key: 'definition', label: 'ОПРЕДЕЛЕНИЕ', render: (row) => row.definition },
-  { key: 'aliases', label: 'АЛИАСЫ', filter: { kind: 'text', placeholder: 'Алиас', getValue: (row) => row.aliases.join(' ') }, render: (row) => row.aliases.length ? row.aliases.join(', ') : '—' },
-  { key: 'is_active', label: 'СТАТУС', width: 120, render: (row) => <Badge tone={row.is_active ? 'success' : 'warn'}>{row.is_active ? 'активен' : 'выключен'}</Badge> },
-  { key: 'created_at', label: 'СОЗДАН', width: 170, render: (row) => row.created_at ? new Date(row.created_at).toLocaleString('ru-RU') : '—' },
-  { key: 'updated_at', label: 'ОБНОВЛЁН', width: 170, render: (row) => row.updated_at ? new Date(row.updated_at).toLocaleString('ru-RU') : '—' },
-];
-
-const memoryColumns: DataTableColumn<SemanticMemoryAdminItem>[] = [
-  { key: 'subject', label: 'ЗНАНИЕ', sortable: true, filter: { kind: 'text', placeholder: 'Знание', getValue: (row) => `${row.subject} ${row.content_text}` }, render: (row) => <div><strong>{row.subject}</strong><div style={{ color: 'var(--muted)', fontSize: '0.8rem' }}>{row.content_text}</div></div> },
-  { key: 'item_type', label: 'ТИП', width: 150, filter: { kind: 'select', placeholder: 'Все типы', options: ['description', 'relationship', 'rule', 'constraint', 'procedure', 'decision'].map((value) => ({ value, label: value })), getValue: (row) => row.item_type }, render: (row) => <Badge tone="neutral">{row.item_type}</Badge> },
-  { key: 'scope_keys', label: 'СКОУПЫ', width: 260, filter: { kind: 'text', placeholder: 'Ключ скоупа', getValue: (row) => row.scope_keys.join(' ') }, render: (row) => row.scope_keys.length ? row.scope_keys.join(', ') : 'Без скоупа' },
-  { key: 'state', label: 'СОСТОЯНИЕ', width: 150, filter: { kind: 'select', placeholder: 'Все состояния', options: ['active', 'uncertain', 'stale'].map((value) => ({ value, label: value })), getValue: (row) => row.state }, render: (row) => <Badge tone={row.state === 'active' ? 'success' : row.state === 'uncertain' ? 'warn' : 'danger'}>{row.state}</Badge> },
-  { key: 'confidence', label: 'УВЕРЕННОСТЬ', width: 130, align: 'right', filter: { kind: 'select', placeholder: 'Любая', options: [{ value: 'high', label: '≥ 80%' }, { value: 'medium', label: '50–79%' }, { value: 'low', label: '< 50%' }], getValue: (row) => row.confidence >= 0.8 ? 'high' : row.confidence >= 0.5 ? 'medium' : 'low' }, render: (row) => `${Math.round(row.confidence * 100)}%` },
-  { key: 'source_count', label: 'ИСТОЧНИКИ', width: 110, align: 'right', sortable: true, filter: { kind: 'select', placeholder: 'Любое число', options: [{ value: 'one', label: '1' }, { value: 'multiple', label: '2+' }], getValue: (row) => row.source_count > 1 ? 'multiple' : 'one' }, render: (row) => row.source_count },
-];
-
 export default function MemoryPage() {
-  const navigate = useNavigate();
+  useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   // DEPRECATED: glossary, approved semantic memory, and candidate review remain
   // in storage/API for historical inspection, but are no longer admin tabs.
@@ -48,14 +28,14 @@ export default function MemoryPage() {
   const initialTab = deprecatedTabs.includes(requestedTab) ? 'scopes' : ['scopes', 'long-memory'].includes(requestedTab) ? requestedTab : 'scopes';
   const [activeTab, setActiveTab] = useState(initialTab);
   const [query, setQuery] = useState('');
-  const [memoryScopeType, setMemoryScopeType] = useState('');
-  const [memoryScopeId, setMemoryScopeId] = useState('');
-  const [memoryPage, setMemoryPage] = useState(0);
+  const [memoryScopeType] = useState('');
+  const [memoryScopeId] = useState('');
+  const [memoryPage] = useState(0);
   const [selectedGlossaryIds, setSelectedGlossaryIds] = useState<Set<string | number>>(new Set());
   const [confirmGlossaryAction, setConfirmGlossaryAction] = useState<'delete' | 'deactivate' | 'activate' | null>(null);
   const [selectedMemoryIds, setSelectedMemoryIds] = useState<Set<string | number>>(new Set());
   const [confirmMemoryDeactivate, setConfirmMemoryDeactivate] = useState(false);
-  const [selectedReviewIds, setSelectedReviewIds] = useState<Set<string | number>>(new Set());
+  const [, setSelectedReviewIds] = useState<Set<string | number>>(new Set());
   const [bulkReviewRejectIds, setBulkReviewRejectIds] = useState<string[] | null>(null);
   const [scopeProposalEditor, setScopeProposalEditor] = useState<MemoryScopeProposalAdminItem | null>(null);
   const [scopeEditor, setScopeEditor] = useState<MemoryScopeAdminItem | 'new' | null>(null);
@@ -76,12 +56,12 @@ export default function MemoryPage() {
     },
     onSuccess: () => { setScopeEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory', 'scopes'] }); },
   });
-  const { data: glossary, isLoading: glossaryLoading, isError: glossaryError } = useQuery({
+  const { data: glossary } = useQuery({
     queryKey: qk.admin.glossary.all(),
     queryFn: () => adminApi.getGlossary(),
     enabled: activeTab === 'glossary',
   });
-  const { data: memory, isLoading: memoryLoading, isError: memoryError } = useQuery({
+  useQuery({
     queryKey: ['admin', 'memory', 'approved', query, memoryScopeType, memoryScopeId, memoryPage],
     queryFn: () => adminApi.getSemanticMemory({
       query: query || undefined,
@@ -90,7 +70,7 @@ export default function MemoryPage() {
     }),
     enabled: activeTab === 'memory',
   });
-  const { data: review, isLoading: reviewLoading, isError: reviewError } = useQuery({
+  useQuery({
     queryKey: qk.admin.memory.review(),
     queryFn: async () => {
       const rows: ShadowMemoryCandidate[] = [];
@@ -114,7 +94,6 @@ export default function MemoryPage() {
     },
     enabled: activeTab === 'scopes',
   });
-  const selectedReviewCandidates = (review ?? []).filter((row) => selectedReviewIds.has(row.id));
   const retryableSnapshots = useQuery({
     queryKey: ['admin', 'memory', 'retryable-snapshots'],
     queryFn: () => adminApi.getRetryableShadowSnapshots(),
@@ -146,10 +125,6 @@ export default function MemoryPage() {
     },
     onError: (error: Error) => showError(error.message || 'Не удалось деактивировать записи памяти'),
   });
-  const selectedGlossaryEntries = (glossary ?? []).filter((entry) => selectedGlossaryIds.has(entry.id));
-  const hasActiveGlossarySelection = selectedGlossaryEntries.some((entry) => entry.is_active);
-  const canActivateGlossarySelection = selectedGlossaryEntries.some((entry) => !entry.is_active) &&
-    selectedGlossaryEntries.every((entry) => Boolean(entry.definition.trim()));
   const glossaryAction = useMutation<{ deleted?: number; deactivated?: number; activated?: number }>({
     mutationFn: () => confirmGlossaryAction === 'delete'
       ? adminApi.deleteGlossaryTerms([...selectedGlossaryIds].map(String))
@@ -166,13 +141,11 @@ export default function MemoryPage() {
     },
     onError: (error: Error) => showError(error.message || 'Не удалось изменить выбранные термины'),
   });
-  const filteredGlossary = useMemo(() => {
+  useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     if (!needle) return glossary ?? [];
     return (glossary ?? []).filter((row) => [row.canonical_term, ...row.aliases].join(' ').toLocaleLowerCase().includes(needle));
   }, [glossary, query]);
-  const activeMemoryScopes = (memoryScopes ?? []).filter((scope) => scope.lifecycle_status === 'active');
-  const memoryScopeTypes = [...new Set(activeMemoryScopes.map((scope) => scope.scope_type))].sort();
   const openScopeEditor = (row: MemoryScopeAdminItem) => {
     setScopeForm({ scope_type: row.scope_type, key: row.key, name: row.name, aliases: row.aliases.join(', '), is_all: row.is_all, project_type: row.project_type ?? '' });
     setScopeEditor(row);

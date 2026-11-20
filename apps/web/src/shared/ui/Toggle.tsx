@@ -1,7 +1,6 @@
 /**
  * Toggle - современный переключатель вместо чекбокса
  */
-import React from 'react';
 import styles from './Toggle.module.css';
 
 interface ToggleProps {
@@ -13,7 +12,7 @@ interface ToggleProps {
   size?: 'small' | 'medium';
 }
 
-export function Toggle({
+function Toggle({
   checked,
   onChange,
   disabled = false,

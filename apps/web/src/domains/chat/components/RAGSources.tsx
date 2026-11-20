@@ -1,10 +1,10 @@
-import React, { useCallback, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { Icon } from '@/shared/ui/Icon';
 import { buildArtifactDownloadUrl, buildFileDownloadUrl, buildRagDocFileId } from '@shared/api/files';
 import type { ChatRagSource } from '../types';
 import styles from './RAGSources.module.css';
 
-export type RAGSource = ChatRagSource;
+type RAGSource = ChatRagSource;
 
 interface RAGSourcesProps {
   sources: RAGSource[];

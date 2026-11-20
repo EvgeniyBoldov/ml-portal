@@ -1,4 +1,3 @@
-import React from 'react';
 import { Badge } from '@/shared/ui';
 import { number } from './format';
 import styles from './DashboardTables.module.css';

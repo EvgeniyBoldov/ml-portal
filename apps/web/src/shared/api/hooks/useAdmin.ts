@@ -16,9 +16,7 @@ import {
   type TenantCreate,
   type TenantUpdate,
   type Tenant,
-  type Model,
-  type ModelCreate,
-  type ModelUpdate,
+  
 } from '../admin';
 import { qk } from '@shared/api/keys';
 
@@ -64,18 +62,6 @@ export function useCreateUser() {
   });
 }
 
-export function useUpdateModel() {
-  const queryClient = useQueryClient();
-
-  return useMutation<Model, Error, { id: string; data: ModelUpdate }>({
-    mutationFn: ({ id, data }: { id: string; data: ModelUpdate }) =>
-      adminApi.updateModel(id, data),
-    retry: false,
-    onSuccess: (_model: Model, variables: { id: string; data: ModelUpdate }) => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-    },
-  });
-}
 
 export function useUpdateUser() {
   const queryClient = useQueryClient();
@@ -130,71 +116,15 @@ export function useModels(params: UseModelsParams = {}) {
   });
 }
 
-export function useModel(id: string | undefined) {
-  return useQuery({
-    queryKey: id ? qk.admin.models.detail(id) : ['admin', 'models', 'undefined'],
-    queryFn: () => adminApi.getModel(id!),
-    enabled: !!id,
-    staleTime: 30000, // 30 seconds for detail
-  });
-}
 
-export function useCreateModel() {
-  const queryClient = useQueryClient();
 
-  return useMutation<Model, Error, ModelCreate>({
-    mutationFn: (data: ModelCreate) => adminApi.createModel(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-    },
-  });
-}
 
-export function useDeleteModel() {
-  const queryClient = useQueryClient();
 
-  return useMutation<void, Error, string>({
-    mutationFn: (id: string) => adminApi.deleteModel(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-    },
-  });
-}
-
-export function useHealthCheckModel() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (params: { id: string; force?: boolean }) =>
-      adminApi.healthCheckModel(params.id, params.force),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-    },
-  });
-}
-
-export function useHealthCheckAllModels() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: () => adminApi.healthCheckAllModels(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.admin.models.all() });
-    },
-  });
-}
 
 // ============================================================================
 // Tenants
 // ============================================================================
 
-export function useTenants() {
-  return useQuery({
-    queryKey: qk.admin.tenants.list({}),
-    queryFn: () => adminApi.getTenants(),
-    staleTime: 60000, // 1 minute for lists
-  });
-}
 
 export function useTenant(id: string | undefined) {
   return useQuery({
@@ -238,21 +168,4 @@ export function useUpdateTenant() {
 // Audit
 // ============================================================================
 
-export interface UseAuditParams {
-  actor_user_id?: string;
-  action?: string;
-  object_type?: string;
-  start_date?: string;
-  end_date?: string;
-  limit?: number;
-  cursor?: string;
-}
 
-export function useAuditLog(params: UseAuditParams = {}) {
-  return useQuery({
-    queryKey: qk.admin.audit({ page: params.cursor ? undefined : 1 }),
-    queryFn: () => adminApi.getAuditLogs(params),
-    staleTime: 60000, // 1 minute for lists
-    placeholderData: keepPreviousData,
-  });
-}

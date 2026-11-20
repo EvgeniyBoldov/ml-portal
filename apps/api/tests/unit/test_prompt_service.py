@@ -69,12 +69,3 @@ async def test_create_version_auto_detects_input_variables(service: PromptServic
     assert created.input_variables == ["name"]
     assert created.status == PromptStatus.DRAFT.value
 
-
-@pytest.mark.asyncio
-async def test_render_active_uses_active_version_template(service: PromptService):
-    active = MagicMock()
-    active.template = "Hello {{ name }}"
-    service.get_active_version = AsyncMock(return_value=active)
-    rendered = await service.render_active("chat.system", {"name": "world"})
-    assert rendered == "Hello world"
-

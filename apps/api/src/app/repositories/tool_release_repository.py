@@ -47,17 +47,6 @@ class ToolBackendReleaseRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
     
-    async def get_latest(self, tool_id: UUID) -> Optional[ToolBackendRelease]:
-        """Get latest backend release for a tool"""
-        stmt = (
-            select(ToolBackendRelease)
-            .where(ToolBackendRelease.tool_id == tool_id)
-            .order_by(ToolBackendRelease.synced_at.desc())
-            .limit(1)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one_or_none()
-
 
 class ToolReleaseRepository:
     """Repository for ToolRelease"""
@@ -173,19 +162,6 @@ class ToolWithReleasesRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
     
-    async def list_by_domain(self, domain: str) -> List[Tool]:
-        """List all tools in a runtime domain"""
-        stmt = (
-            select(Tool)
-            .options(
-                selectinload(Tool.backend_releases),
-                selectinload(Tool.releases),
-            )
-            .where(Tool.domains.any(domain))
-            .order_by(Tool.name)
-        )
-        result = await self.session.execute(stmt)
-        return list(result.scalars().all())
     
     async def update(self, tool: Tool) -> Tool:
         """Update a tool"""

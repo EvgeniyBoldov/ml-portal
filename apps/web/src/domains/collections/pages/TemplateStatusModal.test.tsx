@@ -5,7 +5,7 @@ import { vi } from 'vitest';
 
 import { collectionsApi, type Collection } from '@shared/api/collections';
 import { ApiError } from '@shared/api/errors';
-import { TemplateStatusModal } from './TemplateStatusModal';
+import TemplateStatusModal from './TemplateStatusModal';
 
 vi.mock('@shared/lib/sse', () => ({
   openSSE: () => ({ disconnect: vi.fn() }),

@@ -2,7 +2,7 @@ import { apiRequest } from './http';
 
 export type LifecycleKind = 'tenant' | 'user' | 'collection' | 'agent' | 'rbac_rule' | 'memory_scope' | 'memory_item';
 export type LifecycleMode = 'soft' | 'hard';
-export type DependencyWillBe =
+type DependencyWillBe =
   | 'cascade_deprecated'
   | 'cascade_deleted'
   | 'migrated'

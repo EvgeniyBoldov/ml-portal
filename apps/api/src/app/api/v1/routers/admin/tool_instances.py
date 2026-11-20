@@ -11,7 +11,6 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.agents.capability_resolver import CollectionCapabilityResolver
 from app.agents.data_instance_resolver import CollectionRuntimeResolver

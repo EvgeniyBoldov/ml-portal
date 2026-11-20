@@ -4,7 +4,6 @@ import json
 import logging
 
 from sqlalchemy import select
-import app.models
 from app.adapters.s3_client import s3_manager
 from app.core.config import get_settings
 from app.core.db import get_session_factory

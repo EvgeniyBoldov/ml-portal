@@ -1,11 +1,10 @@
-import React from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { AdminSidebar } from '../components/AdminSidebar';
 import { useAuth } from '@/shared/hooks/useAuth';
 import { AppHeader } from '@/shared/ui/AppHeader';
 import styles from './AdminLayout.module.css';
 
-export function AdminLayout() {
+function AdminLayout() {
   const navigate = useNavigate();
   const { logout, user } = useAuth();
 

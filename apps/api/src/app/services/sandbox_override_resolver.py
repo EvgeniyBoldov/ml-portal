@@ -21,7 +21,6 @@ from app.core.logging import get_logger
 from app.services.sandbox_override_blueprints import (
     AGENT_VERSION_EXEC_FIELDS as _AGENT_VERSION_EXEC_FIELDS,
     AGENT_VERSION_PROMPT_FIELDS as _AGENT_VERSION_PROMPT_FIELDS,
-    AGENT_VERSION_ALL_FIELDS as _AGENT_VERSION_ALL_FIELDS,
     PLATFORM_GATE_FIELDS as _PLATFORM_GATE_FIELDS,
     PLATFORM_POLICY_FIELDS as _PLATFORM_POLICY_FIELDS,
     SANDBOX_BLUEPRINTS as _SANDBOX_BLUEPRINTS,
@@ -107,18 +106,6 @@ class SandboxOverrideResolver:
                     entity_fields[field_path] = field
         return registry
 
-    @classmethod
-    def get_override_field_spec(
-        cls,
-        *,
-        entity_type: str,
-        field_path: str,
-    ) -> Optional[Dict[str, Any]]:
-        entity_fields = cls._field_registry().get(entity_type, {})
-        field = entity_fields.get(field_path)
-        if field is None:
-            return None
-        return json.loads(json.dumps(field, ensure_ascii=False))
 
     @classmethod
     def is_override_allowed(
@@ -195,9 +182,6 @@ class SandboxOverrideResolver:
             current = current.get(part)
         return current
 
-    @property
-    def has_overrides(self) -> bool:
-        return bool(self._overrides)
 
     @property
     def agent_slug_override(self) -> Optional[str]:
@@ -275,62 +259,6 @@ class SandboxOverrideResolver:
             "is_overridden": has_override,
         }
 
-    def resolve_blueprint_state(
-        self,
-        *,
-        blueprint_key: str,
-        entity_id: Optional[str],
-        source: Dict[str, Any],
-    ) -> Dict[str, Any]:
-        """
-        Build resolver state for a blueprint using source object:
-        - sections with field-level base/override/effective values.
-        """
-        blueprint = self.get_blueprint(blueprint_key)
-        if blueprint is None:
-            return {
-                "blueprint_key": blueprint_key,
-                "entity_type": "",
-                "entity_id": entity_id,
-                "sections": [],
-            }
-
-        entity_type = str(blueprint.get("entity_type") or "")
-        sections_out: List[Dict[str, Any]] = []
-
-        for section in blueprint.get("sections", []):
-            fields_out: List[Dict[str, Any]] = []
-            for field in section.get("fields", []):
-                source_key = field.get("source_key") or field.get("key") or field.get("field_path")
-                field_path = str(field.get("field_path") or "")
-                base_value = self._nested_get(source, str(source_key))
-                field_state = self.resolve_field_state(
-                    entity_type=entity_type,
-                    entity_id=entity_id,
-                    field_path=field_path,
-                    base_value=base_value,
-                )
-                fields_out.append({
-                    "key": field.get("key"),
-                    "label": field.get("label"),
-                    "field_type": field.get("field_type"),
-                    "editable": field.get("editable", True),
-                    "options": field.get("options", []),
-                    "help_text": field.get("help_text"),
-                    "source_key": field.get("source_key"),
-                    **field_state,
-                })
-            sections_out.append({
-                "title": section.get("title", ""),
-                "fields": fields_out,
-            })
-
-        return {
-            "blueprint_key": blueprint_key,
-            "entity_type": entity_type,
-            "entity_id": entity_id,
-            "sections": sections_out,
-        }
 
     # ── AgentVersion ─────────────────────────────────────────────────────
 
@@ -523,34 +451,12 @@ class SandboxOverrideResolver:
 
     # ── Tenant overrides ─────────────────────────────────────────────────
 
-    def get_tenant_overrides(self) -> Dict[str, Any]:
-        """Get tenant-level overrides."""
-        result: Dict[str, Any] = {}
-        for ov in self._iter_overrides("orchestration"):
-            field_path = ov.get("field_path", "")
-            value = ov.get("value_json")
-
-            if field_path.startswith("tenant."):
-                key = field_path[len("tenant."):]
-                result[key] = value
-
-        return result
 
     # ── SystemLLMRole runtime configs ────────────────────────────────────
 
-    def get_role_overrides(self, entity_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Get overrides for a SystemLLMRole config.
-
-        These modify the prompt fields of the selected runtime role.
-        """
-        return self.get_overrides_for_entity("orchestration", entity_id)
 
     # ── ToolRelease overrides ────────────────────────────────────────────
 
-    def get_tool_release_overrides(self, release_id: str) -> Dict[str, Any]:
-        """Get overrides for a specific ToolRelease."""
-        return self.get_overrides_for_entity("tool_release", release_id)
 
     def get_tool_publication_overrides(self) -> Dict[str, bool]:
         """Get sandbox publication flags for discovered tools."""

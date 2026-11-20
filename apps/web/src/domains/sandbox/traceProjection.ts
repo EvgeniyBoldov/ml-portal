@@ -5,13 +5,13 @@ import { callPresentation } from './callPresentation';
 import { projectPlan, projectPlanTask, taskStatusLabel, type PlanTaskViewModel, type PlanViewModel } from './planInspection';
 import { projectPlanHistory } from './planHistory';
 
-export type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
-export type TraceStageKind = 'iteration' | 'route_policy' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
-export type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
-export type TraceExecutorKind = 'planner' | 'preflight' | 'route_policy' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
-export type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'input' | 'route_policy' | 'checkpoint' | 'memory' | 'facts' | 'published' | 'result' | 'prompt' | 'rbac' | 'limits' | 'operations' | 'request' | 'response' | 'error' | 'raw';
+type TraceCallKind = 'llm' | 'tool' | 'clarify' | 'confirm' | 'error';
+type TraceStageKind = 'iteration' | 'route_policy' | 'turn_preflight' | 'memory_preparation' | 'memory_writeback' | 'synthesis';
+type TraceStepKind = 'planner_decision' | 'task_execution' | 'memory_selection' | 'memory_write' | 'synthesis';
+type TraceExecutorKind = 'planner' | 'preflight' | 'route_policy' | 'agent' | 'memory_selector' | 'fact_extractor' | 'fact_compactor' | 'synthesizer';
+type TraceInspectorTabId = 'info' | 'plan' | 'task' | 'input' | 'route_policy' | 'checkpoint' | 'memory' | 'facts' | 'published' | 'result' | 'prompt' | 'rbac' | 'limits' | 'operations' | 'request' | 'response' | 'error' | 'raw';
 
-export interface TraceInspectorTab {
+interface TraceInspectorTab {
   id: TraceInspectorTabId;
   label: string;
 }
@@ -44,7 +44,7 @@ export interface TraceCall {
   errorView?: CallErrorDetails;
 }
 
-export interface TraceCallInfo {
+interface TraceCallInfo {
   status: CallPresentationStatus;
   durationMs?: number;
   retryCount: number;
@@ -54,7 +54,7 @@ export interface TraceCallInfo {
   tokensTotal?: number;
 }
 
-export interface TraceCallRequest {
+interface TraceCallRequest {
   model?: string;
   purpose?: string;
   temperature?: number;
@@ -75,7 +75,7 @@ export interface TraceCallRequest {
   message?: string;
 }
 
-export interface TraceToolInvocation {
+interface TraceToolInvocation {
   name: string;
   arguments?: unknown;
 }
@@ -105,7 +105,7 @@ export interface TraceToolResult {
   failure?: ReturnType<typeof toolResult>['failure'];
 }
 
-export interface TraceCallResponse {
+interface TraceCallResponse {
   resultKind?: string;
   responseLength?: number;
   terminal?: boolean;
@@ -124,7 +124,7 @@ export interface TraceExtraction {
   result: TraceExtractionResult;
 }
 
-export interface TraceExtractionResult {
+interface TraceExtractionResult {
   status: 'running' | 'completed' | 'failed';
   fileName?: string;
   parser?: string;
@@ -140,7 +140,7 @@ export interface TraceExtractionResult {
   message?: string;
 }
 
-export interface TraceLimitRow {
+interface TraceLimitRow {
   key: string;
   label: string;
   used?: number;
@@ -153,7 +153,7 @@ export interface TraceLimitsView {
   rows: TraceLimitRow[];
 }
 
-export type TraceExecutorStatisticKey = 'llm_calls' | 'tool_calls' | 'tokens_in' | 'tokens_out' | 'tokens_total' | 'llm_retries' | 'llm_errors' | 'tool_errors';
+type TraceExecutorStatisticKey = 'llm_calls' | 'tool_calls' | 'tokens_in' | 'tokens_out' | 'tokens_total' | 'llm_retries' | 'llm_errors' | 'tool_errors';
 
 export interface TraceExecutorStatistic {
   key: TraceExecutorStatisticKey;
@@ -169,7 +169,7 @@ export interface TraceExecutorInfoView {
   statistics: TraceExecutorStatistic[];
 }
 
-export interface TraceAccessRow {
+interface TraceAccessRow {
   kind: 'Агент' | 'Коллекция';
   name: string;
   allowed: boolean;
@@ -257,7 +257,7 @@ export interface TraceToolOverrideSnapshot {
   suppressedPublication: Array<{ toolId: string; reason?: string }>;
 }
 
-export type TraceResultStatus = 'running' | 'completed' | 'failed' | 'unfulfillable' | 'aborted' | 'paused' | 'waiting' | 'unknown';
+type TraceResultStatus = 'running' | 'completed' | 'failed' | 'unfulfillable' | 'aborted' | 'paused' | 'waiting' | 'unknown';
 
 export interface TraceExecutorResult {
   name: string;
@@ -276,8 +276,8 @@ export interface TraceExecutorResult {
   operations: { total: number; succeeded: number; failed: number };
 }
 
-export type TraceAgentCompletion = 'fulfilled' | 'needs' | 'unfulfillable';
-export type TraceAgentOutcome = 'completed' | 'needs_dependency' | 'unfulfillable';
+type TraceAgentCompletion = 'fulfilled' | 'needs' | 'unfulfillable';
+type TraceAgentOutcome = 'completed' | 'needs_dependency' | 'unfulfillable';
 
 export interface TraceAgentNeedView {
   description: string;
@@ -298,7 +298,7 @@ export interface TraceAgentSourceView {
   href?: string;
 }
 
-export interface TraceAgentActionView {
+interface TraceAgentActionView {
   label: string;
   retrieval: boolean;
   inlineComplete?: boolean;
@@ -312,7 +312,7 @@ export interface TraceAgentDiagnosticView {
   details?: string[];
 }
 
-export interface TraceAgentInteractionView {
+interface TraceAgentInteractionView {
   kind: 'input' | 'confirmation';
   question?: string;
   message?: string;
@@ -393,7 +393,7 @@ export interface TraceRoutePolicy {
   userRequest?: string;
 }
 
-export interface TraceMemoryFact {
+interface TraceMemoryFact {
   scope: string;
   kind: string;
   subject: string;
@@ -423,7 +423,7 @@ export interface TraceMemoryComponentResult {
   durationMs?: number;
 }
 
-export interface TraceMemoryDecision {
+interface TraceMemoryDecision {
   phase: string;
   outcome: string;
   reasonCode: string;
@@ -478,7 +478,7 @@ export interface TraceStage {
   routePolicy?: TraceRoutePolicy;
 }
 
-export interface TraceStageFailure {
+interface TraceStageFailure {
   label: string;
   code?: string;
   message?: string;
@@ -504,7 +504,7 @@ export interface TraceStep {
   metrics: TraceMetrics;
 }
 
-export interface TraceTaskAttempt {
+interface TraceTaskAttempt {
   id: string;
   steps: Array<{ entity: TraceEntity; executorRuns: TraceExecutorRun[] }>;
 }
@@ -525,7 +525,7 @@ export interface TraceMetrics {
   failedCalls?: number;
 }
 
-export interface TraceAttachment {
+interface TraceAttachment {
   artifactId: string;
   fileName: string;
   downloadUrl?: string;
@@ -657,7 +657,7 @@ const resultStatusOf = (value: unknown): TraceResultStatus => {
   if (status === 'running' || status === 'in_progress') return 'running';
   return status ? 'running' : 'unknown';
 };
-export const traceResultStatusLabel = (status: TraceResultStatus): string => ({
+const traceResultStatusLabel = (status: TraceResultStatus): string => ({
   completed: 'Готово', failed: 'Ошибка', unfulfillable: 'Неисполнимо', aborted: 'Прервано', paused: 'На паузе',
   waiting: 'Ожидает данных', running: 'Выполняется', unknown: 'Нет результата',
 } as Record<TraceResultStatus, string>)[status];
@@ -718,7 +718,7 @@ const isOrdinaryAgentExecutor = (executor: TraceExecutorRun): boolean => (
   executor.kind === 'agent'
   && !['document_memory_extractor', 'checkpoint'].includes(executor.executorSlug)
 );
-export function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
+function tabsForTarget(target: TraceInspectionTarget): TraceInspectorTab[] {
   if (target.kind === 'stage' && target.stage.kind === 'route_policy') return [tab('info', 'Инфо'), tab('route_policy', 'Рекомендация'), tab('raw', 'RAW')];
   if (target.kind === 'stage' && isDocumentMemoryStage(target.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
   if (target.kind === 'step' && isDocumentMemoryStage(target.step.stage)) return [tab('info', 'Инфо'), tab('result', 'Итог'), tab('raw', 'RAW')];
@@ -1226,7 +1226,7 @@ function numberPayload(payload: Record<string, unknown>, key: string): number | 
   return asNumber(payload[key]);
 }
 
-function requestViewFor(kind: TraceCallKind, payload: Record<string, unknown>): TraceCallRequest {
+function requestViewFor(_kind: TraceCallKind, payload: Record<string, unknown>): TraceCallRequest {
   const rawMessages = Array.isArray(payload.messages) ? payload.messages : [];
   const messages = rawMessages
     .map((item) => {
@@ -2908,7 +2908,6 @@ function safeRunError(events: RuntimeJournalEvent[]): string | undefined {
 export function projectTraceRun(state: SandboxTraceState): TraceRunView {
   const events = runEvents(state);
   const runTerminal = [...events].reverse().find((event) => event.event_type === 'run_end' || event.event_type === 'run_failed');
-  const runStatus = asString(runTerminal?.payload.status).toLowerCase();
   // One journal fact is the accepted answer. SSE `final`, deltas and executor
   // outputs are transport/intermediate data and cannot backfill run history.
   const answerMarker = [...events].reverse().find((event) => (

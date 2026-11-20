@@ -1,7 +1,7 @@
 /** Shared API types */
 export type ExecutionMode = 'normal' | 'thinking';
 
-export interface Pagination {
+interface Pagination {
   page?: number;
   size?: number;
   total?: number;
@@ -15,15 +15,6 @@ export interface PaginatedResponse<T> {
   next_cursor?: string | null;
   has_more?: boolean;
   pagination?: Pagination;
-}
-
-export interface ApiResponse<T = unknown> {
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-  request_id?: string;
 }
 
 export interface Chat {
@@ -85,12 +76,5 @@ export interface LoginResponse {
   access_token: string;
   token_type: string;
   user: User;
-  expires_in?: number;
-}
-
-export interface AuthTokens {
-  access_token: string;
-  token_type: string;
-  refresh_token?: string;
   expires_in?: number;
 }

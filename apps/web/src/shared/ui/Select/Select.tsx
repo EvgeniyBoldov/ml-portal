@@ -110,9 +110,6 @@ export function Select({
   }, [disabled, openMenu]);
 
   const handleMenuKeyDown = useCallback((e: React.KeyboardEvent) => {
-    const enabledOptions = options.filter(opt => !opt.disabled);
-    const enabledCount = enabledOptions.length;
-
     switch (e.key) {
       case 'Escape':
         e.preventDefault();
@@ -278,4 +275,3 @@ export function Select({
   );
 }
 
-export default Select;

@@ -182,20 +182,6 @@ export const useAppStore = create<AppStore>(set => ({
 }));
 
 // Selectors for better performance
-export const useModalOpen = (id: string) =>
-  useAppStore(state => state.modals[id] || false);
 
-export const useDropdownOpen = (id: string) =>
-  useAppStore(state => state.dropdowns[id] || false);
 
 // Admin selectors
-export const useSelectedUsers = () =>
-  useAppStore(state => state.selectedUserIds);
-export const useSelectedModels = () =>
-  useAppStore(state => state.selectedModelIds);
-export const useSelectedTenants = () =>
-  useAppStore(state => state.selectedTenantIds);
-export const useSidepanelOpen = (id: string) =>
-  useAppStore(state => state.sidepanels[id] || false);
-export const useActiveTab = (page: string) =>
-  useAppStore(state => state.activeTabs[page] || '');

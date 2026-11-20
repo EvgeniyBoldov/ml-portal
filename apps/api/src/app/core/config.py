@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from functools import lru_cache
 from pydantic_settings import BaseSettings
 from pydantic import Field, ConfigDict, field_validator, ValidationInfo
@@ -358,35 +357,6 @@ def mcp_raw_credential_fallback_allowed(settings: Settings | None = None) -> boo
     return environment in _LOCAL_ENVIRONMENTS and bool(
         getattr(settings, "MCP_ALLOW_RAW_CREDENTIAL_FALLBACK", False)
     )
-
-
-def get_model_path(model_alias: str) -> str | None:
-    """Get model path for alias from environment variables."""
-    single_alias = (os.getenv("EMB_MODEL_ALIAS") or "").strip()
-    if single_alias and single_alias == model_alias:
-        explicit = os.getenv("EMB_MODEL_PATH")
-        if explicit:
-            return explicit
-    env_key_upper = f"EMB_MODEL_{model_alias.upper().replace('-', '_')}_PATH"
-    env_key_legacy = f"EMB_MODEL_{model_alias.replace('-', '_')}_PATH"
-    return os.getenv(env_key_upper) or os.getenv(env_key_legacy)
-
-
-def get_model_parallelism(model_alias: str) -> int:
-    """Get parallelism setting for given model alias."""
-    single_alias = (os.getenv("EMB_MODEL_ALIAS") or "").strip()
-    if single_alias and single_alias == model_alias:
-        value = os.getenv("EMB_MODEL_PARALLELISM")
-        if value:
-            return int(value)
-    env_key_upper = f"EMB_PARALLELISM_{model_alias.upper().replace('-', '_')}"
-    env_key_legacy = f"EMB_PARALLELISM_{model_alias.replace('-', '_')}"
-    return int(os.getenv(env_key_upper) or os.getenv(env_key_legacy) or "1")
-
-
-def is_production() -> bool:
-    """Check if running in production environment"""
-    return get_settings().ENV == "production"
 
 
 def is_local() -> bool:

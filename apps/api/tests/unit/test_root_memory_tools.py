@@ -88,64 +88,6 @@ async def test_tool_error_is_presented_to_preflight_as_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_root_dispatch_uses_registered_executor_and_preserves_agent_context(monkeypatch):
-    from uuid import uuid4
-    from app.agents.context import ToolContext
-    from app.agents.registry import ToolRegistry
-    from app.agents.runtime_graph import RuntimeExecutionGraph, OperationExecutionBinding, OperationRuntimeContext
-    from app.agents.contracts import ProviderExecutionTarget
-    from app.agents.operation_executor import DirectOperationExecutor
-    from app.runtime.memory import role_tools
-    from app.agents.builtins import memory_search
-    from app.runtime.memory.search import MemorySearchService
-
-    registry = ToolRegistry()
-    session = AsyncMock()
-    session.__aenter__.return_value = session
-    monkeypatch.setattr(memory_search, "get_session_factory", lambda: lambda: session)
-    native = AsyncMock(return_value={"backend": "hipporag", "groups": [{"scope_slug": "a", "success": True, "status": "completed", "document_count": 1,
-        "hits": [{"text": "Issue details", "score": 0.9,
-                  "metadata": {"document_id": "doc1", "document_title": "NIMS-3532"}}]}]})
-    monkeypatch.setattr(memory_search, "HippoRAGService", lambda _: SimpleNamespace(search_documents=native))
-    legacy = AsyncMock(side_effect=AssertionError("Root roles must not read legacy memory"))
-    monkeypatch.setattr(MemorySearchService, "search", legacy)
-    handler = ToolRegistry.get("memory.search")
-    original_execute = handler.execute
-    monkeypatch.setattr(handler, "execute", AsyncMock(wraps=original_execute))
-    registry.register_handler(handler)
-    graph = RuntimeExecutionGraph()
-    graph.add(OperationExecutionBinding(operation_slug="memory.search",
-        target=ProviderExecutionTarget(operation_slug="memory.search", provider_type="local",
-            handler_slug="memory.search", data_instance_id="system", data_instance_slug="system", provider_instance_slug="system"),
-        context=OperationRuntimeContext(instance_id="system", instance_slug="system", scope="system",
-            provider_instance_id="system", provider_instance_slug="system", domain="system")))
-    resolve = AsyncMock(return_value=SimpleNamespace(execution_graph=graph, resolved_operations=[]))
-    monkeypatch.setattr(role_tools, "OperationRouter", lambda session: SimpleNamespace(resolve=resolve))
-    ctx = ToolContext(user_id=uuid4(), tenant_id=uuid4(), extra={"memory_search_scope_keys": ["a"]})
-    original_graph = RuntimeExecutionGraph()
-    ctx.get_runtime_deps().execution_graph = original_graph
-    tools = role_tools.RoleMemoryTools(session=object(), ctx=ctx)
-    tools._executor = DirectOperationExecutor(tool_registry=registry)
-    events = []
-    async def sink(event):
-        events.append(event)
-    record = await tools.execute(role_tools.MemoryToolCall(tool="memory.search", arguments={"query": "NIMS-3532"}),
-        actor="turn_preflight", parent_type="orchestrator", parent_id=str(uuid4()), event_sink=sink)
-    assert record["result"]["group_count"] == 1
-    assert handler.execute.await_args.args[1] == {"query": "NIMS-3532", "limit": 8}
-    assert handler.execute.await_args.args[0].user_id == ctx.user_id
-    native.assert_awaited_once_with("NIMS-3532", scope_keys=["a"], limit=8)
-    legacy.assert_not_awaited()
-    assert record["result"]["groups"][0]["items"][0]["source_references"][0]["document_id"] == "doc1"
-    assert ctx.get_runtime_deps().execution_graph is original_graph
-    assert resolve.await_args.kwargs["collection_ids"] == []
-    assert resolve.await_args.kwargs["system_operation_slugs"] == {"memory.search"}
-    assert [event.data["parent_entity_type"] for event in events] == ["orchestrator", "orchestrator"]
-    assert events[-1].data["result_delivery"] == "direct"
-    assert not any(event.data.get("agent_slug") == "memory_selector" for event in events)
-
-
-@pytest.mark.asyncio
 async def test_denied_memory_tool_is_neither_exposed_nor_executed():
     from uuid import uuid4
     from app.agents.context import ToolContext
@@ -173,7 +115,6 @@ def test_document_passages_survive_scope_projection_and_agent_rendering():
     assert len(scoped["groups"]) == 1
     assert scoped["groups"][0]["scope_slug"] == "a"
     assert any("NIMS-3532 details" in line for line in _render_memory_recall(scoped))
-
 
 
 @pytest.mark.asyncio

@@ -19,15 +19,12 @@ from app.runtime.memory.components import (
     AgentExecutionMemoryComponent,
     AttachmentMemoryComponent,
     CollectionMemoryComponent,
-    ConversationMemoryComponent,
     FactMemoryComponent,
     MemoryAssembler,
     MemoryBudget,
     MemoryBundle,
-    MemoryItem,
     MemoryComponentRegistry,
     MemoryQueryContext,
-    MemorySection,
     ToolLedgerMemoryComponent,
 )
 from app.runtime.memory.dto import FactDTO, SummaryDTO
@@ -174,26 +171,6 @@ class MemoryBuilder:
             memory_diagnostics=memory_bundle.compact_view(),
         )
 
-    async def _load_summary(
-        self,
-        chat_id: Optional[UUID],
-        *,
-        sandbox_branch_id: Optional[UUID],
-        sandbox_overrides: Optional[Dict[str, Any]],
-    ) -> SummaryDTO:
-        """Load the chat's summary, or a fresh empty one if absent.
-
-        Non-chat contexts (sandbox with no chat_id) get an in-memory
-        empty summary whose chat_id is a throwaway — it is never
-        persisted because the sandbox code path skips MemoryWriter.
-        """
-        if chat_id is None:
-            return _apply_branch_summary_overrides(SummaryDTO.empty(uuid4()), sandbox_overrides=sandbox_overrides)
-
-        existing = await self._summary_store.load(chat_id)
-        if existing is not None:
-            return existing
-        return SummaryDTO.empty(chat_id)
 
     @staticmethod
     def _load_selected_facts_from_bundle(memory_bundle: MemoryBundle) -> list[FactDTO]:

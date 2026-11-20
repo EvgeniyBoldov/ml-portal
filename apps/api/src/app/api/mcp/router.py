@@ -7,7 +7,7 @@ Supports Streamable HTTP transport as per MCP spec.
 from __future__ import annotations
 from app.core.logging import get_logger
 import uuid
-from typing import Any, Dict, Optional, Union
+from typing import Any, Union
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession

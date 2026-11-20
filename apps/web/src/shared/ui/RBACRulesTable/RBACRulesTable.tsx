@@ -13,7 +13,7 @@ import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances'
 import { rbacApi, type EnrichedRule, type EnrichedRulesFilters } from '@/shared/api/rbac';
 import { buildRbacRuleColumns, resolveRbacSearchText } from '@/domains/admin/shared/rbacRuleTable';
 
-export type RBACTableMode = 'platform' | 'tenant' | 'user' | 'global';
+type RBACTableMode = 'platform' | 'tenant' | 'user' | 'global';
 
 interface RBACRulesTableProps {
   mode: RBACTableMode;
@@ -95,4 +95,3 @@ export function RBACRulesTable({
   );
 }
 
-export default RBACRulesTable;

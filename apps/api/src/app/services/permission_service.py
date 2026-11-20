@@ -15,7 +15,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.rbac import RbacRule
 from app.repositories.rbac_repository import RbacRuleRepository
 
 logger = get_logger(__name__)
@@ -52,10 +51,6 @@ class EffectivePermissions:
         """Check if collection is allowed."""
         return self.collection_permissions.get(collection_slug, self.default_collection_allow)
 
-    @property
-    def allowed_collections(self) -> List[str]:
-        """Get list of explicitly allowed collection slugs"""
-        return [slug for slug, allowed in self.collection_permissions.items() if allowed]
     
     def get_allowed_instances(self) -> List[str]:
         """Get list of allowed instance slugs"""
@@ -73,15 +68,7 @@ class EffectivePermissions:
         """Get list of denied agent slugs"""
         return [slug for slug, allowed in self.agent_permissions.items() if not allowed]
     
-    def filter_instances(self, instance_slugs: List[str]) -> List[str]:
-        """Filter list of instances to only allowed ones"""
-        return [i for i in instance_slugs if self.is_instance_allowed(i)]
     
-    def filter_agents(self, agent_slugs: List[str]) -> List[str]:
-        """Filter list of agents to only allowed ones"""
-        return [a for a in agent_slugs if self.is_agent_allowed(a)]
-
-
 # ── Slug lookup helpers (batch) ──────────────────────────────────────────
 
 _RESOURCE_SLUG_MODELS = {
@@ -247,22 +234,3 @@ class PermissionService:
 
         return effective
 
-    async def check_instance_permission(
-        self,
-        instance_slug: str,
-        user_id: Optional[UUID] = None,
-        tenant_id: Optional[UUID] = None,
-    ) -> bool:
-        """Quick check if a single instance is allowed"""
-        perms = await self.resolve_permissions(user_id, tenant_id)
-        return perms.is_instance_allowed(instance_slug)
-
-    async def check_agent_permission(
-        self,
-        agent_slug: str,
-        user_id: Optional[UUID] = None,
-        tenant_id: Optional[UUID] = None,
-    ) -> bool:
-        """Quick check if a single agent is allowed"""
-        perms = await self.resolve_permissions(user_id, tenant_id)
-        return perms.is_agent_allowed(agent_slug)

@@ -221,4 +221,3 @@ export function DiscoveredToolViewPage() {
   );
 }
 
-export default DiscoveredToolViewPage;

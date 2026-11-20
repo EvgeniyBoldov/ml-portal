@@ -39,12 +39,6 @@ class ConnectorType(str, Enum):
     MODEL = "model"
 
 
-class ConnectorSubtype(str, Enum):
-    """Data connector subtype"""
-    SQL = "sql"
-    API = "api"
-
-
 class InstancePlacement(str, Enum):
     """Instance placement — operational model"""
     LOCAL = "local"
@@ -184,15 +178,6 @@ class ToolInstance(Base):
             return connector_type == ConnectorType.DATA.value
         return self.instance_kind == InstanceKind.DATA.value
 
-    @property
-    def is_service(self) -> bool:
-        connector_type = str(getattr(self, "connector_type", "") or "").strip().lower()
-        if connector_type:
-            return connector_type in {
-                ConnectorType.MCP.value,
-                ConnectorType.MODEL.value,
-            }
-        return self.instance_kind == InstanceKind.SERVICE.value
 
     @property
     def is_mcp_connector(self) -> bool:
@@ -201,12 +186,6 @@ class ToolInstance(Base):
             return connector_type == ConnectorType.MCP.value
         return self.instance_kind == InstanceKind.SERVICE.value and str(self.domain or "").strip().lower() == "mcp"
 
-    @property
-    def is_model_connector(self) -> bool:
-        connector_type = str(getattr(self, "connector_type", "") or "").strip().lower()
-        if connector_type:
-            return connector_type == ConnectorType.MODEL.value
-        return self.instance_kind == InstanceKind.SERVICE.value and str(self.domain or "").strip().lower() == "llm"
 
     def __repr__(self) -> str:
         return f"<ToolInstance {self.connector_type}.{self.placement}.{self.domain} '{self.name}'>"

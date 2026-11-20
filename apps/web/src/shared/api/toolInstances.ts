@@ -29,7 +29,7 @@ export interface ToolInstance {
   updated_at: string;
 }
 
-export interface RuntimeOperation {
+interface RuntimeOperation {
   operation_slug: string;
   operation: string;
   source: string;
@@ -91,7 +91,7 @@ export interface InstanceRuntimeOnboardRequest {
   include_inactive_linked?: boolean;
 }
 
-export interface LinkedDataInstanceRuntimeSummary {
+interface LinkedDataInstanceRuntimeSummary {
   instance_id: string;
   slug: string;
   connector_subtype?: string | null;

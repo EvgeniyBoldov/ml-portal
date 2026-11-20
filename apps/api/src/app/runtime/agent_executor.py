@@ -39,7 +39,6 @@ from app.runtime.orchestrator_contracts import (
     TaskCompletionDeclaration,
     TaskExecutionReceipt,
     DiscoveredNeed,
-    TaskConfirmationRequired,
     TaskExecutionError,
     TaskRequest,
     parse_task_completion_declaration,
@@ -1155,10 +1154,6 @@ class AgentExecutor:
         normalized = str(operation_name or "").strip()
         return normalized in {"file.delete", "file_delete"} or normalized.endswith(".file.delete")
 
-    @staticmethod
-    def _is_url_only_response(content: str) -> bool:
-        """Detect an artifact-only agent response without trusting its URL."""
-        return bool(re.fullmatch(r"https?://[^\r\n]+", str(content or "").strip().strip("`")))
 
     @staticmethod
     def _dedupe_artifacts(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1365,21 +1360,6 @@ class AgentExecutor:
             return [str(exc)]
         return []
 
-    @staticmethod
-    def _parse_structured_response(raw: str) -> Dict[str, Any]:
-        """Read the bounded agent result envelope without treating prose as data."""
-        text = (raw or "").strip()
-        candidates = [text]
-        if "```json" in text:
-            candidates.append(text.split("```json", 1)[1].split("```", 1)[0].strip())
-        for candidate in candidates:
-            try:
-                parsed = json.loads(candidate)
-            except (TypeError, ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(parsed, dict):
-                return parsed
-        return {}
 
     @staticmethod
     def _unwrap_terminal_json_fence(raw: str) -> str:
@@ -1398,47 +1378,6 @@ class AgentExecutor:
         )
         return match.group("payload").strip() if match else text
 
-    @staticmethod
-    def _parse_needs_from_content(raw: str) -> List[DiscoveredNeed]:
-        """Extract structured needs from agent output.
-
-        Supports two shapes:
-        - Top-level JSON with a 'needs' array: {"status": "needs_input", "needs": [{"ref": "...", "key": "...", "description": "..."}]}
-        - Inline JSON block inside markdown code fences.
-        Returns empty list if no structured needs found.
-        """
-        text = (raw or "").strip()
-        if not text:
-            return []
-        # Try to find a JSON object containing 'needs' anywhere in the text
-        # Strategy: look for the last JSON block (agent typically puts structured
-        # output at the end) and validate it.
-        try:
-            # If the entire text is JSON
-            if text.startswith("{"):
-                parsed = json.loads(text)
-                if isinstance(parsed, dict):
-                    return AgentExecutor._extract_needs_from_dict(parsed)
-        except Exception:
-            pass
-        # Try extracting from markdown code fence
-        code_fence_match = None
-        if "```json" in text:
-            parts = text.split("```json")
-            if len(parts) > 1:
-                code_fence_match = parts[-1].split("```")[0].strip()
-        elif "```" in text:
-            parts = text.split("```")
-            if len(parts) > 1:
-                code_fence_match = parts[-1].split("```")[0].strip()
-        if code_fence_match:
-            try:
-                parsed = json.loads(code_fence_match)
-                if isinstance(parsed, dict):
-                    return AgentExecutor._extract_needs_from_dict(parsed)
-            except Exception:
-                pass
-        return []
 
     @staticmethod
     def _extract_needs_from_dict(parsed: Dict[str, Any]) -> List[DiscoveredNeed]:

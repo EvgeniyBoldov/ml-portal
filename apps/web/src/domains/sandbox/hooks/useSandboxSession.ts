@@ -4,7 +4,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { qk } from '@/shared/api/keys';
 import { sandboxApi } from '../api';
-import type { SandboxSessionCreate, SandboxSessionUpdate } from '../types';
+import type { SandboxSessionCreate } from '../types';
 
 export function useSandboxSessions(params?: { status?: string }) {
   return useQuery({
@@ -28,18 +28,6 @@ export function useCreateSession() {
   return useMutation({
     mutationFn: (data: SandboxSessionCreate) => sandboxApi.createSession(data),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.sandbox.sessions.all() });
-    },
-  });
-}
-
-export function useUpdateSession(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (data: SandboxSessionUpdate) =>
-      sandboxApi.updateSession(id, data),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: qk.sandbox.sessions.detail(id) });
       qc.invalidateQueries({ queryKey: qk.sandbox.sessions.all() });
     },
   });

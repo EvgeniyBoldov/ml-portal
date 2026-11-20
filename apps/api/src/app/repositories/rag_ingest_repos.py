@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import List, Optional, Dict, Any
 from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, delete, func
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import select, update, delete
 
 from app.models.rag_ingest import Source, Chunk, EmbStatus
 from app.models.rag import RAGDocument
@@ -84,65 +83,7 @@ class AsyncChunkRepository(AsyncTenantRepository):
         )
         return result.scalars().all()
     
-    async def bulk_upsert(self, chunks_data: List[Dict[str, Any]]) -> int:
-        """Bulk upsert chunks"""
-        if not chunks_data:
-            return 0
-        
-        # Prepare data for upsert
-        upsert_data = []
-        for chunk_data in chunks_data:
-            upsert_data.append({
-                "chunk_id": chunk_data["chunk_id"],
-                "source_id": chunk_data["source_id"],
-                "page": chunk_data.get("page"),
-                "offset": chunk_data["offset"],
-                "length": chunk_data["length"],
-                "lang": chunk_data.get("lang"),
-                "hash": chunk_data["hash"],
-                "meta": chunk_data.get("meta", {})
-            })
-        
-        # Use PostgreSQL UPSERT
-        stmt = insert(Chunk).values(upsert_data)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=['chunk_id'],
-            set_={
-                'page': stmt.excluded.page,
-                'offset': stmt.excluded.offset,
-                'length': stmt.excluded.length,
-                'lang': stmt.excluded.lang,
-                'hash': stmt.excluded.hash,
-                'meta': stmt.excluded.meta
-            }
-        )
-        
-        result = await self.session.execute(stmt)
-        return result.rowcount
     
-    async def get_texts_for_chunk_ids(self, source_id: UUID, chunk_ids: List[str]) -> Dict[str, str]:
-        """Get texts for specific chunk IDs"""
-        if not chunk_ids:
-            return {}
-        
-        result = await self.session.execute(
-            select(Chunk).where(
-                Chunk.source_id == source_id,
-                Chunk.chunk_id.in_(chunk_ids)
-            )
-        )
-        chunks = result.scalars().all()
-        
-        # Извлекаем тексты из meta поля
-        texts = {}
-        for chunk in chunks:
-            text = ""
-            if chunk.meta and isinstance(chunk.meta, dict):
-                text = chunk.meta.get('text', '')
-            texts[chunk.chunk_id] = text
-        
-        return texts
-
     async def delete_by_document_id(self, source_id: UUID) -> int:
         """Delete all chunks for a document (source)"""
         result = await self.session.execute(
@@ -229,22 +170,6 @@ class AsyncEmbStatusRepository(AsyncRepository):
         # Fix #9: Remove commit from repository - let UoW handle it
         return result.rowcount > 0
     
-    async def is_source_ready(self, source_id: UUID) -> bool:
-        """Check if source is ready (all models completed)"""
-        emb_statuses = await self.get_by_source_id(source_id)
-        if not emb_statuses:
-            return False
-        
-        return all(es.done_count == es.total_count for es in emb_statuses)
-    
-    async def ready_for_source(self, source_id: UUID) -> bool:
-        """Check if source is ready for search (all embeddings completed)"""
-        emb_statuses = await self.get_by_source_id(source_id)
-        
-        if not emb_statuses:
-            return False
-        
-        return all(es.done_count == es.total_count for es in emb_statuses)
     
     async def get_by_source_and_model(self, source_id: UUID, model_alias: str) -> Optional[EmbStatus]:
         """Get embedding status by source ID and model alias"""
@@ -296,9 +221,3 @@ class AsyncModelRegistryRepository(AsyncTenantRepository):
         result = await self.session.execute(select(ModelRegistry))
         return result.scalars().all()
     
-    async def get_active_models(self) -> List[ModelRegistry]:
-        """Get all active model registries"""
-        result = await self.session.execute(
-            select(ModelRegistry).where(ModelRegistry.state == 'active')
-        )
-        return result.scalars().all()

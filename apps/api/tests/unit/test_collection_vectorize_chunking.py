@@ -2,7 +2,6 @@ from app.workers.tasks_collection_vectorize import (
     DEFAULT_CHUNK_OVERLAP,
     DEFAULT_CHUNK_SIZE,
     _chunk_text_for_embedding,
-    _needs_revectorization_for_model,
     _needs_revectorization_for_models,
     _resolve_chunk_config,
 )
@@ -33,12 +32,6 @@ def test_chunk_text_for_embedding_produces_overlapping_chunks():
     text = "abcdefghijklmnopqrstuvwxyz"
     chunks = _chunk_text_for_embedding(text, chunk_size=10, overlap=2)
     assert chunks == ["abcdefghij", "ijklmnopqr", "qrstuvwxyz"]
-
-
-def test_needs_revectorization_for_model_when_alias_changed():
-    assert _needs_revectorization_for_model({"embed_model_alias": "a"}, "b") is True
-    assert _needs_revectorization_for_model({"embed_model_alias": "a"}, "a") is False
-    assert _needs_revectorization_for_model(None, "a") is True
 
 
 def test_needs_revectorization_for_models_uses_multi_model_contract():

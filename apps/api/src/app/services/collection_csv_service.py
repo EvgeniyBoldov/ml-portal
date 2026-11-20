@@ -3,7 +3,7 @@ CSV upload service for collections
 """
 import csv
 import io
-from typing import List, Tuple, Any
+from typing import List, Tuple
 
 from app.models.collection import Collection
 from app.core.exceptions import CSVValidationError

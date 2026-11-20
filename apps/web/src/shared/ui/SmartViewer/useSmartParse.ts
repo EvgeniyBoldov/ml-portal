@@ -80,4 +80,3 @@ export function useSmartParse(value: unknown): ParsedNode {
   return useMemo(() => parseValue(value, 0), [value]);
 }
 
-export { parseValue };

@@ -148,8 +148,6 @@ class SandboxService:
         await self.sessions.delete(obj)
         return True
 
-    async def touch_session(self, session_id: UUID) -> None:
-        await self.sessions.touch(session_id)
 
     async def is_owner(self, session_id: UUID, user_id: UUID) -> bool:
         obj = await self.sessions.get_by_id(session_id)
@@ -469,5 +467,3 @@ class SandboxService:
     async def cleanup_expired(self) -> int:
         return await self.sessions.archive_expired()
 
-    async def purge_expired(self) -> int:
-        return await self.sessions.delete_expired()

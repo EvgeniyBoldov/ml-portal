@@ -1,4 +1,4 @@
-export type TemplateSchemaNodeKind = 'scalar' | 'object' | 'table';
+type TemplateSchemaNodeKind = 'scalar' | 'object' | 'table';
 
 export interface TemplateSchemaNode {
   key: string;

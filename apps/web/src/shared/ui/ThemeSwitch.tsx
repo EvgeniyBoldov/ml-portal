@@ -35,7 +35,7 @@ interface ThemeSwitchProps {
   variant?: 'button' | 'dropdown';
 }
 
-export default function ThemeSwitch({ showLabel = false, variant = 'button' }: ThemeSwitchProps) {
+export default function ThemeSwitch({ variant = 'button' }: ThemeSwitchProps) {
   const { theme, resolvedTheme, setTheme, toggleTheme } = useTheme();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);

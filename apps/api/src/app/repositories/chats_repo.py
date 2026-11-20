@@ -1,8 +1,7 @@
 from __future__ import annotations
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc, asc, cast, String
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import select, and_, or_, desc, asc
 from datetime import datetime, timezone
 import uuid
 
@@ -204,22 +203,3 @@ class AsyncChatMessagesRepository(AsyncTenantRepository[ChatMessages]):
             return None
         return message
     
-    async def update_message(self, message_id: str, **kwargs) -> Optional[ChatMessages]:
-        """Update message"""
-        message = await self.get_message_by_id(message_id)
-        if message:
-            for key, value in kwargs.items():
-                if hasattr(message, key):
-                    setattr(message, key, value)
-            message.updated_at = datetime.now(timezone.utc)
-            await self.session.flush()
-        return message
-    
-    async def delete_message(self, message_id: str) -> bool:
-        """Delete message"""
-        message = await self.get_message_by_id(message_id)
-        if message:
-            await self.session.delete(message)
-            await self.session.flush()
-            return True
-        return False

@@ -1,7 +1,6 @@
 from types import SimpleNamespace
 
 from app.services.collection_linking import (
-    context_domain_for_collection,
     runtime_domain_for_collection,
 )
 
@@ -22,10 +21,3 @@ def test_runtime_domain_falls_back_for_missing_or_unknown_collection():
     assert runtime_domain_for_collection(collection=None, fallback_domain="sql") == "sql"
     assert runtime_domain_for_collection(collection=_collection("netbox"), fallback_domain="collection.table") == "collection.table"
 
-
-def test_context_domain_returns_only_collection_specific_domain():
-    assert context_domain_for_collection(_collection("table")) == "collection.table"
-    assert context_domain_for_collection(_collection("document")) == "collection.document"
-    assert context_domain_for_collection(_collection("template")) == "collection.template"
-    assert context_domain_for_collection(_collection("unknown")) is None
-    assert context_domain_for_collection(None) is None

@@ -126,18 +126,6 @@ FactCompactorRoleUpdate = SystemLLMRoleUpdate
 
 # === Contract Schemas ===
 
-class TriageDecision(BaseModel):
-    """Triage decision contract."""
-    type: str = Field(..., pattern="^(final|clarify|orchestrate)$")
-    confidence: float = Field(..., ge=0.0, le=1.0)
-    reason: str = Field(..., description="Explanation of the decision")
-    
-    # Conditional fields
-    answer: Optional[str] = Field(None, description="Answer if type=final")
-    clarify_prompt: Optional[str] = Field(None, description="Prompt if type=clarify")
-    goal: Optional[str] = Field(None, description="Goal if type=orchestrate")
-    inputs: Optional[Dict[str, Any]] = Field(None, description="Input data if type=orchestrate")
-
 
 class ExecutionOutlinePhase(BaseModel):
     """High-level phase for orchestration guidance."""
@@ -163,45 +151,5 @@ class ExecutionOutline(BaseModel):
     max_agent_handoffs: int = Field(default=3, ge=1, le=10)
 
 
-class HelperSummaryPayload(BaseModel):
-    """Structured helper summary used to compress runtime context."""
-    goal: Optional[str] = None
-    facts: List[str] = Field(default_factory=list)
-    checked_sources: List[str] = Field(default_factory=list)
-    checked_agents: List[str] = Field(default_factory=list)
-    open_questions: List[str] = Field(default_factory=list)
-    partial_conclusions: List[str] = Field(default_factory=list)
-    unresolved_risks: List[str] = Field(default_factory=list)
-
-
 # === Input Schemas ===
 
-class TriageInput(BaseModel):
-    """Structured input for Triage role."""
-    user_message: str = Field(..., description="Current user message")
-    conversation_summary: Optional[str] = Field(None, description="Summary of conversation")
-    session_state: Dict[str, Any] = Field(default_factory=dict, description="Session state")
-    available_agents: List[Dict[str, Any]] = Field(default_factory=list, description="Available agents")
-    policies: Optional[str] = Field(None, description="Security policies")
-    active_run: Optional[Dict[str, Any]] = Field(None, description="Currently active run")
-
-
-class PlannerInput(BaseModel):
-    """Structured input for Planner role."""
-    goal: str = Field(..., description="Goal to plan")
-    conversation_summary: Optional[str] = Field(None, description="Summary of conversation")
-    session_state: Dict[str, Any] = Field(default_factory=dict, description="Session state")
-    available_agents: List[Dict[str, Any]] = Field(default_factory=list, description="Available agents")
-    available_operations: List[Dict[str, Any]] = Field(default_factory=list, description="Available operations")
-    policies: Optional[str] = Field(None, description="Security policies")
-    execution_outline: Optional[ExecutionOutline] = Field(None, description="Execution outline with phased hints")
-
-
-class SummaryInput(BaseModel):
-    """Structured input for Summary role."""
-    previous_summary: Optional[str] = Field(None, description="Previous conversation summary")
-    recent_messages: List[Dict[str, Any]] = Field(default_factory=list, description="Recent messages to summarize")
-    current_user_message: Optional[str] = Field(None, description="Current user message for the turn")
-    current_agent_response: Optional[str] = Field(None, description="Current agent response for the turn")
-    execution_memory: Optional[Dict[str, Any]] = Field(None, description="Execution memory snapshot, if available")
-    session_state: Dict[str, Any] = Field(default_factory=dict, description="Session state")

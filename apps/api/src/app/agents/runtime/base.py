@@ -91,20 +91,6 @@ class BaseRuntime(ABC):
             run_id_override=run_id_override,
         )
 
-    @staticmethod
-    def _build_conversation_summary(
-        msgs: List[Dict[str, Any]], max_messages: int = 5,
-    ) -> Optional[str]:
-        """Build a brief summary of recent conversation for planner context."""
-        relevant = [m for m in msgs if m.get("role") != "system"][-max_messages:]
-        if not relevant:
-            return None
-        parts = []
-        for m in relevant:
-            role = m.get("role", "unknown")
-            content = m.get("content", "")[:200]
-            parts.append(f"{role}: {content}")
-        return "\n".join(parts)
 
     @staticmethod
     def _task_title_from_messages(messages: List[Dict[str, Any]], max_length: int = 240) -> Optional[str]:

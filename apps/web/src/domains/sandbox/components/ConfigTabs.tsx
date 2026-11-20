@@ -1,6 +1,6 @@
 import styles from './ConfigTabs.module.css';
 
-export interface ConfigTabItem {
+interface ConfigTabItem {
   id: string;
   label: string;
 }

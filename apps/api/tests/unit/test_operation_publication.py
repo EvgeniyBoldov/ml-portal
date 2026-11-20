@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from app.agents.operation_publication import (
     build_runtime_operation_slug,
-    canonical_operation_identity,
     canonical_operation_name,
     resolve_publication,
 )
@@ -117,12 +116,3 @@ def test_runtime_operation_slug_builder():
         == "instance.collection-contracts.collection.table.search"
     )
 
-
-def test_canonical_identity_returns_name_and_runtime_slug():
-    canonical_name, runtime_slug = canonical_operation_identity(
-        instance_slug="collection-contracts",
-        instance_domain="collection.document",
-        raw_slug="collection.doc_search",
-    )
-    assert canonical_name == "collection.document.search"
-    assert runtime_slug == "instance.collection-contracts.collection.document.search"

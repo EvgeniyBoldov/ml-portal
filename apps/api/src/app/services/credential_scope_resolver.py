@@ -30,5 +30,3 @@ class CredentialScopeResolver:
     def resolve(self, flags: OperationFlags) -> CredentialStrategy:
         return CredentialStrategy.USER_ONLY if flags.is_risky else CredentialStrategy.USER_FIRST
 
-    def resolve_strategy(self, flags: OperationFlags) -> str:
-        return self.resolve(flags).value

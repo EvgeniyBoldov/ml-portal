@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 
 @dataclass(frozen=True)
@@ -56,56 +54,6 @@ class RuntimeEvaluationResult:
     seen_event_types: tuple[str, ...] = ()
 
 
-def default_runtime_eval_cases() -> tuple[RuntimeEvaluationCase, ...]:
-    return (
-        RuntimeEvaluationCase(
-            key="chat_basic_answer",
-            title="Basic chat response without tool errors",
-            expected_terminal_event="final",
-            must_emit_final=True,
-            must_emit_waiting_input=False,
-            allow_error_events=False,
-        ),
-        RuntimeEvaluationCase(
-            key="document_retrieval",
-            title="Document retrieval path",
-            required_operations=("collection.document.search",),
-            grounding_requirements=("document",),
-        ),
-        RuntimeEvaluationCase(
-            key="table_or_sql_retrieval",
-            title="Table or SQL retrieval path",
-            one_of_operations=("collection.table.search", "collection.sql.search_objects", "collection.sql.execute"),
-        ),
-        RuntimeEvaluationCase(
-            key="missing_credential_path",
-            title="Missing credential should not execute sensitive operations",
-            forbidden_operations=("instance.system.delete",),
-            expected_terminal_event="error",
-            allow_error_events=True,
-        ),
-        RuntimeEvaluationCase(
-            key="confirmation_required_path",
-            title="Write/destructive operations require confirmation",
-            expected_terminal_event="confirmation_required",
-            must_emit_final=False,
-            allow_error_events=True,
-        ),
-        RuntimeEvaluationCase(
-            key="memory_carry_over",
-            title="Relevant facts should be carried between turns",
-            required_memory_facts=("project",),
-            forbidden_memory_facts=("unrelated",),
-        ),
-        RuntimeEvaluationCase(
-            key="duplicate_tool_reuse",
-            title="Repeated identical calls should be reused",
-            required_operations=("collection.info",),
-            forbidden_operations=("collection.info.duplicate",),
-        ),
-    )
-
-
 def evaluate_runtime_case(
     case: RuntimeEvaluationCase,
     runtime_events: Sequence[Dict[str, Any]],
@@ -140,47 +88,6 @@ def evaluate_runtime_case(
         seen_operations=tuple(sorted(seen_operations)),
         seen_event_types=tuple(sorted(seen_event_types)),
     )
-
-
-def evaluate_runtime_cases(
-    cases: Iterable[RuntimeEvaluationCase],
-    runtime_events: Sequence[Dict[str, Any]],
-) -> tuple[RuntimeEvaluationResult, ...]:
-    return tuple(evaluate_runtime_case(case, runtime_events) for case in cases)
-
-
-def load_eval_cases(paths: Sequence[str | Path]) -> tuple[RuntimeEvaluationCase, ...]:
-    loaded: List[RuntimeEvaluationCase] = []
-    for raw_path in paths:
-        path = Path(raw_path)
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(payload, dict):
-            payload = [payload]
-        if not isinstance(payload, list):
-            raise ValueError(f"Eval case file {path} must contain object or list")
-        for item in payload:
-            if not isinstance(item, dict):
-                continue
-            loaded.append(
-                RuntimeEvaluationCase(
-                    key=str(item.get("key") or ""),
-                    title=str(item.get("title") or ""),
-                    input_messages=tuple(_to_str_list(item.get("input_messages"))),
-                    agent_slug=_to_optional_text(item.get("agent_slug")),
-                    required_memory_facts=tuple(_to_str_list(item.get("required_memory_facts"))),
-                    forbidden_memory_facts=tuple(_to_str_list(item.get("forbidden_memory_facts"))),
-                    required_operations=tuple(_to_str_list(item.get("required_operations"))),
-                    forbidden_operations=tuple(_to_str_list(item.get("forbidden_operations"))),
-                    expected_terminal_event=str(item.get("expected_terminal_event") or "final"),
-                    grounding_requirements=tuple(_to_str_list(item.get("grounding_requirements"))),
-                    answer_assertions=tuple(_to_str_list(item.get("answer_assertions"))),
-                    forbidden_answer_assertions=tuple(_to_str_list(item.get("forbidden_answer_assertions"))),
-                    must_emit_final=bool(item.get("must_emit_final", True)),
-                    must_emit_waiting_input=bool(item.get("must_emit_waiting_input", False)),
-                    allow_error_events=bool(item.get("allow_error_events", False)),
-                )
-            )
-    return tuple(case for case in loaded if case.key and case.title)
 
 
 def _collect_event_types(runtime_events: Sequence[Dict[str, Any]]) -> Set[str]:

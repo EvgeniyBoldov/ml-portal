@@ -51,13 +51,3 @@ class RuntimeExecutionGraph(BaseModel):
             return
         self.bindings.update(other.bindings)
 
-    def to_legacy_maps(self) -> tuple[Dict[str, ProviderExecutionTarget], Dict[str, Dict[str, Any]], Dict[str, OperationCredentialContext]]:
-        execution_targets: Dict[str, ProviderExecutionTarget] = {}
-        operation_context_map: Dict[str, Dict[str, Any]] = {}
-        operation_credentials_map: Dict[str, OperationCredentialContext] = {}
-        for slug, binding in self.bindings.items():
-            execution_targets[slug] = binding.target
-            operation_context_map[slug] = binding.context.model_dump()
-            if binding.credential is not None:
-                operation_credentials_map[slug] = binding.credential
-        return execution_targets, operation_context_map, operation_credentials_map

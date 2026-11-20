@@ -19,7 +19,6 @@ from app.models.api_token import ApiToken
 from app.services.personal_access_token_service import PersonalAccessTokenService
 from app.models.credential_set import Credential
 from app.models.tool_instance import ToolInstance
-from app.models.tool import Tool
 from app.runtime.memory.fact_store import FactStore
 from app.models.memory import Fact, FactScope
 from app.schemas.memory_scope_preferences import MemoryScopePreferences
@@ -29,7 +28,6 @@ from app.repositories.tenants_repo import AsyncTenantsRepository
 from app.runtime.memory.service import MemoryService
 from app.runtime.memory.fact_reconciler import FactReconciler
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
 
 router = APIRouter(prefix="/profile", tags=["profile"])
 
@@ -149,19 +147,6 @@ async def _managed_tenant(session: AsyncSession, current_user: UserCtx):
     if membership is None or not membership.is_tenant_admin:
         raise HTTPException(status_code=403, detail="Tenant administrator access required")
     return tenant_id
-
-
-async def get_user_from_db(user_ctx: UserCtx) -> Users:
-    """Get full user object from database"""
-    session_factory = get_session_factory()
-    async with session_factory() as session:
-        result = await session.execute(
-            select(Users).where(Users.id == UUID(user_ctx.id))
-        )
-        user = result.scalar_one_or_none()
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        return user
 
 
 @router.get("/me", response_model=ProfileResponse)

@@ -454,4 +454,3 @@ export function AgentVersionPage() {
   );
 }
 
-export default AgentVersionPage;

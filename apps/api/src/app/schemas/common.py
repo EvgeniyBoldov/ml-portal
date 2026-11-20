@@ -3,7 +3,6 @@ Common schemas and enums for ML Portal
 """
 from enum import Enum
 from typing import Optional, Any, Dict
-from datetime import datetime
 from pydantic import BaseModel
 
 
@@ -65,11 +64,3 @@ class EmbeddingModel(str, Enum):
     MINILM_L12_V2 = "all-MiniLM-L12-v2"
     MPNET_BASE_V2 = "all-mpnet-base-v2"
 
-
-class QueuePriority(int, Enum):
-    """Queue priorities"""
-    CRITICAL = 10
-    HIGH = 8
-    MEDIUM = 5
-    LOW = 2
-    MAINTENANCE = 1

@@ -5,13 +5,11 @@ Tenants repository for tenant management
 from __future__ import annotations
 
 from app.core.logging import get_logger
-from typing import List, Optional, Dict, Any
+from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, func, or_
 from app.models.tenant import Tenants
 import uuid
-
-
 
 
 logger = get_logger(__name__)
@@ -123,9 +121,3 @@ class AsyncTenantsRepository:
         await self.session.flush()
         return await self.get_by_id(tenant_id)
 
-    async def get_tenants_by_model(self, model: str) -> List[Tenants]:
-        """Get tenants using a specific model as embedding"""
-        result = await self.session.execute(
-            select(Tenants).where(Tenants.embedding_model_alias == model)
-        )
-        return result.scalars().all()

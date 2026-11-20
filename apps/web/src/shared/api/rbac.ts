@@ -59,7 +59,7 @@ export interface CheckAccessResponse {
 
 // ─── Enriched Rules ──────────────────────────────────────────────────────────
 
-export interface EnrichedOwnerInfo {
+interface EnrichedOwnerInfo {
   level: RbacLevel;
   name: string;
   user_id?: string | null;
@@ -67,7 +67,7 @@ export interface EnrichedOwnerInfo {
   platform: boolean;
 }
 
-export interface EnrichedResourceInfo {
+interface EnrichedResourceInfo {
   type: ResourceType;
   id: string;
   name: string;

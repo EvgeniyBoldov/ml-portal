@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import styles from './ChatSidebar.module.css';
 import Button from '@shared/ui/Button';
 import { useNavigate, useParams } from 'react-router-dom';

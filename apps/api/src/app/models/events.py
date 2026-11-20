@@ -4,7 +4,7 @@ Event Outbox model for reliable SSE event delivery
 from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any
-from sqlalchemy import Column, String, BigInteger, DateTime, Text, Index
+from sqlalchemy import String, BigInteger, DateTime, Index
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 import uuid

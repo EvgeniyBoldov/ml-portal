@@ -1,7 +1,7 @@
 export type DisplayEntry = { label: string; value: unknown };
 export type ParsedContent = { text?: string; data?: unknown; kind: 'text' | 'json' | 'tool_call' };
 export type ToolNameMap = ReadonlyMap<string, string>;
-export type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'empty' | 'error';
+type LlmOutcomeKind = 'tools' | 'answer' | 'clarify' | 'plan' | 'empty' | 'error';
 export type LlmOutcome = { kind: LlmOutcomeKind; label: string; count?: number };
 
 const HIDDEN_KEYS = new Set([
@@ -136,13 +136,6 @@ export function llmOutcome(payload: Record<string, unknown>, toolCallCount = 0):
   return { kind: 'answer', label: 'Ответ' };
 }
 
-export function llmMessages(payload: Record<string, unknown>): Array<{ role: string; content: ParsedContent }> {
-  const messages = Array.isArray(payload.messages) ? payload.messages : [];
-  return messages.map((message) => {
-    const record = asRecord(message);
-    return { role: String(record.role ?? 'message'), content: parseCallContent(record.content ?? record) };
-  });
-}
 
 export type ToolFailure = { category?: string; code?: string; userMessage: string; details?: unknown; inconsistentSuccess?: boolean };
 

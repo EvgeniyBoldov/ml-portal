@@ -10,12 +10,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.di import get_llm_client
 from app.models.document_memory_staging import (
-    DocumentMemoryExtractionAttempt,
     DocumentMemorySnapshot,
     MemoryConflictCase,
     MemoryConflictMember,
     MemoryExtractionCandidate,
-    MemoryScopeProposal, MemoryCandidateScopeProposal,
+    MemoryScopeProposal,
+    MemoryCandidateScopeProposal,
 )
 from app.models.system_llm_role import SystemLLMRoleType
 from app.models.memory_scope import MemoryCandidateScope, MemoryScope

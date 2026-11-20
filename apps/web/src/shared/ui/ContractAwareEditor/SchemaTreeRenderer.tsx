@@ -180,7 +180,7 @@ function NodeRow({
   );
 }
 
-export function SchemaTreeRenderer({
+function SchemaTreeRenderer({
   schema,
   coverageMap,
   showCoverage = false,

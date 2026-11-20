@@ -9,7 +9,7 @@ ExecutionConfigResolver — резолв runtime-конфигурации исп
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 from app.agents.runtime.policy import GenerationParams, PolicyLimits
 from app.core.config import get_settings
@@ -145,52 +145,6 @@ class ExecutionConfigResolver:
 
         return policy, gen, platform_config, resolved_limits
 
-    async def resolve_direct(
-        self,
-        exec_request: ExecutionRequest,
-        ctx: ToolContext,
-        model: Optional[str] = None,
-        temperature: Optional[float] = None,
-    ) -> GenerationParams:
-        from app.services.orchestration_service import OrchestrationSettingsProvider
-
-        gen = GenerationParams(
-            model=model,
-            temperature=temperature if temperature is not None else 0.7,
-        )
-        self._apply_adapter_defaults(gen)
-
-        runtime_deps = ctx.get_runtime_deps()
-        session_factory = runtime_deps.session_factory or get_session_factory()
-        if session_factory:
-            settings_provider = OrchestrationSettingsProvider.get_instance()
-            async with session_factory() as session:
-                base_settings = await settings_provider.get_config(session)
-                config = await settings_provider.get_effective_config(
-                    session,
-                    agent_version=exec_request.agent_version,
-                )
-
-                sandbox_ov = runtime_deps.sandbox_overrides or {}
-                orch_ov = sandbox_ov.get("orchestration", {})
-                if orch_ov:
-                    config.update(orch_ov)
-                    logger.info(
-                        f"[Sandbox] Applied orchestration overrides: {list(orch_ov.keys())}",
-                    )
-
-                if gen.model is None:
-                    gen.model = config.get("executor_model")
-                if temperature is None:
-                    gen.temperature = config.get("executor_temperature", 0.7)
-                gen.model = await self._resolve_model_alias(
-                    session,
-                    gen.model,
-                    default_alias=base_settings.get("executor_model"),
-                )
-                await self._apply_model_call_config(session, gen, gen.model, None)
-
-        return gen
 
     @staticmethod
     def _apply_adapter_defaults(gen: GenerationParams) -> None:

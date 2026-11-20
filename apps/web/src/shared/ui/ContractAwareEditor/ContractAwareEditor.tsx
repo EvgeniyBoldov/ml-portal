@@ -171,4 +171,3 @@ export function ContractAwareEditor({
   );
 }
 
-export default ContractAwareEditor;

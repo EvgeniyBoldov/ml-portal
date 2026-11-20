@@ -122,26 +122,6 @@ class CryptoService:
             logger.error(f"Decryption failed: {e}")
             raise CryptoError(f"Decryption failed: {e}") from e
     
-    def rotate_key(self, old_encrypted: str, new_master_key: str) -> str:
-        """
-        Перешифровать payload с новым мастер-ключом.
-        
-        Используется при ротации ключей.
-        
-        Args:
-            old_encrypted: Payload, зашифрованный старым ключом
-            new_master_key: Новый мастер-ключ
-            
-        Returns:
-            Payload, зашифрованный новым ключом
-        """
-        payload = self.decrypt(old_encrypted)
-        
-        new_fernet_key = self._derive_fernet_key(new_master_key)
-        new_fernet = Fernet(new_fernet_key)
-        
-        json_bytes = json.dumps(payload).encode("utf-8")
-        return new_fernet.encrypt(json_bytes).decode("utf-8")
     
     @classmethod
     def reset(cls) -> None:

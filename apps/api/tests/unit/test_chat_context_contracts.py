@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from app.services.chat_context_contracts import ChatContextOperation, TopicScopePayload
+from app.services.chat_context_contracts import ChatContextOperation
 
 
 def test_context_contracts_import_in_fresh_process_and_keep_runtime_event_exports() -> None:
@@ -45,13 +45,6 @@ def test_close_requires_provenance_and_no_payload() -> None:
 
     with pytest.raises(ValueError):
         operation.validated_payload()
-
-
-def test_inferred_topic_scope_cannot_carry_project_identity() -> None:
-    with pytest.raises(ValueError):
-        TopicScopePayload.model_validate({
-            "topic": "обновление отчёта", "source": "inferred", "project_keys": ["forbidden"],
-        })
 
 
 def test_scope_carries_trust_per_identity_field() -> None:

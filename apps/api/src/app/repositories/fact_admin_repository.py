@@ -1,7 +1,6 @@
 """Persistence queries for owner-scoped administrative fact management."""
 from __future__ import annotations
 
-from collections.abc import Sequence
 from uuid import UUID
 
 from sqlalchemy import select, update

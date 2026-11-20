@@ -48,25 +48,6 @@ async def _emit_event(
     logger.debug(f"Event emitted: {event_type} (seq={seq})")
 
 
-async def emit_status_change(
-    session: AsyncSession,
-    repo_factory,
-    document_id: UUID,
-    new_status: str,
-    old_status: Optional[str] = None
-) -> None:
-    """Выпустить событие rag.status при изменении статуса"""
-    await _emit_event(
-        session,
-        event_type='rag.status',
-        payload={
-            'id': str(document_id),
-            'status': new_status,
-            'updated_at': datetime.now(timezone.utc).isoformat(),
-        }
-    )
-
-
 async def emit_embed_progress(
     session: AsyncSession,
     repo_factory,
@@ -104,22 +85,6 @@ async def emit_tags_updated(
         payload={
             'id': str(document_id),
             'tags': tags,
-            'updated_at': datetime.now(timezone.utc).isoformat(),
-        }
-    )
-
-
-async def emit_deleted(
-    session: AsyncSession,
-    repo_factory,
-    document_id: UUID
-) -> None:
-    """Выпустить событие rag.deleted"""
-    await _emit_event(
-        session,
-        event_type='rag.deleted',
-        payload={
-            'id': str(document_id),
             'updated_at': datetime.now(timezone.utc).isoformat(),
         }
     )

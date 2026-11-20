@@ -49,14 +49,6 @@ class ActionMeta(BaseModel):
     finalization_rationale: Optional[str] = None
 
 
-class NextAction(BaseModel):
-    type: ActionType
-    operation: Optional[OperationActionPayload] = None
-    agent: Optional[AgentActionPayload] = None
-    final: Optional[FinalPayload] = None
-    meta: Optional[ActionMeta] = None
-
-
 class ObservationStatus(str, Enum):
     OK = "ok"
     ERROR = "error"
@@ -69,23 +61,11 @@ class ObservationError(BaseModel):
     details: Optional[Dict[str, Any]] = None
 
 
-class Observation(BaseModel):
-    status: ObservationStatus
-    summary: str = Field(..., min_length=1)
-    output: Dict[str, Any] = Field(default_factory=dict)
-    error: Optional[ObservationError] = None
-
-
 class PolicyDecisionType(str, Enum):
     ALLOW = "allow"
     BLOCK = "block"
     REQUIRE_CONFIRMATION = "require_confirmation"
     REQUIRE_INPUT = "require_input"
-
-
-class PolicyDecision(BaseModel):
-    decision: PolicyDecisionType
-    reason: str = Field(..., min_length=1)
 
 
 class OperationAction(BaseModel):
@@ -114,16 +94,6 @@ class AgentAction(BaseModel):
 class AvailableActions(BaseModel):
     agents: List[AgentAction] = Field(default_factory=list)
     operations: List[OperationAction] = Field(default_factory=list)
-
-
-@dataclass
-class ToolCapability:
-    tool_slug: str
-    instance_id: Optional[str] = None
-    instance_slug: Optional[str] = None
-    has_credentials: bool = False
-    required: bool = False
-    recommended: bool = False
 
 
 @dataclass
@@ -298,16 +268,6 @@ class ResolvedOperation(BaseModel):
     target: ProviderExecutionTarget
 
 
-class HelperSummary(BaseModel):
-    goal: Optional[str] = None
-    facts: List[str] = Field(default_factory=list)
-    checked_sources: List[str] = Field(default_factory=list)
-    checked_agents: List[str] = Field(default_factory=list)
-    open_questions: List[str] = Field(default_factory=list)
-    partial_conclusions: List[str] = Field(default_factory=list)
-    unresolved_risks: List[str] = Field(default_factory=list)
-
-
 class OutlinePhase(BaseModel):
     phase_id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
@@ -329,65 +289,3 @@ class ExecutionOutline(BaseModel):
     max_iterations: int = Field(default=6, ge=1, le=20)
     max_agent_handoffs: int = Field(default=3, ge=1, le=10)
 
-
-class OutlineProgress(BaseModel):
-    current_phase_id: Optional[str] = None
-    completed_phase_ids: List[str] = Field(default_factory=list)
-    phase_notes: Dict[str, List[str]] = Field(default_factory=dict)
-    blocked_phase_ids: List[str] = Field(default_factory=list)
-
-    def is_phase_completed(self, phase_id: str) -> bool:
-        return phase_id in self.completed_phase_ids
-
-    def mark_phase_completed(self, phase_id: str) -> None:
-        if phase_id not in self.completed_phase_ids:
-            self.completed_phase_ids.append(phase_id)
-
-    def add_phase_note(self, phase_id: str, note: str) -> None:
-        if not note:
-            return
-        notes = self.phase_notes.setdefault(phase_id, [])
-        if note not in notes:
-            notes.append(note)
-
-
-class StopReason(str, Enum):
-    DONE = "done"
-    WAITING_INPUT = "waiting_input"
-    WAITING_CONFIRMATION = "waiting_confirmation"
-    FAILED = "failed"
-    MAX_ITERS = "max_iters"
-    LOOP_DETECTED = "loop_detected"
-
-
-class RuntimePipelineRequest(BaseModel):
-    """Unified input contract for runtime pipeline execution."""
-
-    request_text: str = Field(..., min_length=1)
-    user_id: str = Field(..., min_length=1)
-    tenant_id: str = Field(..., min_length=1)
-    messages: List[Dict[str, Any]] = Field(default_factory=list)
-    agent_slug: Optional[str] = None
-    agent_version_id: Optional[str] = None
-    model: Optional[str] = None
-
-
-class RuntimeTriageDecision(BaseModel):
-    """Normalized triage result used by runtime pipeline."""
-
-    type: Literal["final", "clarify", "orchestrate"]
-    confidence: float = 0.0
-    answer: Optional[str] = None
-    clarify_prompt: Optional[str] = None
-    goal: Optional[str] = None
-    inputs: Dict[str, Any] = Field(default_factory=dict)
-    trace_id: Optional[str] = None
-
-
-@dataclass
-class RuntimeExecutionSnapshot:
-    """Precomputed runtime context shared across triage/preflight/planner."""
-
-    effective_permissions: Any
-    routable_agents: List[Any] = field(default_factory=list)
-    denied_routable_agents: List[str] = field(default_factory=list)

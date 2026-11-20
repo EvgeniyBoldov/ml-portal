@@ -91,7 +91,7 @@ from app.agents.runtime.llm_errors import (
     LLMRequestTooLargeError,
     LLMToolCallingUnsupportedError,
 )
-from app.agents.runtime.policy import GenerationParams, PolicyLimits
+from app.agents.runtime.policy import PolicyLimits
 from app.core.logging import get_logger
 from app.runtime.context_snapshot import compact_snapshot, prompt_snapshot
 from app.runtime.error_payloads import build_debug_payload
@@ -146,30 +146,6 @@ def _safe_tool_user_message(error_code: Any, mcp_failure: Any) -> str:
     )
 
 
-def _checkpoint_receipt(value: Any) -> dict[str, Any]:
-    """Keep identifiers/status from a completed write without copying its body."""
-    allowed = {"id", "key", "number", "status", "name", "slug", "created_at"}
-    receipt: dict[str, Any] = {}
-
-    def visit(item: Any, depth: int = 0) -> None:
-        if depth > 3 or len(receipt) >= 16:
-            return
-        if isinstance(item, dict):
-            for key, child in item.items():
-                normalized = str(key).lower()
-                if normalized in allowed and isinstance(child, (str, int, float)):
-                    receipt[normalized] = str(child)[:300]
-                elif isinstance(child, dict):
-                    visit(child, depth + 1)
-        elif isinstance(item, list):
-            for child in item[:8]:
-                visit(child, depth + 1)
-
-    visit(value)
-    receipt["_operation_completed"] = True
-    return receipt
-
-
 def _is_file_tool_name(operation: str) -> bool:
     name = str(operation or "").strip().lower()
     if name.startswith("instance."):
@@ -177,16 +153,6 @@ def _is_file_tool_name(operation: str) -> bool:
         if len(parts) == 3:
             name = parts[2]
     return name == "file.read" or name.startswith("file.data.")
-
-
-def _is_read_operation_name(operation: str) -> bool:
-    name = str(operation or "").strip().lower()
-    if name.startswith("instance."):
-        parts = name.split(".", 2)
-        if len(parts) == 3:
-            name = parts[2]
-    return (name == "memory.search" or name in {"collection.doc_search", "collection.list_documents"}
-            or name.endswith((".read", ".search", ".list", ".get", ".fetch", ".lookup", ".describe")))
 
 
 def _duplicate_call_id(calls: list[Any], already_used: set[str]) -> Optional[str]:
@@ -2498,26 +2464,6 @@ class AgentToolRuntime(BaseRuntime):
         )
         return operation is not None
 
-    @staticmethod
-    def _required_operation_retry_instruction(
-        *,
-        platform_config: Optional[Dict[str, Any]],
-        sandbox_overrides: Optional[Dict[str, Any]],
-    ) -> str:
-        runtime_override = None
-        if isinstance(sandbox_overrides, dict):
-            runtime_override = sandbox_overrides.get("required_operation_retry_instruction")
-            if runtime_override is None and isinstance(sandbox_overrides.get("agent_runtime"), dict):
-                runtime_override = sandbox_overrides["agent_runtime"].get(
-                    "required_operation_retry_instruction"
-                )
-        if isinstance(runtime_override, str) and runtime_override.strip():
-            return runtime_override.strip()
-
-        policy_text = (platform_config or {}).get("retry_instruction")
-        if isinstance(policy_text, str) and policy_text.strip():
-            return policy_text.strip()
-        return DEFAULT_REQUIRED_OPERATION_RETRY_INSTRUCTION
 
     @staticmethod
     def _invalid_operation_retry_instruction(

@@ -10,7 +10,6 @@ from app.agents.runtime.prompt_contract import build_prompt_input_schema, summar
 from app.agents.runtime_rbac_resolver import RuntimeRbacResolver
 from app.agents.tool_resolver import ResolvedTool, ToolResolver
 from app.core.logging import get_logger
-from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
 from app.services.permission_service import EffectivePermissions
 from app.services.sandbox_override_resolver import SandboxToolOverrides

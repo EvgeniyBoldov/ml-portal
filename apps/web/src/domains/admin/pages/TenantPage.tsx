@@ -5,7 +5,7 @@
  * Data flows: API types → formData state → Block fields.
  * No mappers, no intermediate interfaces.
  */
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTenant, useModels, useCreateTenant, useUpdateTenant, useUsers } from '@shared/api/hooks/useAdmin';
@@ -17,7 +17,7 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { LifecycleDeleteDialog } from '@/shared/ui';
 import LifecycleRestoreDialog from '@/shared/ui/LifecycleRestoreDialog';
 import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
-import type { Tenant, TenantCreate, TenantUpdate } from '@shared/api/tenant';
+import type { TenantCreate } from '@shared/api/tenant';
 import { CredentialsPanel } from '@/shared/ui';
 import MultiSelectTagPicker from '@/shared/ui/MultiSelectTagPicker/MultiSelectTagPicker';
 
@@ -62,7 +62,7 @@ const META_FIELDS: FieldConfig[] = [
 
 /* ─── Component ─── */
 
-export function TenantPage() {
+function TenantPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();

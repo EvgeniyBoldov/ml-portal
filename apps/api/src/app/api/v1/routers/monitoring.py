@@ -1,11 +1,10 @@
 """Monitoring endpoints for health metrics and system observability."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from prometheus_client import CollectorRegistry, generate_latest, CONTENT_TYPE_LATEST
-from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
 from typing import Dict, Any
 
 from app.api.deps import db_session, get_current_user, require_admin

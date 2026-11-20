@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_session, get_current_user_sse, require_admin
+from app.api.deps import db_session, require_admin
 from app.agents import ToolContext
 from app.agents.runtime.confirmation import get_confirmation_service
 from app.agents.runtime_sandbox_resolver import RuntimeSandboxResolver
@@ -22,13 +22,6 @@ from app.core.logging import get_logger
 from app.core.security import UserCtx
 from app.models.chat import Chats
 from app.models.runtime_observability import RuntimeExecutionEvent
-from app.models.sandbox import SandboxBranch, SandboxOverrideSnapshot
-from app.models.agent import Agent
-from app.models.agent_version import AgentVersion
-from app.models.tool import Tool
-from app.models.tool_release import ToolRelease
-from app.models.collection import Collection
-from app.models.tool_instance import ToolInstance
 from app.schemas.chats import ChatAttachmentUploadResponse
 from app.schemas.sandbox import (
     SandboxRunCreate,
@@ -395,18 +388,6 @@ async def _observe_sandbox_runner(
         except Exception:  # noqa: BLE001
             logger.exception("sandbox_tail_unsubscribe_failed run_id=%s", run_id)
     yield _format_sse("done", {"run_id": str(run_id)})
-
-def _extract_attachment_meta_from_events(events: list) -> list[dict]:
-    for event in reversed(events):
-        payload = getattr(event, "payload", None)
-        if not isinstance(payload, dict):
-            continue
-        attachments = payload.get("attachments")
-        if isinstance(attachments, list):
-            return [item for item in attachments if isinstance(item, dict)]
-    return []
-
-
 
 
 async def _ensure_sandbox_upload_chat(

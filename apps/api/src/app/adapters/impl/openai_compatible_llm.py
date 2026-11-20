@@ -610,10 +610,6 @@ class OpenAICompatibleLLM:
             "temperature": request_params.get("temperature"),
         }
 
-    @staticmethod
-    def _provider_detail_for_diagnostics(exc: Exception) -> str:
-        """Extract bounded provider error text, excluding request payloads."""
-        return json.dumps(OpenAICompatibleLLM._normalize_error(exc).diagnostics(), ensure_ascii=False)[:2400]
 
     @staticmethod
     def _record_call(*, connector: str, call_kind: str, outcome: str, duration_ms: int,

@@ -1,12 +1,7 @@
 import React from 'react';
 import styles from './Alert.module.css';
 
-export type AlertVariant =
-  | 'neutral'
-  | 'info'
-  | 'success'
-  | 'warning'
-  | 'danger';
+type AlertVariant = 'neutral' | 'info' | 'success' | 'warning' | 'danger';
 
 interface AlertProps {
   variant?: AlertVariant;

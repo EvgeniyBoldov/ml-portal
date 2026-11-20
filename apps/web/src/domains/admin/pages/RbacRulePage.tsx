@@ -10,7 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { adminApi } from '@/shared/api/admin';
 import { tenantApi } from '@/shared/api/tenant';
 import { agentsApi } from '@/shared/api/agents';
-import collectionsApi from '@/shared/api/collections';
+import { collectionsApi } from '@/shared/api/collections';
 import { rbacApi, type RbacEffect } from '@/shared/api/rbac';
 import { qk } from '@/shared/api/keys';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
@@ -515,4 +515,3 @@ export function RbacRulePage() {
   );
 }
 
-export default RbacRulePage;

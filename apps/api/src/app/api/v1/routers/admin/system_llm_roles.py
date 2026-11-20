@@ -12,7 +12,7 @@ from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.models.system_llm_role import SystemLLMRoleType
 from app.services.system_llm_role_service import (
-    SystemLLMRoleService, SystemLLMRoleNotFoundError
+    SystemLLMRoleService
 )
 from app.schemas.system_llm_roles import (
     SystemLLMRoleCreate, SystemLLMRoleUpdate, SystemLLMRoleResponse,

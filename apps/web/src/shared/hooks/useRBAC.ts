@@ -17,7 +17,7 @@ export function useRBAC() {
     return user.role === role;
   };
 
-  const hasScope = (scope: UserScope): boolean => {
+  const hasScope = (_scope: UserScope): boolean => {
     if (user?.role === 'admin') return true;
     return false;
   };

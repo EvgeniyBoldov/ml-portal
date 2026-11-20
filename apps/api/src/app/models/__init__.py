@@ -34,7 +34,6 @@ from .collection import (
     FieldType,
 )
 from .credential_set import Credential, AuthType
-from .policy import Policy
 from .rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
 from .platform_settings import PlatformSettings
 from .orchestration_settings import OrchestrationSettings
@@ -124,7 +123,6 @@ __all__ = [
     "FieldType",
     "Credential",
     "AuthType",
-    "Policy",
     "RbacRule",
     "RbacLevel",
     "ResourceType",

@@ -12,7 +12,6 @@ from app.core.logging import get_logger
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.services.agent_service import AgentService
-from app.models.agent import Agent
 from app.models.agent_version import AgentVersion
 from app.services.llm_service import LLMService
 

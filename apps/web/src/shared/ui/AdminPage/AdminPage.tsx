@@ -27,7 +27,7 @@ import Button from '../Button';
 import Input from '../Input';
 import styles from './AdminPage.module.css';
 
-export interface AdminPageAction {
+interface AdminPageAction {
   label: string;
   onClick: () => void;
   variant?: 'primary' | 'outline' | 'ghost' | 'danger';
@@ -123,4 +123,3 @@ export function AdminPage({
   );
 }
 
-export default AdminPage;

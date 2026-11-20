@@ -1,12 +1,11 @@
 """Metrics collector for health monitoring and system observability."""
 from __future__ import annotations
 
-from typing import Dict, Any, List
-from datetime import datetime, timezone
+from typing import List
 from sqlalchemy import select, func, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from prometheus_client.core import GaugeMetricFamily, CounterMetricFamily
+from prometheus_client.core import GaugeMetricFamily
 
 from app.core.logging import get_logger
 

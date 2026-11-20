@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Optional, List
 from uuid import UUID
 
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.rbac import RbacRule
@@ -28,12 +28,6 @@ class RbacRuleRepository:
         await self.session.refresh(rule)
         return rule
 
-    async def bulk_create(self, rules: List[RbacRule]) -> List[RbacRule]:
-        self.session.add_all(rules)
-        await self.session.flush()
-        for rule in rules:
-            await self.session.refresh(rule)
-        return rules
 
     async def get_by_id(self, rule_id: UUID) -> Optional[RbacRule]:
         return await self.session.get(RbacRule, rule_id)
@@ -199,16 +193,3 @@ class RbacRuleRepository:
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
 
-    async def delete_by_user(self, user_id: UUID) -> int:
-        """Delete all rules for a user."""
-        stmt = delete(RbacRule).where(RbacRule.owner_user_id == user_id)
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return result.rowcount
-
-    async def delete_by_tenant(self, tenant_id: UUID) -> int:
-        """Delete all rules for a tenant."""
-        stmt = delete(RbacRule).where(RbacRule.owner_tenant_id == tenant_id)
-        result = await self.session.execute(stmt)
-        await self.session.flush()
-        return result.rowcount

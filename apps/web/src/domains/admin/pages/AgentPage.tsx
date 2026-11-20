@@ -12,18 +12,14 @@ import {
   agentsApi,
   adminApi,
   collectionsApi,
-  type Agent,
-  type AgentDetail,
-  type AgentCreate,
-  type AgentUpdate,
-  type AgentVersion,
+
   type Collection,
   type Model,
 } from '@/shared/api';
 import { qk } from '@/shared/api/keys';
 import { useAgentDetail } from '@/shared/api/hooks/useAgents';
 import { useAgentExecutionLimits, useUpdateAgentExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
-import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui';
+import { EntityPageV2, Tab } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { VersionsBlock } from '@/shared/ui/VersionsBlock';
@@ -218,7 +214,6 @@ const INFO_FIELDS: FieldConfig[] = [
     placeholder: 'lun_uuid, vlan_id, ip_address',
   },
 ];
-
 
 /* ─── Component ─── */
 
@@ -701,4 +696,3 @@ export function AgentPage() {
   );
 }
 
-export default AgentPage;

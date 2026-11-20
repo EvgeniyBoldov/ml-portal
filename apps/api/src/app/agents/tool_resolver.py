@@ -78,27 +78,6 @@ class ResolvedTool:
     prompt_context: Dict[str, Any] = field(default_factory=dict)
     sandbox_override_snapshot: Dict[str, Any] = field(default_factory=dict)
 
-    def to_prompt_context(self) -> Dict[str, Any]:
-        return {
-            "raw_slug": self.raw_slug,
-            "operation_name": self.operation_name,
-            "published": self.published,
-            "title": self.title,
-            "description": self.description,
-            "domain": self.domain,
-            "result_kind": self.result_kind,
-            "scope_kind": self.scope_kind,
-            "side_effects": self.side_effects,
-            "risk_level": self.risk_level,
-            "idempotent": self.idempotent,
-            "requires_confirmation": self.requires_confirmation,
-            "risk_flags": list(self.risk_flags),
-            "publication_view": self.publication_view.to_dict() if self.publication_view else None,
-            "input_schema": self.input_schema,
-            "output_schema": self.output_schema,
-            **self.prompt_context,
-        }
-
 
 class ToolResolver:
     def __init__(self, session: AsyncSession) -> None:
@@ -293,19 +272,3 @@ def _build_title(discovered_name: Optional[str], slug: str) -> str:
     leaf = (slug or "").split(".")[-1].replace("_", " ").strip()
     return leaf.title() if leaf else "Tool Operation"
 
-
-def _build_description(
-    *,
-    slug: str,
-    description: Optional[str],
-    domains: List[str],
-    instance_slug: str,
-    instance_domain: str,
-) -> str:
-    if description and description.strip():
-        return description.strip()
-    domains_txt = ", ".join(domains) if domains else instance_domain
-    return (
-        f"Operation '{slug}' for instance '{instance_slug}' "
-        f"(domain: {domains_txt})."
-    )

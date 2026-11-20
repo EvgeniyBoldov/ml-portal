@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import hashlib
-import re
 from datetime import datetime, timezone
 from uuid import UUID
 

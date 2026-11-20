@@ -2,12 +2,10 @@
 Redis cache and distributed locks implementation
 """
 from __future__ import annotations
-import asyncio
 import json
 from app.core.logging import get_logger
-import time
 import uuid
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, List, Optional
 import redis.asyncio as redis
 from app.core.config import get_settings
 
@@ -99,29 +97,6 @@ class RedisCache:
             logger.error(f"Redis delete pattern error for {pattern}: {e}")
             return 0
     
-    async def add_to_index(self, index_name: str, key: str) -> bool:
-        """Add key to index set"""
-        if not self.redis_client:
-            return False
-        
-        try:
-            await self.redis_client.sadd(index_name, key)
-            return True
-        except Exception as e:
-            logger.error(f"Redis add to index error for {index_name}: {e}")
-            return False
-    
-    async def remove_from_index(self, index_name: str, key: str) -> bool:
-        """Remove key from index set"""
-        if not self.redis_client:
-            return False
-        
-        try:
-            result = await self.redis_client.srem(index_name, key)
-            return result > 0
-        except Exception as e:
-            logger.error(f"Redis remove from index error for {index_name}: {e}")
-            return False
     
     async def get_index_keys(self, index_name: str) -> List[str]:
         """Get all keys in index set"""
@@ -135,30 +110,6 @@ class RedisCache:
             logger.error(f"Redis get index keys error for {index_name}: {e}")
             return []
     
-    async def invalidate_index(self, index_name: str) -> int:
-        """Invalidate all keys in index set"""
-        if not self.redis_client:
-            return 0
-        
-        try:
-            keys = await self.get_index_keys(index_name)
-            if not keys:
-                return 0
-            
-            # Delete all keys in the index
-            deleted_count = 0
-            for key in keys:
-                result = await self.delete(key)
-                if result:
-                    deleted_count += 1
-            
-            # Clear the index set
-            await self.redis_client.delete(index_name)
-            return deleted_count
-        except Exception as e:
-            logger.error(f"Redis invalidate index error for {index_name}: {e}")
-            return 0
-
 
 class DistributedLock:
     """Distributed lock using Redis with Lua scripts"""
@@ -266,11 +217,6 @@ async def get_cache() -> RedisCache:
         await _cache.connect()
     return _cache
 
-async def get_distributed_lock(key: str, timeout: int = 30) -> DistributedLock:
-    """Get distributed lock instance"""
-    cache = await get_cache()
-    return DistributedLock(cache.redis_client, key, timeout)
-
 
 # Cache decorators
 def cache_key(prefix: str, *args, **kwargs) -> str:
@@ -321,17 +267,3 @@ def cached(ttl: int = 300, key_prefix: str = "cache"):
         return wrapper
     return decorator
 
-
-def cache_invalidate(pattern: str):
-    """Decorator for invalidating cache after function execution"""
-    def decorator(func):
-        async def wrapper(*args, **kwargs):
-            result = await func(*args, **kwargs)
-            
-            # Invalidate cache
-            cache = await get_cache()
-            await cache.delete_pattern(pattern)
-            
-            return result
-        return wrapper
-    return decorator

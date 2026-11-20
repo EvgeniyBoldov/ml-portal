@@ -5,7 +5,7 @@ Returns metadata that identifies each template row and its original stored file.
 """
 from __future__ import annotations
 
-from typing import Any, ClassVar, Dict, List, Optional
+from typing import Any, ClassVar, Dict
 
 from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
@@ -14,7 +14,6 @@ from app.core.logging import get_logger
 from app.models.collection import CollectionType
 from app.services.collection.row_service import CollectionRowService
 from app.services.collection_service import CollectionService
-from app.services.file_delivery_service import FileDeliveryService
 from app.services.chat_artifact_reference_service import ArtifactTarget, ChatArtifactReferenceService
 
 logger = get_logger(__name__)

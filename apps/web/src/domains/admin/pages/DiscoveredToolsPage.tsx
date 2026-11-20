@@ -259,4 +259,3 @@ export function DiscoveredToolsPage() {
   );
 }
 
-export default DiscoveredToolsPage;

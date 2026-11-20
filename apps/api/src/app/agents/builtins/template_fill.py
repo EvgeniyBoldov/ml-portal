@@ -7,7 +7,6 @@ final output of the fill operation.
 """
 from __future__ import annotations
 
-import io
 import re
 from pathlib import PurePosixPath
 from typing import Any, ClassVar, Dict
@@ -23,7 +22,6 @@ from app.services.collection.template_contract import TemplateContract
 from app.services.collection.template_fill_engine import TemplateFillEngine
 from app.services.collection.template_layout_parser import _parse_placeholder_expr
 from app.services.collection_service import CollectionService
-from app.services.file_delivery_service import FileDeliveryService
 from app.adapters.s3_client import s3_manager
 
 logger = get_logger(__name__)
@@ -71,60 +69,6 @@ def _fill_text(content: bytes, values: Dict[str, str]) -> bytes:
     text = content.decode("utf-8")
     text, _ = _substitute_placeholders(text, values)
     return text.encode("utf-8")
-
-
-def _fill_excel(content: bytes, values: Dict[str, str]) -> bytes:
-    try:
-        import openpyxl
-    except ImportError:
-        raise RuntimeError("openpyxl is not installed; cannot fill Excel templates")
-
-    wb = openpyxl.load_workbook(io.BytesIO(content))
-    filled = set()
-    for sheet in wb.worksheets:
-        for row in sheet.iter_rows():
-            for cell in row:
-                if cell.value and isinstance(cell.value, str):
-                    new_val, keys = _substitute_placeholders(cell.value, values)
-                    if new_val != cell.value:
-                        cell.value = new_val
-                        filled.update(keys)
-    out = io.BytesIO()
-    wb.save(out)
-    wb.close()
-    return out.getvalue()
-
-
-def _fill_word(content: bytes, values: Dict[str, str]) -> bytes:
-    try:
-        import docx
-    except ImportError:
-        raise RuntimeError("python-docx is not installed; cannot fill Word templates")
-
-    doc = docx.Document(io.BytesIO(content))
-    filled = set()
-
-    for para in doc.paragraphs:
-        if para.text:
-            new_text, keys = _substitute_placeholders(para.text, values)
-            if new_text != para.text:
-                para.clear()
-                para.add_run(new_text)
-                filled.update(keys)
-
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                if cell.text:
-                    new_text, keys = _substitute_placeholders(cell.text, values)
-                    if new_text != cell.text:
-                        cell.paragraphs[0].clear()
-                        cell.paragraphs[0].add_run(new_text)
-                        filled.update(keys)
-
-    out = io.BytesIO()
-    doc.save(out)
-    return out.getvalue()
 
 
 def _substitute_placeholders(text: str, values: Dict[str, str]) -> tuple[str, set[str]]:

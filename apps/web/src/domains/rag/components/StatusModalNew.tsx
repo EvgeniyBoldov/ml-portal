@@ -591,4 +591,3 @@ export function StatusModalNew({
   );
 }
 
-export default StatusModalNew;

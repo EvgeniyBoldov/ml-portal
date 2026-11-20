@@ -7,9 +7,8 @@ Implements backoff policy and event hooks for health transitions.
 from __future__ import annotations
 
 import asyncio
-import os
-from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, Optional
+from datetime import datetime, timezone
+from typing import Dict, Any
 
 from celery import Task
 from sqlalchemy import text
@@ -475,9 +474,8 @@ async def _process_mcp_health_transitions(
     previous_health_map: Dict[str, str],
 ) -> None:
     """Process health transitions for MCP connectors with event hooks."""
-    from sqlalchemy import select, update
+    from sqlalchemy import select
     from app.models.tool_instance import ToolInstance
-    from app.models.discovered_tool import DiscoveredTool
     
     for instance_id, result in results.items():
         try:

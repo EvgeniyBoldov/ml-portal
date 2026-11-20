@@ -7,7 +7,6 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.sandbox import SandboxRun
 from app.repositories.sandbox_chat_turn_repository import SandboxChatTurnRepository
 from app.services.chat_turn_service import ChatTurnService
 from app.services.sandbox_service import SandboxService

@@ -54,19 +54,6 @@ class FactDTO:
     last_confirmed_at: Optional[datetime] = None
     revision: int = 1
 
-    def matches_key(self, other: "FactDTO") -> bool:
-        """Two DTOs identify the same 'slot' iff scope, subject and the
-        scope-relevant owner id match. Used by upsert_with_supersede to
-        find the active row that a new fact would replace.
-        """
-        if self.scope != other.scope or self.subject != other.subject:
-            return False
-        if self.scope == FactScope.USER:
-            return self.owner_id == other.owner_id
-        if self.scope == FactScope.TENANT:
-            return self.owner_id == other.owner_id
-        return False
-
 
 @dataclass
 class SummaryDTO:

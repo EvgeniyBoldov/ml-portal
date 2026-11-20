@@ -3,11 +3,10 @@ from __future__ import annotations
 
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime
 
 from app.models.model_registry import Model
 from app.models.tool_instance import ToolInstance
-from app.services.health.base import HealthStatus, HealthProbeResult
+from app.services.health.base import HealthStatus
 from app.services.health.adapters import (
     MCPHealthAdapter,
     EmbeddingHealthAdapter,

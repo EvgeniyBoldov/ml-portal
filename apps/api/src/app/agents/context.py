@@ -2,7 +2,6 @@
 Контексты выполнения для Agent Runtime
 """
 from __future__ import annotations
-import asyncio
 import time
 from dataclasses import dataclass, field
 from dataclasses import fields as dataclass_fields
@@ -88,16 +87,11 @@ class ToolExecutionNotes:
     def error(self, message: str, **data: Any) -> None:
         self._add("error", message, **data)
 
-    def has_errors(self) -> bool:
-        return any(e.level == "error" for e in self._entries)
 
     def entries_dict(self) -> List[Dict[str, Any]]:
         """Serialize entries for storage in ToolResult.metadata["logs"]."""
         return [e.to_dict() for e in self._entries]
 
-    @property
-    def total_ms(self) -> int:
-        return self._elapsed()
 
     def __repr__(self) -> str:
         return f"<ToolExecutionNotes {self.tool_slug} entries={len(self._entries)}>"
@@ -184,13 +178,6 @@ class ToolContext:
         self.extra["runtime_deps"] = deps
         self.extra["sandbox_overrides"] = deps.sandbox_overrides
 
-    def with_runtime_deps(self, **kwargs: Any) -> ToolContext:
-        deps = self.get_runtime_deps()
-        for key, value in kwargs.items():
-            if hasattr(deps, key):
-                setattr(deps, key, value)
-        self.set_runtime_deps(deps)
-        return self
     
     def with_extra(self, **kwargs) -> ToolContext:
         """Создать копию контекста с дополнительными данными"""
@@ -231,17 +218,6 @@ class ToolResult:
         """Ошибка выполнения"""
         return cls(success=False, error=error, metadata=metadata)
     
-    def to_message_content(self, max_chars: int = 4000) -> str:
-        """Преобразовать результат в текст для LLM с ограничением размера"""
-        if self.success:
-            import json
-            text = json.dumps(self.data, ensure_ascii=False, indent=2)
-            if len(text) > max_chars:
-                text = text[:max_chars] + f"\n... [truncated, total {len(text)} chars]"
-            return text
-        else:
-            return f"Error: {self.error}"
-
 
 @dataclass
 class ToolCall:

@@ -37,23 +37,7 @@ export function InspectorStatus({
   return <Badge size="small" tone={tone}>{label}</Badge>;
 }
 
-export function InspectorDate({ value }: { value: string | null | undefined }) {
-  if (!value) return <InspectorScalar value={undefined} />;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return <InspectorScalar value={value} />;
-  return <InspectorScalar value={date.toLocaleString('ru-RU', { dateStyle: 'medium', timeStyle: 'medium' })} />;
-}
 
-export function InspectorReadonlyBlock({ value }: { value: unknown }) {
-  const text = typeof value === 'string' ? value : (() => {
-    try {
-      return JSON.stringify(value, null, 2);
-    } catch {
-      return String(value);
-    }
-  })();
-  return <textarea className={styles.readonlyCode} value={text} readOnly spellCheck={false} aria-label="Только для чтения" />;
-}
 
 export function InspectorJsonBlock({ value }: { value: unknown }) {
   const [open, setOpen] = useState(false);

@@ -35,8 +35,3 @@ class TraceIterationResponse(BaseModel):
     index: int
     events: List[SemanticEventResponse] = []
 
-
-class RunTraceResponse(BaseModel):
-    iterations: List[TraceIterationResponse] = []
-    total_events: int = 0
-

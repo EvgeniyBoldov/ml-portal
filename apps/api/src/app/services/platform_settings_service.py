@@ -3,7 +3,6 @@ PlatformSettings Service — business logic for global platform configuration.
 """
 from __future__ import annotations
 from typing import Optional, Dict, Any
-from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select

@@ -1,13 +1,3 @@
-export type ParsedNodeType =
-  | 'object'
-  | 'array'
-  | 'embedded_json'
-  | 'multiline'
-  | 'string'
-  | 'number'
-  | 'boolean'
-  | 'null';
-
 export interface ObjectParsedNode {
   type: 'object';
   entries: Array<{ key: string; node: ParsedNode }>;

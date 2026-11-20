@@ -191,22 +191,6 @@ class PromptAssembler:
         )
         return bundle.collections_card
 
-    def assemble_system_operations_prompt(
-        self,
-        *,
-        resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
-        prompt_labels: Optional[Dict[str, Any]] = None,
-        prompt_budgets: Optional[Dict[str, Any]] = None,
-    ) -> str:
-        if not resolved_operations:
-            return ""
-        bundle = self.capability_card_builder.build(
-            resolved_data_instances=[],
-            resolved_operations=resolved_operations,
-            prompt_labels=prompt_labels,
-            prompt_budgets=prompt_budgets,
-        )
-        return bundle.system_operations_card
 
     def assemble_constraints_prompt(
         self,

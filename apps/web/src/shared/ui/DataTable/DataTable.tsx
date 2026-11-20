@@ -36,14 +36,14 @@ import { TableHeader } from '../TableHeader';
 import { ActionsButton, type ActionItem } from '../ActionsButton';
 import styles from './DataTable.module.css';
 
-export type DataTableFilterKind = 'text' | 'select' | 'tags' | 'date-range';
+type DataTableFilterKind = 'text' | 'select' | 'tags' | 'date-range';
 export type DataTableFilterValue =
   | string
   | string[]
   | { from?: string; to?: string }
   | null;
 
-export interface DataTableColumnFilter<T = any> {
+interface DataTableColumnFilter<T = any> {
   kind: DataTableFilterKind;
   placeholder?: string;
   options?: SelectOption[];

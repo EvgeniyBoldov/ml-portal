@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Badge, Button, DataTable, type DataTableColumn, type DataTableFilterValue } from '@/shared/ui';
+import { Badge, DataTable, type DataTableColumn, type DataTableFilterValue } from '@/shared/ui';
 import { adminApi, type LongMemoryAdminDocument } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
 

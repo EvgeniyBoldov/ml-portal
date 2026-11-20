@@ -2,10 +2,9 @@
 Documents repository for RAG document management
 """
 from __future__ import annotations
-from typing import Optional, List, Dict, Any
+from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_, or_, desc, asc
-from datetime import datetime, timezone
+from sqlalchemy import select, func, and_, or_, desc
 import uuid
 
 from app.models.rag import RAGDocument, RAGChunk
@@ -128,21 +127,3 @@ class AsyncRAGChunksRepository(AsyncTenantRepository[RAGChunk]):
     def __init__(self, session: AsyncSession, tenant_id: uuid.UUID, user_id: Optional[uuid.UUID] = None):
         super().__init__(session, RAGChunk, tenant_id, user_id)
     
-    async def get_by_document_id(self, document_id: uuid.UUID) -> List[RAGChunk]:
-        """Get chunks by document ID"""
-        result = await self.session.execute(
-            select(RAGChunk).where(RAGChunk.document_id == document_id)
-        )
-        return result.scalars().all()
-    
-    async def get_by_chunk_index(self, document_id: uuid.UUID, chunk_index: int) -> Optional[RAGChunk]:
-        """Get chunk by document ID and index"""
-        result = await self.session.execute(
-            select(RAGChunk).where(
-                and_(
-                    RAGChunk.document_id == document_id,
-                    RAGChunk.chunk_idx == chunk_index
-                )
-            )
-        )
-        return result.scalar_one_or_none()

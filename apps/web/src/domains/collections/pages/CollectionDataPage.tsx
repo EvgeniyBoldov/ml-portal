@@ -9,7 +9,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Button from '@shared/ui/Button';
 import Input from '@shared/ui/Input';
-import Select from '@shared/ui/Select';
+import { Select } from '@shared/ui/Select';
 import Checkbox from '@shared/ui/Checkbox';
 import Badge from '@shared/ui/Badge';
 import Modal from '@shared/ui/Modal';

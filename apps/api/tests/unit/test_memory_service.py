@@ -25,28 +25,6 @@ class _Facts:
 
 
 @pytest.mark.asyncio
-async def test_memory_service_reads_one_snapshot_and_writes_generic_user_tenant_owners() -> None:
-    facts = _Facts()
-    service = MemoryService(fact_store=facts)  # type: ignore[arg-type]
-    user_id, tenant_id = uuid4(), uuid4()
-
-    snapshot = await service.read_snapshot(user_id=user_id, tenant_id=tenant_id, limit=12)
-    assert [entry["scope"] for entry in snapshot.planner_context()] == ["user", "tenant"]
-
-    saved = await service.write_extracted(
-        user_id=user_id,
-        tenant_id=tenant_id,
-        facts=[
-            FactDTO(scope=FactScope.USER, subject="role", value="engineer", source=FactSource.USER_UTTERANCE),
-            FactDTO(scope=FactScope.TENANT, subject="term", value="portal", source=FactSource.USER_UTTERANCE),
-        ],
-    )
-
-    assert saved == 2
-    assert [(item.owner_type, item.owner_id) for item in facts.saved] == [("user", user_id), ("tenant", tenant_id)]
-
-
-@pytest.mark.asyncio
 async def test_old_scope_defaults_survive_recent_profile_limit():
     from unittest.mock import AsyncMock
     facts = _Facts()

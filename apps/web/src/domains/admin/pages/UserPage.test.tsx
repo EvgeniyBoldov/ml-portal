@@ -52,7 +52,7 @@ vi.mock('@/shared/ui/EntityPage', async importOriginal => ({
 }));
 vi.mock('@/shared/ui/GridLayout', async importOriginal => {
   const actual = await importOriginal<typeof import('@/shared/ui/GridLayout')>();
-  const React = await import('react');
+  await import('react');
   const { Tags } = await import('@/shared/ui/Tags');
   return {
     ...actual,
@@ -70,7 +70,7 @@ vi.mock('@/shared/ui/GridLayout', async importOriginal => {
   };
 });
 
-import { UserPage } from './UserPage';
+import UserPage from './UserPage';
 
 afterEach(cleanup);
 beforeEach(() => { vi.clearAllMocks(); mocks.update.mockResolvedValue(mocks.user); });

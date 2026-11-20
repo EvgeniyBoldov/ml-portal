@@ -25,20 +25,6 @@ export interface User {
   last_login_at?: string | null;
 }
 
-export interface OrchestrationSettings {
-  id: string;
-  executor_model?: string | null;
-  executor_temperature?: number | null;
-  created_at: string;
-  updated_at: string;
-}
-
-export type ExecutorSettingsUpdate = Partial<Pick<
-  OrchestrationSettings,
-  | 'executor_model'
-  | 'executor_temperature'
->>;
-
 // === SystemLLMRole Types ===
 
 export type SystemLLMRoleType =
@@ -50,15 +36,13 @@ export type SystemLLMRoleType =
   | 'fact_compactor'
   | 'document_memory_extractor'
   | 'chat_context_compactor';
-export type RetryBackoffType = 'none' | 'linear' | 'exp';
 
-export type ResponseContractFormat = 'json' | 'plain_text' | 'markdown';
 
-export interface ResponseContractFailurePolicy {
+interface ResponseContractFailurePolicy {
   on_invalid: string;
 }
 
-export interface JsonResponseContract {
+interface JsonResponseContract {
   format: 'json';
   schema: Record<string, any>;
   plain_text: null;
@@ -72,7 +56,7 @@ export interface JsonResponseContract {
   format_locked?: boolean;
 }
 
-export interface PlainTextResponseContract {
+interface PlainTextResponseContract {
   format: 'plain_text';
   schema: null;
   plain_text: Record<string, any>;
@@ -86,7 +70,7 @@ export interface PlainTextResponseContract {
   format_locked?: boolean;
 }
 
-export interface MarkdownResponseContract {
+interface MarkdownResponseContract {
   format: 'markdown';
   schema: null;
   plain_text: null;
@@ -158,11 +142,6 @@ export interface OrchestratorRoleSettingsResult {
 
 // Role-specific update types — all use same schema as SystemLLMRoleUpdate
 // Fields: identity, mission, rules, safety, output_requirements, model, temperature, etc.
-export type PlannerRoleUpdate = SystemLLMRoleUpdate;
-export type TurnPreflightRoleUpdate = SystemLLMRoleUpdate;
-export type SynthesizerRoleUpdate = SystemLLMRoleUpdate;
-export type FactExtractorRoleUpdate = SystemLLMRoleUpdate;
-export type FactCompactorRoleUpdate = SystemLLMRoleUpdate;
 export type DocumentMemoryExtractorRoleUpdate = SystemLLMRoleUpdate;
 
 export interface UserCreate {
@@ -195,12 +174,12 @@ export interface UserListResponse {
   total: number;
 }
 
-export interface TokenScope {
+interface TokenScope {
   scope: string;
   description: string;
 }
 
-export interface UserToken {
+interface UserToken {
   id: string;
   name: string;
   scopes: TokenScope[];
@@ -258,13 +237,6 @@ export interface AuditLogListResponse {
   page_size: number;
 }
 
-export interface AuditFilters {
-  user_id?: string;
-  action?: string;
-  status?: string;
-  from_date?: string;
-  to_date?: string;
-}
 
 export interface Tenant {
   memory_scope_keys: string[];
@@ -310,8 +282,8 @@ export type TenantUpdate = Partial<TenantCreate> & { is_default?: boolean; tenan
 // New Model architecture
 export type ModelType = 'llm_chat' | 'embedding' | 'reranker';
 export type ModelConnector = 'openai_http' | 'litellm_http' | 'azure_openai_http' | 'local_emb_http' | 'local_rerank_http' | 'local_llm_http' | 'grpc';
-export type ModelStatus = 'available' | 'unavailable' | 'deprecated' | 'maintenance';
-export type HealthStatus = 'healthy' | 'degraded' | 'unavailable';
+type ModelStatus = 'available' | 'unavailable' | 'deprecated' | 'maintenance';
+type HealthStatus = 'healthy' | 'degraded' | 'unavailable';
 
 export interface Model {
   id: string;
@@ -402,9 +374,6 @@ export interface ModelListResponse {
   has_more: boolean;
 }
 
-export interface HealthCheckRequest {
-  force?: boolean;
-}
 
 export interface HealthCheckResponse {
   model_id: string;
@@ -445,7 +414,7 @@ export interface ModelProbeInfoRequest {
   extra_config?: Record<string, unknown>;
 }
 
-export interface EmbeddingUsageTenantRow {
+interface EmbeddingUsageTenantRow {
   tenant_id: string;
   tenant_name: string;
   tenant_active: boolean;
@@ -455,7 +424,7 @@ export interface EmbeddingUsageTenantRow {
   not_vectorized_docs: number;
 }
 
-export interface EmbeddingUsageCollectionRow {
+interface EmbeddingUsageCollectionRow {
   collection_id: string;
   collection_name: string;
   collection_slug: string;
@@ -481,7 +450,7 @@ export interface TenantListResponse {
   has_more: boolean;
 }
 
-export interface SemanticMemoryAdminItem {
+interface SemanticMemoryAdminItem {
   id: string;
   scope: string;
   item_type: string;
@@ -1026,42 +995,9 @@ export const adminApi = {
 };
 
 // Token scopes configuration
-export const TOKEN_SCOPES: TokenScope[] = [
-  { scope: 'api:read', description: 'Read API access' },
-  { scope: 'api:write', description: 'Write API access' },
-  { scope: 'api:admin', description: 'Admin API access' },
-  { scope: 'rag:read', description: 'Read RAG documents' },
-  { scope: 'rag:write', description: 'Write RAG documents' },
-  { scope: 'rag:admin', description: 'Admin RAG operations' },
-  { scope: 'chat:read', description: 'Read chat history' },
-  { scope: 'chat:write', description: 'Send messages' },
-  { scope: 'chat:admin', description: 'Admin chat operations' },
-  { scope: 'users:read', description: 'Read user data' },
-  { scope: 'users:write', description: 'Write user data' },
-  { scope: 'users:admin', description: 'Admin user operations' },
-];
 
 // Role hierarchy for scope expansion
-export const SCOPE_HIERARCHY: Record<string, string[]> = {
-  'api:admin': ['api:read', 'api:write'],
-  'api:write': ['api:read'],
-  'rag:admin': ['rag:read', 'rag:write'],
-  'rag:write': ['rag:read'],
-  'chat:admin': ['chat:read', 'chat:write'],
-  'chat:write': ['chat:read'],
-  'users:admin': ['users:read', 'users:write'],
-  'users:write': ['users:read'],
-};
 
-export function expandScopes(scopes: string[]): string[] {
-  const expanded = new Set(scopes);
-  for (const scope of scopes) {
-    if (SCOPE_HIERARCHY[scope]) {
-      SCOPE_HIERARCHY[scope].forEach(s => expanded.add(s));
-    }
-  }
-  return Array.from(expanded).sort();
-}
 
 // ─── Platform Settings ─────────────────────────────────────────────────────
 
@@ -1160,16 +1096,6 @@ export const executionLimitsApi = {
     apiRequest(`/admin/execution-limits/orchestrators/${encodeURIComponent(role)}`, { method: 'PATCH', body: JSON.stringify(data) }),
 };
 
-export const orchestrationApi = {
-  get: (): Promise<OrchestrationSettings> =>
-    apiRequest('/admin/orchestration', { method: 'GET' }),
-
-  updateExecutor: (data: ExecutorSettingsUpdate): Promise<OrchestrationSettings> =>
-    apiRequest('/admin/orchestration/executor', {
-      method: 'PATCH',
-      body: JSON.stringify(data),
-    }),
-};
 
 export interface AgentRunListItem {
   agent_execution_id: string;

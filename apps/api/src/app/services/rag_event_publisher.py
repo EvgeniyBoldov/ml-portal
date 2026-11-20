@@ -199,41 +199,6 @@ class RAGEventPublisher:
         label = 'archived' if archived else 'unarchived'
         await self._broadcast_agg_and_doc(event, tenant_id, doc_id, f"document {label}: {doc_id}")
 
-    async def publish_document_added(
-        self,
-        doc_id: UUID,
-        tenant_id: UUID,
-        collection_id: UUID,
-    ) -> None:
-        """Опубликовать событие добавления документа в коллекцию (или загрузки)."""
-        if not self.redis:
-            return
-        event = {
-            "event_type": "document_added",
-            "document_id": str(doc_id),
-            "tenant_id": str(tenant_id),
-            "collection_id": str(collection_id),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        await self._broadcast_agg_and_doc(event, tenant_id, doc_id, f"document added: {doc_id}")
-
-    async def publish_document_deleted(
-        self,
-        doc_id: UUID,
-        tenant_id: UUID,
-        collection_id: UUID,
-    ) -> None:
-        """Опубликовать событие удаления документа из коллекции."""
-        if not self.redis:
-            return
-        event = {
-            "event_type": "document_deleted",
-            "document_id": str(doc_id),
-            "tenant_id": str(tenant_id),
-            "collection_id": str(collection_id),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        await self._broadcast_agg_and_doc(event, tenant_id, doc_id, f"document deleted: {doc_id}")
 
     async def _broadcast_agg_and_doc(
         self, event: Dict[str, Any], tenant_id: UUID, doc_id: UUID, label: str

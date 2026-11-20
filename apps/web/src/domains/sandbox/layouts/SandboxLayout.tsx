@@ -2,7 +2,6 @@
  * SandboxLayout — layout for sandbox pages.
  * Uses AppHeader with sandbox branding and simple content area.
  */
-import React from 'react';
 import { Outlet, useNavigate } from 'react-router-dom';
 import { AppHeader } from '@/shared/ui/AppHeader';
 import { useAuth } from '@/shared/hooks/useAuth';

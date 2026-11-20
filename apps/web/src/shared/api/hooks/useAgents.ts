@@ -27,7 +27,7 @@ export function useAgentList(includeDeprecated = false) {
 }
 
 /* ─── Detail Hook ─── */
-export function useAgentDetail(id: string) {
+export function useAgentDetail(_id: string) {
   return useEntityEditor<AgentDetail, AgentCreate, AgentUpdate>({
     entityType: 'agent',
     entityNameLabel: 'Агенты',

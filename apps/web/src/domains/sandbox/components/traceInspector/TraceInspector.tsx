@@ -1,8 +1,8 @@
-import { InspectorExpandableValue, InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorJsonBlock, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
+import { InspectorFieldGroup, InspectorFieldRow, InspectorHeader, InspectorJsonBlock, InspectorPanel, InspectorScalar, InspectorStatus, InspectorTabs } from '@/shared/ui/Inspector';
 import type { SandboxTraceState } from '../../traceState';
 import { memoryContextFromTool, type TraceExecutorRun, type TraceInspectionTarget } from '../../traceProjection';
 import { PlanView, TextValue } from './TraceDataViews';
-import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponseView } from './CallViews';
+import { CallInfoView, LlmErrorView, LlmInfoView, LlmRequestSnapshotView, LlmResponseSnapshotView, ToolInfoView, ToolRequestView, ToolResponse } from './CallViews';
 import { ExecutorResultView, MemoryExtractionResultView, StageResultView, StepResultView } from './ResultViews';
 import { callDisplayName } from '../../callInspection';
 import { callPresentation, callStatusPresentation, formatCallDuration } from '../../callPresentation';
@@ -109,7 +109,7 @@ export function TraceInspector({ target, trace, toolNames, sessionId }: Props) {
       </InspectorFieldGroup>;
     }
     if (tab === 'request' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmRequestSnapshotView call={target.call} /> : target.call.kind === 'tool' ? <ToolRequestView call={target.call} /> : <InspectorFieldGroup><TextValue label="Запрос" value={target.call.requestView.question ?? target.call.requestView.message} /></InspectorFieldGroup>;
-    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponseView key={target.key} call={target.call} sessionId={sessionId} runId={trace?.runId ?? undefined} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? (target.call.responseView?.content?.data !== undefined ? JSON.stringify(target.call.responseView.content.data, null, 2) : 'Ожидается')} /></InspectorFieldGroup>;
+    if (tab === 'response' && target.kind === 'call') return target.call.kind === 'llm' ? <LlmResponseSnapshotView call={target.call} toolNames={toolNames} /> : target.call.kind === 'tool' ? <ToolResponse key={target.key} call={target.call} sessionId={sessionId} runId={trace?.runId ?? undefined} /> : <InspectorFieldGroup><TextValue label="Ответ" value={target.call.responseView?.content?.text ?? (target.call.responseView?.content?.data !== undefined ? JSON.stringify(target.call.responseView.content.data, null, 2) : 'Ожидается')} /></InspectorFieldGroup>;
     if (tab === 'raw' && (target.kind === 'call' || target.kind === 'error')) {
       return <RawEventsViewer events={callPresentation(target.call).rawEvents.map((event) => ({ sequence: event.sequence, eventType: event.event_type, value: event }))} />;
     }

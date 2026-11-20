@@ -117,10 +117,3 @@ class AsyncTemplateAnalysisStatusRepository(AsyncRepository):
         result = await self.session.execute(stmt)
         return int(result.rowcount or 0)
 
-    async def get_failed_row_ids(self, collection_id: UUID) -> set[UUID]:
-        stmt = select(TemplateAnalysisStatus.row_id).where(
-            TemplateAnalysisStatus.collection_id == collection_id,
-            TemplateAnalysisStatus.status == "failed",
-        ).distinct()
-        result = await self.session.execute(stmt)
-        return {UUID(str(row_id)) for (row_id,) in result.all()}

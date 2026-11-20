@@ -1,6 +1,5 @@
 from typing import Dict, Any, List, Optional
 from uuid import UUID
-import re
 
 from jinja2 import Environment, TemplateSyntaxError, meta
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,27 +43,6 @@ class PromptService:
     # PROMPT CONTAINER operations
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def create_prompt(
-        self,
-        slug: str,
-        name: str,
-        description: Optional[str],
-        type: str
-    ) -> Prompt:
-        """Create new prompt container"""
-        # Check if slug already exists
-        existing = await self.prompt_repo.get_by_slug(slug)
-        if existing:
-            raise ValidationException(f"Prompt with slug '{slug}' already exists")
-        
-        prompt = Prompt(
-            slug=slug,
-            name=name,
-            description=description,
-            type=type
-        )
-        
-        return await self.prompt_repo.create(prompt)
 
     async def get_prompt_by_slug(self, slug: str) -> Prompt:
         """Get prompt container by slug"""
@@ -73,19 +51,6 @@ class PromptService:
             raise NotFoundException(f"Prompt '{slug}' not found")
         return prompt
 
-    async def get_prompt_with_recommended(self, slug: str) -> Prompt:
-        """Get prompt container by slug with eager-loaded recommended_version"""
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        
-        stmt = select(Prompt).where(Prompt.slug == slug).options(
-            selectinload(Prompt.recommended_version)
-        )
-        result = await self.session.execute(stmt)
-        prompt = result.scalar_one_or_none()
-        if not prompt:
-            raise NotFoundException(f"Prompt '{slug}' not found")
-        return prompt
 
     async def get_prompt_by_id(self, prompt_id: UUID) -> Prompt:
         """Get prompt container by ID"""
@@ -94,24 +59,6 @@ class PromptService:
             raise NotFoundException(f"Prompt not found")
         return prompt
 
-    async def update_prompt(
-        self,
-        prompt_id: UUID,
-        name: Optional[str] = None,
-        description: Optional[str] = None
-    ) -> Prompt:
-        """Update prompt container metadata"""
-        prompt = await self.get_prompt_by_id(prompt_id)
-        
-        update_data = {}
-        if name is not None:
-            update_data['name'] = name
-        if description is not None:
-            update_data['description'] = description
-        
-        if update_data:
-            return await self.prompt_repo.update(prompt, update_data)
-        return prompt
 
     async def list_prompts(
         self,
@@ -188,10 +135,6 @@ class PromptService:
             raise NotFoundException(f"No active version for prompt '{slug}'")
         return version
 
-    async def get_all_versions(self, slug: str) -> List[PromptVersion]:
-        """Get all versions of a prompt"""
-        prompt = await self.get_prompt_by_slug(slug)
-        return await self.version_repo.get_all_by_prompt(prompt.id)
 
     async def update_version(
         self,
@@ -260,55 +203,8 @@ class PromptService:
         
         return version
 
-    async def update_recommended_version(self, slug: str, version_id: UUID) -> Prompt:
-        """Set the recommended version for a prompt. Version must be active."""
-        # Use eager loading to avoid MissingGreenlet error
-        from sqlalchemy import select
-        from sqlalchemy.orm import selectinload
-        
-        stmt = select(Prompt).where(Prompt.slug == slug).options(
-            selectinload(Prompt.versions),
-            selectinload(Prompt.recommended_version)
-        )
-        result = await self.session.execute(stmt)
-        prompt = result.scalar_one_or_none()
-        
-        if not prompt:
-            raise NotFoundException(f"Prompt '{slug}' not found")
-            
-        version = await self.get_version_by_id(version_id)
-        
-        if version.prompt_id != prompt.id:
-            raise ValidationException("Version does not belong to this prompt")
-        
-        if version.status != PromptStatus.ACTIVE.value:
-            raise ValidationException("Only active versions can be set as recommended")
-        
-        await self.prompt_repo.update(prompt, {'recommended_version_id': version_id})
-        
-        # Return the prompt with eager loaded relationships
-        stmt = select(Prompt).where(Prompt.slug == slug).options(
-            selectinload(Prompt.versions),
-            selectinload(Prompt.recommended_version)
-        )
-        result = await self.session.execute(stmt)
-        return result.scalar_one()
 
     # ─────────────────────────────────────────────────────────────────────────
     # RENDER operations
     # ─────────────────────────────────────────────────────────────────────────
 
-    async def render_active(self, slug: str, variables: Dict[str, Any]) -> str:
-        """Render active version template with provided variables"""
-        version = await self.get_active_version(slug)
-        return self._render_text(version.template, variables)
-
-    async def render_version(
-        self,
-        slug: str,
-        version_number: int,
-        variables: Dict[str, Any]
-    ) -> str:
-        """Render specific version template with provided variables"""
-        version = await self.get_version_by_number(slug, version_number)
-        return self._render_text(version.template, variables)

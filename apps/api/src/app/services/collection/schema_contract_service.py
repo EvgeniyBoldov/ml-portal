@@ -206,21 +206,6 @@ class CollectionSchemaContractService:
             CollectionType.TEMPLATE.value: [dict(field) for field in TEMPLATE_SPECIFIC_FIELD_DEFS],
         }
 
-    @property
-    def document_specific_field_names(self) -> set[str]:
-        return DOCUMENT_SPECIFIC_FIELD_NAMES
-
-    @property
-    def sql_specific_field_names(self) -> set[str]:
-        return SQL_SPECIFIC_FIELD_NAMES
-
-    @property
-    def api_specific_field_names(self) -> set[str]:
-        return API_SPECIFIC_FIELD_NAMES
-
-    @property
-    def template_specific_field_names(self) -> set[str]:
-        return TEMPLATE_SPECIFIC_FIELD_NAMES
 
     @staticmethod
     def get_specific_field_names(collection_type: str) -> set[str]:
@@ -351,9 +336,6 @@ class CollectionSchemaContractService:
     def ensure_sql_preset_fields(self, fields: List[dict]) -> List[dict]:
         return self._merge_preset_fields(fields, SQL_SPECIFIC_FIELD_DEFS)
 
-    def ensure_api_preset_fields(self, fields: List[dict]) -> List[dict]:
-        # API collections no longer auto-inject specific fields.
-        return list(fields)
 
     def ensure_template_preset_fields(self, fields: List[dict]) -> List[dict]:
         sanitized = [

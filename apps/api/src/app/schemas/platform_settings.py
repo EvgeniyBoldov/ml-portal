@@ -44,11 +44,6 @@ class PlatformSettingsBase(BaseModel):
     )
 
 
-class PlatformSettingsCreate(PlatformSettingsBase):
-    """Schema for creating PlatformSettings."""
-    pass
-
-
 class PlatformSettingsUpdate(PlatformSettingsBase):
     """Schema for updating PlatformSettings."""
     pass

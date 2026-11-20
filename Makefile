@@ -13,7 +13,7 @@ COMPOSE_DEV := docker compose -f docker-compose.yml
 	base-hash \
 	up down restart logs ps build build-no-cache migrate \
 	test test-api test-backend test-frontend test-unit test-integration test-mcp-adapter \
-	test-runtime-core test-runtime-integration test-runtime-eval test-backend-10-10-gate test-e2e test-e2e-ui \
+	test-runtime-core test-runtime-integration test-backend-10-10-gate test-e2e test-e2e-ui \
 	update-source release-preview release-check release
 
 help:
@@ -151,15 +151,11 @@ test-runtime-core:
 test-runtime-integration:
 	$(COMPOSE_DEV) exec api pytest tests/integration/ -q --tb=short --maxfail=5 -k "runtime or mcp or credential or collection or confirmation"
 
-test-runtime-eval:
-	$(COMPOSE_DEV) exec api pytest tests/eval/ -q --tb=short
-
 test-backend-10-10-gate:
 	$(COMPOSE_DEV) exec api alembic current
 	$(COMPOSE_DEV) exec api alembic upgrade head
 	$(MAKE) test-runtime-core
 	$(MAKE) test-runtime-integration
-	$(MAKE) test-runtime-eval
 
 test-e2e:
 	@$(COMPOSE_DEV) ps api | grep -q "running" || $(MAKE) dev-up

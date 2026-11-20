@@ -3,7 +3,7 @@ Chat and chat messages models
 """
 from __future__ import annotations
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from typing import List, Dict, Any
 from sqlalchemy import String, Integer, DateTime, ForeignKey, Index, Enum as SQLEnum
 from sqlalchemy.dialects.postgresql import UUID, JSON, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship

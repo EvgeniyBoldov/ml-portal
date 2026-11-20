@@ -1,4 +1,3 @@
-import React from 'react';
 import { Outlet, NavLink, useNavigate } from 'react-router-dom';
 import { AppHeader } from '@shared/ui/AppHeader';
 import styles from './GPTLayout.module.css';

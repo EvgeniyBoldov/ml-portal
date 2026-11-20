@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import type { UsageBucket } from '@/shared/api/dashboard';
 import { number } from './format';
 import styles from './UsageChart.module.css';

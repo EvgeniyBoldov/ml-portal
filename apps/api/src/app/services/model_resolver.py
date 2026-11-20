@@ -101,16 +101,6 @@ class ModelResolver:
         )
         return alias
 
-    async def resolve_or_default(
-        self, alias: Optional[str], default_alias: Optional[str] = None
-    ) -> Optional[str]:
-        """Resolve slug with fallback to default alias."""
-        resolved = await self.resolve(alias)
-        if resolved and resolved != alias:
-            return resolved
-        if default_alias:
-            return await self.resolve(default_alias)
-        return resolved
 
     @staticmethod
     def invalidate_cache(alias: Optional[str] = None) -> None:

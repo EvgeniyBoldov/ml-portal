@@ -23,19 +23,14 @@ from typing import (
     Any,
     AsyncIterator,
     Dict,
-    List,
     Optional,
     Protocol,
     runtime_checkable,
 )
 from uuid import UUID
 
-from app.agents.context import ToolContext
 from app.runtime.orchestrator_contracts import (
     TaskExecutionReceipt,
-    IterationProposal,
-    PlanRequest,
-    TaskAttemptFailure,
     TaskRequest,
 )
 from app.runtime.budgets import BudgetRegistry, BudgetResolver
@@ -53,22 +48,10 @@ from app.services.chat_context_contracts import ChatContextApplyReceipt
 
 
 @runtime_checkable
-class PlannerPort(Protocol):
-    """Planner boundary for the canonical persisted execution graph."""
-
-    async def plan(self, *, request: PlanRequest, **kwargs: Any) -> IterationProposal: ...
-
-
-@runtime_checkable
 class TaskExecutionPort(Protocol):
     """Executes one agent attempt; the runtime reduces it to task state."""
 
     async def execute_attempt(self, *, request: TaskRequest, **kwargs: Any) -> TaskExecutionReceipt: ...
-
-
-@runtime_checkable
-class TaskFailureClassifier(Protocol):
-    def classify(self, exc: BaseException) -> TaskAttemptFailure: ...
 
 
 # --------------------------------------------------------------------------- #

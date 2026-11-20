@@ -1,6 +1,5 @@
-import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
+import { expect, it, vi } from 'vitest';
 
 import { adaptStatusGraphToDocStatus } from '@/shared/lib/documentStatusAdapter';
 import { adaptDocumentStatusToFlowModel } from './documentFlowAdapter';

@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timezone
 import asyncio
-import uuid
 import hashlib
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,12 +73,6 @@ class ChatStreamService:
             persistence_service=self.persistence_service,
             turn_service=self.chat_turn_service,
         )
-    async def verify_chat_access(self, chat_id: str, user_id: str) -> bool:
-        """Verify that user has access to the chat"""
-        chat = await self.chats_repo.get_chat_by_id(chat_id)
-        if not chat:
-            return False
-        return str(chat.owner_id) == user_id
     
     async def load_chat_context(
         self,

@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.collection import Collection, CollectionType, FieldCategory, FieldType
+from app.models.collection import Collection, CollectionType, FieldType
 
 logger = get_logger(__name__)
 
@@ -270,18 +270,3 @@ class CollectionVectorLifecycleService:
             if target_name:
                 await self.cleanup_qdrant_collection(target_name)
 
-    async def cleanup_collection_creation_artifacts(
-        self,
-        *,
-        table_name: Optional[str],
-        qdrant_collection_name: Optional[str],
-    ) -> None:
-        try:
-            if table_name:
-                await self.session.execute(text(f"DROP TABLE IF EXISTS {table_name} CASCADE"))
-        except Exception as cleanup_err:
-            logger.warning(
-                "Failed to drop table during collection cleanup",
-                extra={"table_name": table_name, "error": str(cleanup_err)},
-            )
-        await self.cleanup_model_scoped_qdrant_collections(qdrant_collection_name or "")

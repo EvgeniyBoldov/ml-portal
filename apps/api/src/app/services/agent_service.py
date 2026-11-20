@@ -27,7 +27,6 @@ from app.core.exceptions import (
 )
 from app.models.agent import Agent, AgentType
 from app.models.agent_version import AgentVersion, AgentVersionStatus
-from app.models.tool_instance import ToolInstance
 from app.services.rbac_service import RbacService
 from app.services.rbac_cleanup_service import RbacCleanupService
 from app.repositories.agent_repository import AgentRepository, AgentVersionRepository
@@ -115,14 +114,6 @@ class AgentService:
             raise AgentNotFoundError(slug)
         return agent
 
-    async def get_agent_with_versions(self, slug: str) -> Agent:
-        normalized_slug = self._normalize_agent_slug(slug)
-        agent = await self.agent_repo.get_by_slug_with_versions(normalized_slug)
-        if not agent and normalized_slug != slug:
-            agent = await self.agent_repo.get_by_slug_with_versions(slug)
-        if not agent or getattr(agent, "lifecycle_status", "active") == "deprecated":
-            raise AgentNotFoundError(slug)
-        return agent
 
     async def get_agent_with_versions_by_id(self, agent_id: UUID) -> Agent:
         agent = await self.agent_repo.get_by_id_with_versions(agent_id)
@@ -533,26 +524,3 @@ class AgentService:
 
         return version
 
-    async def resolve_agent_for_chat(
-        self,
-        agent_slug: Optional[str] = None,
-        tenant_id: Optional[UUID] = None,
-    ) -> Tuple[str, Dict[str, Any]]:
-        """
-        Convenience method for ChatStreamService.
-
-        Returns:
-            Tuple of (prompt_text, metadata_dict)
-        """
-        version = await self.resolve_published_version(agent_slug, tenant_id)
-        agent = await self.agent_repo.get_by_id(version.agent_id)
-
-        return (
-            version.compiled_prompt,
-            {
-                "agent_slug": agent.slug,
-                "agent_version": version.version,
-                "model": agent.model,
-                "temperature": agent.temperature,
-            }
-        )

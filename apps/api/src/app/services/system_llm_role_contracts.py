@@ -9,8 +9,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.services.system_llm_role_examples import get_role_examples
 
 if TYPE_CHECKING:
-    from app.runtime.orchestrator_contracts import IterationProposal
-    from app.runtime.memory.fact_extractor import _LLMFactOutput
+    pass
 
 
 def _json_contract(schema: Dict[str, Any], *, on_invalid: str, format_locked: bool = True) -> Dict[str, Any]:
@@ -162,13 +161,6 @@ def build_response_contract(role_type: SystemLLMRoleType | str, *, delivery: str
     )
     contract["examples_v2"] = examples_v2
     return contract
-
-
-def get_role_output_model(role_type: SystemLLMRoleType | str) -> Type[BaseModel] | None:
-    """Get the Pydantic output model class for a role (for validation/testing)."""
-    normalized = role_type.value if isinstance(role_type, SystemLLMRoleType) else str(role_type)
-    role = SystemLLMRoleType(normalized)
-    return _get_output_model(role)
 
 
 def validate_role_contracts() -> Dict[SystemLLMRoleType, str]:

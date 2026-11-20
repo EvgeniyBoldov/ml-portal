@@ -253,32 +253,6 @@ class ChatAttachmentService:
             raise ChatAttachmentNotFoundError("Some attachments were not found or not accessible")
         return rows
 
-    async def get_owned_attachments_any_chat(
-        self,
-        *,
-        owner_id: str,
-        attachment_ids: Iterable[str],
-    ) -> list[ChatAttachment]:
-        normalized: list[uuid.UUID] = []
-        for raw in attachment_ids:
-            try:
-                normalized.append(uuid.UUID(str(raw)))
-            except (TypeError, ValueError):
-                raise ChatAttachmentNotFoundError(f"Invalid attachment id: {raw}")
-        if not normalized:
-            return []
-
-        rows = await self._fetch_rows(
-            select(ChatAttachment).where(
-                and_(
-                    ChatAttachment.id.in_(normalized),
-                    ChatAttachment.owner_id == uuid.UUID(owner_id),
-                )
-            )
-        )
-        if len(rows) != len(set(normalized)):
-            raise ChatAttachmentNotFoundError("Some attachments were not found or not accessible")
-        return rows
 
     async def list_owned_attachments_for_chat(
         self,
@@ -445,33 +419,6 @@ class ChatAttachmentService:
         name = str(file_name or "").strip()
         return name.rsplit(".", 1)[-1].lower() if "." in name else None
 
-
-    async def delete_chat_attachments(
-        self,
-        *,
-        chat_id: str,
-        owner_id: str,
-    ) -> int:
-        rows = await self.list_owned_attachments_for_chat(chat_id=chat_id, owner_id=owner_id)
-        for row in rows:
-            try:
-                await s3_manager.delete_object(row.storage_bucket, row.storage_key)
-            except Exception as exc:
-                logger.warning(
-                    "Failed to delete chat attachment object %s: %s",
-                    row.storage_key,
-                    exc,
-                )
-        result = await self.session.execute(
-            delete(ChatAttachment).where(
-                and_(
-                    ChatAttachment.chat_id == uuid.UUID(chat_id),
-                    ChatAttachment.owner_id == uuid.UUID(owner_id),
-                )
-            )
-        )
-        await self.session.flush()
-        return int(result.rowcount or 0)
 
     async def cleanup_expired_detached_attachments(
         self,

@@ -364,5 +364,3 @@ export function ChatComposer({
     </div>
   );
 }
-
-export default ChatComposer;

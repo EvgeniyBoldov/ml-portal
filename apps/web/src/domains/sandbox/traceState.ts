@@ -32,14 +32,6 @@ export const emptySandboxTrace = (): SandboxTraceState => ({
 
 const keyOf = (type: string, id: string): string => `${type}:${id}`;
 const stringField = (value: unknown): string => typeof value === 'string' ? value : '';
-const CREATE_EVENT_TYPES = new Set([
-  'llm_request',
-  'tool_call',
-]);
-
-const isCreate = (type: string): boolean => (
-  type.endsWith('_start') || type.endsWith('_started') || CREATE_EVENT_TYPES.has(type)
-);
 const isEnd = (type: string): boolean => type.endsWith('_end') || type.endsWith('_finished') || type.endsWith('_completed') || type.endsWith('_failed');
 const isSnapshot = (type: string): boolean => type.endsWith('_snapshot') || type === 'rbac_snapshot' || type === 'limit_snapshot';
 

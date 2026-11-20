@@ -3,7 +3,7 @@ Tool Registry - реестр всех доступных tool handlers
 """
 from __future__ import annotations
 import threading
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional
 from app.core.logging import get_logger
 
 from app.agents.handlers.base import ToolHandler
@@ -86,13 +86,6 @@ class ToolRegistry:
         self.__class__._ensure_initialized()
         return self.__class__._handlers
 
-    def register_handler(self, handler: ToolHandler) -> None:
-        """Register a handler on this instance (does not affect the class-level singleton)."""
-        slug = handler.slug
-        store = self._store()
-        if slug in store:
-            logger.warning(f"Tool '{slug}' already registered on instance, overwriting")
-        store[slug] = handler
 
     def get_handler(self, slug: str) -> Optional[ToolHandler]:
         """Get a handler by slug from this instance's store."""
@@ -102,12 +95,6 @@ class ToolRegistry:
         """List all handlers registered on this instance."""
         return list(self._store().values())
 
-    def clear_handlers(self) -> None:
-        """Clear all handlers on this instance (safe for test teardown)."""
-        store = self._store()
-        store.clear()
-        if self._instance_handlers is None:
-            self.__class__._initialized = False
 
     @classmethod
     def register(cls, handler: ToolHandler) -> None:
@@ -124,12 +111,6 @@ class ToolRegistry:
         cls._handlers[slug] = handler
         logger.info(f"Registered tool: {slug}")
     
-    @classmethod
-    def register_class(cls, handler_class: Type[ToolHandler]) -> None:
-        """
-        Зарегистрировать tool handler по классу (создаёт экземпляр).
-        """
-        cls.register(handler_class())
     
     @classmethod
     def get(cls, slug: str) -> Optional[ToolHandler]:
@@ -163,28 +144,7 @@ class ToolRegistry:
         cls._ensure_initialized()
         return list(cls._handlers.values())
 
-    @classmethod
-    def list_mcp_descriptors(
-        cls,
-        slugs: Optional[List[str]] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Получить MCP-compatible descriptors для локальных handlers.
-        """
-        handlers = cls.get_for_agent(slugs) if slugs is not None else cls.list_all()
-        return [handler.to_mcp_descriptor() for handler in handlers]
     
-    @classmethod
-    def list_by_domain(cls, domain: str) -> List[ToolHandler]:
-        """
-        Получить handlers, которые обслуживают указанный domain.
-        """
-        cls._ensure_initialized()
-        return [
-            h for h in cls._handlers.values()
-            if domain in (getattr(h, 'domains', None) or [])
-        ]
-
     @classmethod
     def list_slugs(cls) -> List[str]:
         """

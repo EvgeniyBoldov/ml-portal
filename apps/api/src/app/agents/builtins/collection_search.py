@@ -594,24 +594,3 @@ class CollectionSearchTool(VersionedTool):
         
         return formatted
 
-
-def create_collection_tool(collection: Collection) -> Dict[str, Any]:
-    """
-    Создаёт описание tool для конкретной коллекции.
-    Используется для генерации инструкций агенту.
-    """
-    schema = CollectionSearchTool.build_schema_for_collection(collection)
-    
-    current_version = getattr(collection, "current_version", None)
-    semantic_description = (
-        getattr(current_version, "data_description", None)
-        if current_version is not None
-        else None
-    )
-
-    return {
-        "slug": f"collection.{collection.slug}.search",
-        "name": f"Search {collection.name}",
-        "description": semantic_description or f"Search in {collection.name} collection",
-        "input_schema": schema,
-    }

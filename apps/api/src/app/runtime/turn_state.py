@@ -131,16 +131,6 @@ class RuntimeTurnState(BaseModel):
         """Normalize fact text for deduplication (lowercase + collapse whitespace)."""
         return " ".join(text.lower().split())
 
-    def add_runtime_fact(self, text: str, *, source: str = "runtime") -> None:
-        text = (text or "").strip()
-        if not text:
-            return
-        normalized = self._normalize_fact(text)
-        if any(self._normalize_fact(item.text) == normalized for item in self.runtime_facts):
-            return
-        self.runtime_facts.append(RuntimeFact(text=text, source=source))
-        if len(self.runtime_facts) > MAX_RUNTIME_FACTS:
-            self.runtime_facts = self.runtime_facts[-MAX_RUNTIME_FACTS:]
 
     def set_lifecycle_status(self, status: str) -> None:
         allowed = {

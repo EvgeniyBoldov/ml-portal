@@ -13,7 +13,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import CollectionNotFoundError, RowValidationError, AppError
+from app.core.exceptions import RowValidationError, AppError
 from app.models.collection import Collection, FieldType, CollectionType
 from app.services.collection.ddl import apply_typed_binds
 from app.services.collection.field_coercion import validate_and_prepare_payload

@@ -8,7 +8,7 @@
  * - platform: platform-level креды
  * - user: user/tenant креды с переключателем
  */
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { credentialsApi, type Credential, type CredentialInstance } from '@/shared/api/credentials';
@@ -20,11 +20,11 @@ import DataTable, { type DataTableColumn } from '../DataTable/DataTable';
 import ConfirmDialog from '../ConfirmDialog';
 import Modal from '../Modal';
 import Input from '../Input';
-import Select from '../Select';
+import { Select } from '../Select';
 import { useErrorToast, useSuccessToast } from '../Toast';
 import styles from './CredentialsPanel.module.css';
 
-export type CredentialsPanelMode = 'platform' | 'user' | 'tenant-admin' | 'readonly-owner';
+type CredentialsPanelMode = 'platform' | 'user' | 'tenant-admin' | 'readonly-owner';
 
 export interface CredentialsPanelProps {
   mode: CredentialsPanelMode;

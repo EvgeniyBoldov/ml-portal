@@ -11,8 +11,8 @@ export interface UseAIGenerateOptions {
   onSuccess?: (filledFields: Record<string, any>, suggestions: string[]) => void;
 }
 
-export function useAIGenerate({ entityType, entityId, onSuccess }: UseAIGenerateOptions) {
-  const queryClient = useQueryClient();
+export function useAIGenerate({ entityId, onSuccess }: UseAIGenerateOptions) {
+  useQueryClient();
   const showError = useErrorToast();
   const showSuccess = useSuccessToast();
 

@@ -181,4 +181,3 @@ export function CollectionVersionPage() {
   );
 }
 
-export default CollectionVersionPage;

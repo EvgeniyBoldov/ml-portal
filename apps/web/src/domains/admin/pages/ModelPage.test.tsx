@@ -73,7 +73,7 @@ vi.mock('@/shared/ui/GridLayout', async original => ({
     </div>
   ),
 }));
-import { ModelPage } from './ModelPage';
+import ModelPage from './ModelPage';
 
 afterEach(cleanup);
 beforeEach(() => {

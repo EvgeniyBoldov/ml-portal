@@ -3,14 +3,14 @@ import type { ShadowMemoryCandidate } from '@/shared/api/admin';
 import { contentFieldLabels, memoryContentPreview } from './MemoryContentView';
 import styles from './MemoryReviewTable.module.css';
 
-export const scopeLabels: Record<string, string> = { global: 'Вне проектов, без адресата', scoped: 'Выбранные области', project: 'Проект', multi_project: 'Несколько проектов', unknown: 'Не определена', glossary: 'Общий глоссарий' };
-export const readinessLabels = { ready: 'Готов к утверждению', content: 'Ошибка содержания', conflict: 'Есть конфликт', dependencies: 'Ожидает зависимостей' };
+const scopeLabels: Record<string, string> = { global: 'Вне проектов, без адресата', scoped: 'Выбранные области', project: 'Проект', multi_project: 'Несколько проектов', unknown: 'Не определена', glossary: 'Общий глоссарий' };
+const readinessLabels = { ready: 'Готов к утверждению', content: 'Ошибка содержания', conflict: 'Есть конфликт', dependencies: 'Ожидает зависимостей' };
 export const candidateBlockers = (row: ShadowMemoryCandidate): string[] => [...new Set([
   ...(!row.content_valid ? [(row.content_error || 'Содержание не прошло проверку.').replace(/\b[a-z_]+\b/g, (field) => contentFieldLabels[field] ?? field)] : []),
   ...row.approval_blockers,
   ...(row.conflict_ids.length ? ['Сначала разрешите конфликт кандидата.'] : []),
 ])];
-export const candidateReadiness = (row: ShadowMemoryCandidate): keyof typeof readinessLabels => !row.content_valid ? 'content' : row.conflict_ids.length ? 'conflict' : row.approval_blockers.length ? 'dependencies' : 'ready';
+const candidateReadiness = (row: ShadowMemoryCandidate): keyof typeof readinessLabels => !row.content_valid ? 'content' : row.conflict_ids.length ? 'conflict' : row.approval_blockers.length ? 'dependencies' : 'ready';
 
 export const candidateTypeLabels: Record<string, string> = {
   term: 'Термин', description: 'Описание', relationship: 'Связь', rule: 'Правило',
