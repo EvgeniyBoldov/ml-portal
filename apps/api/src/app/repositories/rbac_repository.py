@@ -4,13 +4,14 @@ RBAC Repository v3 — flat data access for RbacRule (no policy container).
 Rules are bound directly to owners (user/tenant/platform).
 """
 from __future__ import annotations
+from collections.abc import AsyncIterator
 from typing import Optional, List
 from uuid import UUID
 
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.rbac import RbacRule
+from app.models.rbac import RbacEffect, RbacLevel, RbacRule
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -115,6 +116,20 @@ class RbacRuleRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
 
+    async def iter_access_rules(
+        self,
+        user_id: UUID | None,
+        tenant_id: UUID | None,
+        resource_type: str,
+        resource_id: UUID,
+    ) -> AsyncIterator[tuple[RbacLevel, RbacRule | None]]:
+        """Look up applicable scopes in descending priority."""
+        if user_id is not None:
+            yield RbacLevel.USER, await self._find_user_rule(user_id, resource_type, resource_id)
+        if tenant_id is not None:
+            yield RbacLevel.TENANT, await self._find_tenant_rule(tenant_id, resource_type, resource_id)
+        yield RbacLevel.PLATFORM, await self._find_platform_rule(resource_type, resource_id)
+
     async def check_access(
         self,
         user_id: UUID,
@@ -122,28 +137,11 @@ class RbacRuleRepository:
         resource_type: str,
         resource_id: UUID,
     ) -> str:
-        """
-        Deterministic access check: user → tenant → platform → deny.
-
-        Returns 'allow' or 'deny'.
-        """
-        # 1. User level
-        rule = await self._find_user_rule(user_id, resource_type, resource_id)
-        if rule:
-            return rule.effect
-
-        # 2. Tenant level
-        rule = await self._find_tenant_rule(tenant_id, resource_type, resource_id)
-        if rule:
-            return rule.effect
-
-        # 3. Platform level
-        rule = await self._find_platform_rule(resource_type, resource_id)
-        if rule:
-            return rule.effect
-
-        # 4. Default deny
-        return "deny"
+        """Return the first applicable rule's effect, or deny by default."""
+        async for _, rule in self.iter_access_rules(user_id, tenant_id, resource_type, resource_id):
+            if rule is not None:
+                return rule.effect
+        return RbacEffect.DENY.value
 
     async def update(self, rule: RbacRule) -> RbacRule:
         await self.session.flush()
@@ -188,6 +186,7 @@ class RbacRuleRepository:
         stmt = stmt.order_by(
             RbacRule.resource_type,
             RbacRule.created_at,
+            RbacRule.id,
         ).offset(skip).limit(limit)
 
         result = await self.session.execute(stmt)

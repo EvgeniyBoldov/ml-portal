@@ -216,7 +216,6 @@ export default function MemoryPage() {
           onRowClick={(row) => navigate(`/admin/memory/review/${row.id}`)} />}
       </Tab> */}
       <Tab title="Скоупы" id="scopes" layout="full" actions={[<Button key="create-scope" onClick={() => { setScopeForm({ scope_type: 'project', key: '', name: '', aliases: '', is_all: false, project_type: '' }); setScopeEditor('new'); }}>Создать скоуп</Button>] }>
-        <p role="note">Deprecated: вкладки «Глоссарий», «Память» и «На проверке» выведены из интерфейса. Исторические записи сохранены; актуальные разделы — «Скоупы» и «LongMemory».</p>
         {scopesError || scopeProposalsError ? <p role="alert">Не удалось загрузить скоупы памяти и предложения.</p> : <DataTable columns={scopeColumns({ onReview: setScopeProposalEditor, onEdit: openScopeEditor, onLifecycle: (scope, action) => { setScopeLifecycleAction(action); setScopeToDelete(scope); } })} data={scopeRows} keyField="id" loading={scopesLoading || scopeProposalsLoading} emptyText="Скоупов пока нет" paginated pageSize={20} />}
       </Tab>
       <Tab title="LongMemory" id="long-memory" layout="full" actions={[<Button key="long-memory-search" variant="outline" onClick={() => setIsLongMemorySearchOpen(true)}>Тестовый поиск</Button>]}>

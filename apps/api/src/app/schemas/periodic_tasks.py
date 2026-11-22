@@ -9,6 +9,7 @@ class PeriodicTaskItem(BaseModel):
     slug: str
     task_path: str
     name: str
+    description: str | None = None
     category: str
     default_schedule: Dict[str, Any]
     is_enabled: bool
@@ -34,3 +35,32 @@ class PeriodicTaskRunNowResponse(BaseModel):
 class PeriodicTaskListResponse(BaseModel):
     items: list[PeriodicTaskItem]
     total: int
+
+
+class PeriodicRunSummary(BaseModel):
+    id: str
+    source: str
+    status: str
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+    duration_ms: int | None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class PeriodicRunEvent(BaseModel):
+    at: datetime
+    level: str
+    message: str
+
+
+class PeriodicRunDetail(PeriodicRunSummary):
+    events: list[PeriodicRunEvent]
+    result: Any = None
+    result_limited: bool
+    error: str | None
+
+
+class PeriodicTaskDetail(PeriodicTaskItem):
+    runs: list[PeriodicRunSummary]

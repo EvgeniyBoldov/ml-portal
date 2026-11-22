@@ -147,6 +147,10 @@ export function PoliciesListPage() {
 }
 ```
 
+Если поиск размещён в заголовке страницы, передайте в `DataTable`
+`searchable`, `searchControl="external"` и управляемый `searchValue`.
+Таблица применит поиск и фильтры столбцов и покажет сброс активных фильтров.
+
 ## 5) Form pattern
 
 ```tsx

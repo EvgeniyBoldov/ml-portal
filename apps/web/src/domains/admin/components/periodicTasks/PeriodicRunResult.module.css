@@ -1,0 +1,85 @@
+.result {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-3);
+}
+
+.label,
+.note,
+.fields dt {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.modes {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+}
+
+.modes .modeButton {
+  padding-inline: var(--sp-2);
+}
+
+.modes .modeButton[aria-pressed='true'] {
+  border-color: var(--border-color);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.content {
+  min-width: 0;
+}
+
+.fields {
+  max-width: 35rem;
+  margin: 0;
+}
+
+.fields > div {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: var(--sp-2);
+  align-items: baseline;
+  padding: var(--sp-2) 0;
+  border-bottom: 1px solid var(--border-color);
+  overflow-wrap: anywhere;
+}
+
+.fields dd,
+.note {
+  margin: 0;
+}
+
+.fields + .note {
+  margin-top: var(--sp-2);
+}
+
+@media (max-width: 500px) {
+  .modes {
+    gap: 0;
+  }
+
+  .modes .modeButton {
+    padding-inline: var(--sp-1);
+  }
+}
+
+@media (max-width: 360px) {
+  .modes .modeButton {
+    padding-inline: calc(var(--sp-1) / 2);
+    font-size: var(--font-size-xs);
+    min-height: var(--sp-6);
+  }
+}

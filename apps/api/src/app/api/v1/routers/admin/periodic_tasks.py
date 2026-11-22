@@ -8,6 +8,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
 from app.schemas.periodic_tasks import (
+    PeriodicRunDetail,
+    PeriodicRunSummary,
+    PeriodicTaskDetail,
     PeriodicTaskItem,
     PeriodicTaskListResponse,
     PeriodicTaskRunNowResponse,
@@ -24,10 +27,42 @@ async def list_periodic_tasks(
     is_enabled: Optional[bool] = Query(None),
     db: AsyncSession = Depends(db_session),
     _: UserCtx = Depends(require_admin),
-): 
+):
     service = PeriodicTaskService(db)
     items = await service.list_tasks(category=category, is_enabled=is_enabled)
     return PeriodicTaskListResponse(items=[PeriodicTaskItem.model_validate(item) for item in items], total=len(items))
+
+
+@router.get("/{slug}", response_model=PeriodicTaskDetail)
+async def get_periodic_task(
+    slug: str,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> PeriodicTaskDetail:
+    service = PeriodicTaskService(db)
+    task = await service.get_by_slug(slug)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Periodic task not found")
+    recent = await service.recent_runs(task)
+    return PeriodicTaskDetail(
+        **PeriodicTaskItem.model_validate(task).model_dump(),
+        runs=[PeriodicRunSummary.model_validate(run) for run in recent],
+    )
+
+
+@router.get("/{slug}/runs/{run_id}", response_model=PeriodicRunDetail)
+async def get_periodic_task_run(
+    slug: str,
+    run_id: str,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> PeriodicRunDetail:
+    service = PeriodicTaskService(db)
+    task = await service.get_by_slug(slug)
+    run = await service.get_run(task, run_id) if task is not None else None
+    if run is None:
+        raise HTTPException(status_code=404, detail="Periodic task run not found")
+    return PeriodicRunDetail.model_validate(run)
 
 
 @router.patch("/{slug}", response_model=PeriodicTaskItem)

@@ -483,7 +483,7 @@ async def test_real_agent_tool_facade_preserves_overflow_direct_write_and_reuses
     runtime._tool_results_context_budget = AsyncMock(return_value=BatchContextBudget(
         model="gpt-4o-mini", context_window_tokens=8192, result_tokens=1200))
     monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([], "available")))
-    monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations", lambda ops: ops)
+    monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations", lambda ops, **_: ops)
     large_payload = {"created_id": "external-1", "text": "ORIGINAL_TOOL_BODY " + ("long " * 4000)}
     provider = SimpleNamespace(execute=AsyncMock(return_value=ToolResult.ok(large_payload, delivery="direct")))
     stored = AsyncMock(return_value={"result_id": "saved-direct-1", "revision": 1,
@@ -558,7 +558,7 @@ async def test_native_confirmation_pause_preserves_overflow_result_and_remaining
     runtime._tool_results_context_budget = AsyncMock(return_value=BatchContextBudget(
         model="gpt-4o-mini", context_window_tokens=8192, result_tokens=1200))
     monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([], "available")))
-    monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations", lambda ops: ops)
+    monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations", lambda ops, **_: ops)
     saved = AsyncMock(return_value={"result_id": "paused-direct-1", "revision": 1,
         "source_complete": None, "row_count": 1, "payload_type": "json"})
     monkeypatch.setattr(ToolResultStore, "save", saved)

@@ -1,261 +1,239 @@
-/**
- * DiscoveredToolsPage — реестр обнаруженных инструментов (local + MCP)
- *
- * Заменяет старый registry list. Показывает все discovered tools
- * с возможностью фильтрации и запуска rescan.
- */
 import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
+
+import {
+  discoveredToolsApi,
+  type DiscoveredToolListItem,
+} from '@/shared/api/discoveredTools';
 import { qk } from '@/shared/api/keys';
-import { discoveredToolsApi, type DiscoveredToolListItem } from '@/shared/api/discoveredTools';
-import { useNavigate } from 'react-router-dom';
+import { toolInstancesApi } from '@/shared/api/toolInstances';
 import {
-  EntityPageV2,
-  Tab,
-} from '@/shared/ui/EntityPage';
-import {
-  DataTable,
-  type DataTableColumn,
-  Badge,
+  Alert,
   Button,
+  ConfirmDialog,
+  EntityPageV2,
   Input,
+  Tab,
+  type DataTableFilterValue,
 } from '@/shared/ui';
-import { formatDomainLabel, formatDomainTone } from '../shared/domainLabels';
+import { BUILTIN_PROVIDER, providerName } from '../shared/toolCatalog';
+import { useToast } from '@/shared/ui/Toast';
+import { ToolRegistryTable } from '../components/tools/ToolRegistryTable';
 import styles from './DiscoveredToolsPage.module.css';
 
-export function DiscoveredToolsPage() {
-  const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const [search, setSearch] = useState('');
+const columnFilterKeys = ['provider', 'type', 'risk', 'delivery'] as const;
 
-  const { data: tools = [], isLoading, isError, refetch } = useQuery({
+export function DiscoveredToolsPage() {
+  const [params, setParams] = useSearchParams();
+  const [page, setPage] = useState(1);
+  const [confirmScan, setConfirmScan] = useState(false);
+  const queryClient = useQueryClient();
+  const { showToast } = useToast();
+  const registry = useQuery({
     queryKey: qk.discoveredTools.list({}),
-    queryFn: () => discoveredToolsApi.list({}),
+    queryFn: () => discoveredToolsApi.list(),
+    refetchOnMount: 'always',
     staleTime: 30_000,
   });
 
-  const rescanMutation = useMutation({
-    mutationFn: () => discoveredToolsApi.rescan(),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.discoveredTools.all() });
+  const tools = registry.data ?? [];
+  const providers = new Map<string, DiscoveredToolListItem>();
+  for (const tool of tools) {
+    providers.set(tool.provider_instance_id ?? BUILTIN_PROVIDER, tool);
+  }
+  const providerOptions = [...providers.entries()]
+    .map(([value, tool]) => ({
+      value,
+      label: providerName(tool),
+    }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+
+  const search = params.get('q') ?? '';
+  const provider = params.get('provider') ?? '';
+  const columnFilters = Object.fromEntries(
+    columnFilterKeys.map(key => [key, params.get(key)])
+  );
+  const selectedProvider = providers.get(provider);
+  const providerDetail = useQuery({
+    queryKey: qk.toolInstances.detail(provider),
+    queryFn: () => toolInstancesApi.get(provider),
+    enabled:
+      registry.isSuccess &&
+      /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(provider) &&
+      !selectedProvider,
+    retry: false,
+  });
+  const scopedProvider =
+    selectedProvider?.source === 'mcp'
+      ? {
+          id: selectedProvider.provider_instance_id,
+          name: providerName(selectedProvider),
+        }
+      : providerDetail.data?.connector_type === 'mcp' && !selectedProvider
+        ? providerDetail.data
+        : undefined;
+  if (provider && !selectedProvider) {
+    providerOptions.push({
+      value: provider,
+      label: providerDetail.data?.name ?? 'Выбранный провайдер',
+    });
+  }
+
+  const rescan = useMutation({
+    mutationFn: () =>
+      discoveredToolsApi.rescan({
+        include_local: !scopedProvider,
+        provider_instance_id: scopedProvider?.id,
+      }),
+    onError: () => showToast('Не удалось выполнить сканирование', 'error'),
+    onSuccess: async ({ stats }) => {
+      const failed = stats.mcp_failed_providers ?? [];
+      if (stats.skipped) {
+        showToast('Сканирование уже выполняется', 'info');
+      } else if (failed.length) {
+        showToast(
+          `Не удалось опросить: ${failed.map(item => item.provider_slug).join(', ')}.`,
+          'warning'
+        );
+      } else {
+        const count =
+          (stats.local_upserted ?? 0) +
+          (stats.system_upserted ?? 0) +
+          (stats.mcp_upserted ?? 0);
+        showToast(
+          `Сканирование завершено. Найдено или обновлено: ${count}.`,
+          'success'
+        );
+      }
+      setPage(1);
+      await queryClient.invalidateQueries({
+        queryKey: qk.discoveredTools.all(),
+      });
     },
   });
 
-  const filtered = search
-    ? tools.filter(
-        (t) =>
-          t.slug.toLowerCase().includes(search.toLowerCase()) ||
-          t.name.toLowerCase().includes(search.toLowerCase()) ||
-          (t.description || '').toLowerCase().includes(search.toLowerCase()),
-      )
-    : tools;
+  function setFilter(key: string, value: string) {
+    setPage(1);
+    setParams(
+      previous => {
+        if (value) previous.set(key, value);
+        else previous.delete(key);
+        return previous;
+      },
+      { replace: true }
+    );
+  }
 
-  const columns: DataTableColumn<DiscoveredToolListItem>[] = [
-    {
-      key: 'slug',
-      label: 'Slug / Имя',
-      width: 280,
-      sortable: true,
-      filter: {
-        kind: 'text',
-        placeholder: 'Slug или имя',
-        getValue: (row) => `${row.slug ?? ''} ${row.name ?? ''}`,
+  function setColumnFilters(filters: Record<string, DataTableFilterValue>) {
+    setPage(1);
+    setParams(
+      previous => {
+        if (Object.keys(filters).length === 0) previous.delete('q');
+        for (const key of columnFilterKeys) {
+          const value = filters[key];
+          if (typeof value === 'string' && value) previous.set(key, value);
+          else previous.delete(key);
+        }
+        return previous;
       },
-      render: (row) => (
-        <div>
-          <div className={styles.primaryText}>{row.slug}</div>
-          <div className={styles.secondaryText}>{row.name}</div>
-        </div>
-      ),
-    },
-    {
-      key: 'source',
-      label: 'Источник',
-      width: 100,
-      sortable: true,
-      filter: {
-        kind: 'select',
-        placeholder: 'Все источники',
-        options: [
-          { value: 'local', label: 'Local' },
-          { value: 'mcp', label: 'MCP' },
-        ],
-        getValue: (row) => row.source,
-      },
-      render: (row) => (
-        <Badge tone={row.source === 'local' ? 'info' : 'warn'}>{row.source}</Badge>
-      ),
-    },
-    {
-      key: 'risk_level',
-      label: 'Уровень риска',
-      width: 160,
-      sortable: true,
-      filter: {
-        kind: 'text',
-        placeholder: 'Уровень риска',
-        getValue: (row) => row.risk_level ?? '',
-      },
-      render: (row) => row.risk_level || '—',
-    },
-    {
-      key: 'result_delivery',
-      label: 'Режим результата',
-      width: 150,
-      sortable: true,
-      filter: {
-        kind: 'select',
-        placeholder: 'Все режимы',
-        options: [
-          { value: 'direct', label: 'Direct' },
-          { value: 'store', label: 'Store' },
-        ],
-        getValue: (row) => row.result_delivery,
-      },
-      render: (row) => (
-        <Badge tone={row.result_delivery === 'store' ? 'info' : 'neutral'}>
-          {row.result_delivery === 'store' ? 'Store' : 'Direct'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'has_observed_data_schema',
-      label: 'Схема данных',
-      width: 140,
-      sortable: true,
-      filter: {
-        kind: 'select',
-        placeholder: 'Любое состояние',
-        options: [
-          { value: 'true', label: 'Есть' },
-          { value: 'false', label: 'Нет' },
-        ],
-        getValue: (row) => String(row.has_observed_data_schema),
-      },
-      render: (row) => (
-        <Badge tone={row.has_observed_data_schema ? 'success' : 'neutral'}>
-          {row.has_observed_data_schema ? 'Получена' : 'Нет'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'connector_slug',
-      label: 'Коннектор',
-      width: 180,
-      sortable: true,
-      filter: {
-        kind: 'text',
-        placeholder: 'Slug коннектора',
-        getValue: (row) => row.connector_slug ?? '',
-      },
-      render: (row) => (
-        <div>
-          <div className={styles.primaryText}>{row.connector_slug || '—'}</div>
-          <div className={styles.secondaryText}>{row.connector_name || '—'}</div>
-        </div>
-      ),
-    },
-    {
-      key: 'domains',
-      label: 'Домен',
-      width: 200,
-      filter: {
-        kind: 'tags',
-        placeholder: 'Домены',
-        match: 'any',
-        getValue: (row) => row.domains,
-      },
-      render: (row) => (
-        <div className={styles.domainList}>
-          {row.domains.map((domain) => (
-            <Badge key={domain} tone={formatDomainTone(domain)} size="small">
-              {formatDomainLabel(domain)}
-            </Badge>
-          ))}
-        </div>
-      ),
-    },
-    {
-      key: 'is_active',
-      label: 'Статус',
-      width: 100,
-      filter: {
-        kind: 'select',
-        placeholder: 'Все статусы',
-        options: [
-          { value: 'true', label: 'Активен' },
-          { value: 'false', label: 'Неактивен' },
-        ],
-        getValue: (row) => String(row.is_active),
-      },
-      render: (row) => (
-        <Badge tone={row.is_active ? 'success' : 'neutral'}>
-          {row.is_active ? 'Активен' : 'Неактивен'}
-        </Badge>
-      ),
-    },
-    {
-      key: 'description',
-      label: 'Описание',
-      filter: {
-        kind: 'text',
-        placeholder: 'Описание',
-        getValue: (row) => row.description ?? '',
-      },
-      render: (row) => (
-        <span className={styles.secondaryText}>
-          {row.description ? (row.description.length > 80 ? row.description.slice(0, 80) + '…' : row.description) : '—'}
-        </span>
-      ),
-    },
-  ];
+      { replace: true }
+    );
+  }
 
   return (
-    <EntityPageV2
-      title="Инструменты"
-      mode="view"
-      breadcrumbs={[{ label: 'Инструменты' }]}
-      headerActions={
-        <Input
-          placeholder="Поиск инструментов..."
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-      }
-      actionButtons={
-        <Button
-          onClick={() => rescanMutation.mutate()}
-          disabled={rescanMutation.isPending}
-        >
-          {rescanMutation.isPending ? 'Сканирование...' : 'Rescan'}
-        </Button>
-      }
-    >
-      <Tab
-        title="Все инструменты"
-        layout="full"
-        badge={tools.length}
+    <>
+      <EntityPageV2
+        title="Инструменты"
+        mode="view"
+        breadcrumbs={[{ label: 'Инструменты' }]}
       >
-        {isError && (
-          <p role="alert">
-            Не удалось загрузить инструменты. <Button variant="outline" onClick={() => void refetch()}>Повторить</Button>
-          </p>
-        )}
-        {rescanMutation.isError && (
-          <p role="alert">Не удалось выполнить сканирование. Проверьте подключение и попробуйте снова.</p>
-        )}
-        <DataTable
-          columns={columns}
-          data={filtered}
-          keyField="id"
-          loading={isLoading}
-          emptyText={isError ? 'Не удалось загрузить инструменты.' : 'Инструменты не обнаружены. Запустите Rescan.'}
-          paginated
-          pageSizeOptions={[10, 25, 50, 100]}
-          onRowClick={(row) => navigate(`/admin/tools/discovered/${row.id}`)}
-        />
-      </Tab>
-    </EntityPageV2>
+        <Tab
+          title="Реестр"
+          layout="full"
+          actions={[
+            <div className={styles.headerControls} key="controls">
+              <Input
+                className={styles.search}
+                type="search"
+                aria-label="Поиск инструментов"
+                placeholder="Имя, slug или провайдер"
+                value={search}
+                onChange={event => setFilter('q', event.target.value)}
+              />
+              <Button
+                loading={rescan.isPending}
+                disabled={Boolean(
+                  provider && !selectedProvider && !providerDetail.data
+                )}
+                onClick={() => setConfirmScan(true)}
+              >
+                Сканировать источники
+              </Button>
+            </div>,
+          ]}
+        >
+          <div className={styles.registry}>
+            {providerDetail.isError && !selectedProvider && (
+              <Alert
+                variant="warning"
+                title="Выбранный провайдер недоступен"
+                description="Сбросьте фильтр, чтобы вернуться к общему реестру."
+              />
+            )}
+            {registry.isError ? (
+              <Alert variant="danger" title="Не удалось загрузить инструменты">
+                <Button
+                  variant="outline"
+                  onClick={() => void registry.refetch()}
+                >
+                  Повторить
+                </Button>
+              </Alert>
+            ) : (
+              <ToolRegistryTable
+                tools={tools}
+                providerOptions={providerOptions}
+                columnFilters={columnFilters}
+                onColumnFiltersChange={setColumnFilters}
+                loading={registry.isPending}
+                search={search}
+                paginated={tools.length > 25}
+                page={page}
+                onPageChange={setPage}
+              />
+            )}
+          </div>
+        </Tab>
+      </EntityPageV2>
+      <ConfirmDialog
+        open={confirmScan}
+        title={
+          scopedProvider
+            ? 'Сканировать провайдер?'
+            : 'Сканировать все источники?'
+        }
+        message={
+          <>
+            <p>
+              {scopedProvider
+                ? `Будет опрошен только «${scopedProvider.name}».`
+                : 'Будут опрошены локальные инструменты и все активные MCP-провайдеры.'}
+            </p>
+            <p>
+              Записи, которые не удастся обнаружить, могут исчезнуть из реестра.
+            </p>
+          </>
+        }
+        confirmLabel="Сканировать"
+        cancelLabel="Отмена"
+        variant="warning"
+        onConfirm={() => {
+          setConfirmScan(false);
+          rescan.mutate();
+        }}
+        onCancel={() => setConfirmScan(false)}
+      />
+    </>
   );
 }
-

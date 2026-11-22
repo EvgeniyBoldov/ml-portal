@@ -67,7 +67,7 @@ from .execution_limit import (
     ActorExecutionLimitScope,
     RuntimeExecutionLimits,
 )
-from .periodic_task import PeriodicTask
+from .periodic_task import PeriodicTask, PeriodicTaskRun
 from .runtime_observability import RuntimeExecutionEvent, RuntimeEventSequence
 from .runtime_plan import (
     RuntimeNeedBinding, RuntimePause, RuntimePlan, RuntimePlanIteration,

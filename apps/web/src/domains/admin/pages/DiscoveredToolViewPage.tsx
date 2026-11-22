@@ -1,223 +1,173 @@
-import { useParams } from 'react-router-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useLocation, useParams } from 'react-router-dom';
+
+import {
+  discoveredToolsApi,
+  type DiscoveredToolDetail,
+  type DiscoveredToolUpdateRequest,
+} from '@/shared/api/discoveredTools';
 import { qk } from '@/shared/api/keys';
-import { discoveredToolsApi } from '@/shared/api/discoveredTools';
-import { EntityPageV2, Tab, type BreadcrumbItem } from '@/shared/ui/EntityPage';
-import { Block } from '@/shared/ui/GridLayout';
-import { Badge, Button, Select } from '@/shared/ui';
+import { Alert, Button, EntityPageV2, Tab } from '@/shared/ui';
+import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
+import {
+  ToolOrigin,
+  ToolSchemas,
+  ToolSettingsBlock,
+  type ToolSettings,
+} from '../components/tools/ToolDetailsBlocks';
+import { TOOLS_PATH } from '../shared/toolCatalog';
+import styles from './DiscoveredToolViewPage.module.css';
 
-const DESCRIPTION_FIELDS = [
-  { key: 'slug', type: 'code' as const, label: 'Slug', editable: false },
-  { key: 'name', type: 'text' as const, label: 'Имя', editable: false },
-  { key: 'source', type: 'badge' as const, label: 'Источник', editable: false, badgeTone: 'info' as const },
-  { key: 'connector', type: 'text' as const, label: 'Коннектор', editable: false },
-  { key: 'domains', type: 'tags' as const, label: 'Домены', editable: false },
-  { key: 'description', type: 'textarea' as const, label: 'Описание', editable: false },
-];
-
-const INPUT_SCHEMA_FIELDS = [
-  { key: 'input_schema', type: 'json' as const, label: 'JSON Schema', editable: false },
-];
-
-const OUTPUT_SCHEMA_FIELDS = [
-  { key: 'output_schema', type: 'json' as const, label: 'Схема, объявленная провайдером', editable: false },
-];
-
-const OBSERVED_DATA_SCHEMA_FIELDS = [
-  { key: 'observed_data_schema', type: 'json' as const, label: 'JSON Schema', editable: false },
-];
-
-export function DiscoveredToolViewPage() {
-  const { id } = useParams<{ id: string }>();
-  const queryClient = useQueryClient();
-  const [editing, setEditing] = useState(false);
-  const [riskLevel, setRiskLevel] = useState('');
-  const [resultDelivery, setResultDelivery] = useState<'direct' | 'store'>('direct');
-
-  const { data: tool, isLoading, isError, refetch } = useQuery({
-    queryKey: qk.discoveredTools.detail(id || ''),
-    queryFn: () => discoveredToolsApi.get(id || ''),
-    enabled: Boolean(id),
-    staleTime: 30_000,
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: () => discoveredToolsApi.update(id || '', {
-      risk_level: riskLevel,
-      result_delivery: resultDelivery,
-    }),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(qk.discoveredTools.detail(id || ''), updated);
-      queryClient.invalidateQueries({ queryKey: qk.discoveredTools.all() });
-      setRiskLevel(updated.risk_level || '');
-      setResultDelivery(updated.result_delivery);
-      setEditing(false);
+function ToolDetail({
+  tool,
+  listPath,
+}: {
+  tool: DiscoveredToolDetail;
+  listPath: string;
+}) {
+  const client = useQueryClient();
+  const [draft, setDraft] = useState<{
+    base: ToolSettings;
+    changes: ToolSettings;
+  }>();
+  const update = useMutation({
+    mutationFn: (changes: DiscoveredToolUpdateRequest) =>
+      discoveredToolsApi.update(tool.id, changes),
+    onSuccess: updated => {
+      client.setQueryData(qk.discoveredTools.detail(tool.id), updated);
+      void client.invalidateQueries({ queryKey: qk.discoveredTools.all() });
+      setDraft(undefined);
     },
   });
+  const mode = draft ? 'edit' : 'view';
 
-  const breadcrumbs: BreadcrumbItem[] = [
-    { label: 'Инструменты', href: '/admin/tools' },
-    { label: tool?.name || tool?.slug || id || '' },
-  ];
+  function handleSave() {
+    if (!draft || update.isPending) return;
+    const changes: DiscoveredToolUpdateRequest = {};
+    if (draft.changes.risk_level !== draft.base.risk_level) {
+      changes.risk_level = draft.changes.risk_level;
+    }
+    if (draft.changes.result_delivery !== draft.base.result_delivery) {
+      changes.result_delivery = draft.changes.result_delivery;
+    }
 
-  if (!tool) {
-    return (
-      <EntityPageV2
-        title="Инструмент"
-        mode="view"
-        breadcrumbs={breadcrumbs}
-        loading={isLoading}
-        backPath="/admin/tools"
-      >
-        {isError && (
-          <Tab title="Ошибка загрузки" layout="full">
-            <p role="alert">
-              Не удалось загрузить инструмент. <Button variant="outline" onClick={() => void refetch()}>Повторить</Button>
-            </p>
-          </Tab>
-        )}
-      </EntityPageV2>
-    );
+    if (Object.keys(changes).length) update.mutate(changes);
+    else setDraft(undefined);
   }
 
-  const connector = tool.connector_name
-    ? `${tool.connector_slug || ''} (${tool.connector_name})`
-    : (tool.connector_slug || '—');
-
-  const descriptionData = {
-    slug: tool.slug,
-    name: tool.name,
-    source: tool.source,
-    connector,
-    domains: tool.domains,
-    description: tool.description || '—',
-  };
+  const actions = tool.runtime_managed
+    ? []
+    : buildEntityCrudActions({
+        mode,
+        saving: update.isPending,
+        labels: { edit: 'Изменить настройки' },
+        onEdit: () => {
+          const base = {
+            risk_level: tool.risk_level,
+            result_delivery: tool.result_delivery,
+          };
+          update.reset();
+          setDraft({ base, changes: base });
+        },
+        onCancel: () => {
+          if (update.isPending) return;
+          setDraft(undefined);
+          update.reset();
+        },
+        onSave: handleSave,
+      });
+  const errorNotice = update.isError && (
+    <Alert
+      className={styles.notice}
+      variant="danger"
+      title="Не удалось сохранить настройки инструмента"
+      description="Изменения остались в форме. Попробуйте сохранить снова."
+    />
+  );
 
   return (
     <EntityPageV2
-      title={tool.name || tool.slug}
-      mode={editing ? 'edit' : 'view'}
-      breadcrumbs={breadcrumbs}
-      loading={isLoading}
-      saving={updateMutation.isPending}
-      backPath="/admin/tools"
-      onEdit={() => {
-        setRiskLevel(tool.risk_level || '');
-        setResultDelivery(tool.result_delivery);
-        setEditing(true);
-      }}
-      onCancel={() => setEditing(false)}
-      onSave={() => updateMutation.mutate()}
+      title={tool.name}
+      subtitle={tool.name !== tool.slug ? tool.slug : undefined}
+      mode={mode}
+      breadcrumbs={[
+        { label: 'Инструменты', href: listPath },
+        { label: tool.name },
+      ]}
     >
-      {updateMutation.isError && (
-        <p role="alert">Не удалось сохранить настройки инструмента. Проверьте значения и попробуйте снова.</p>
-      )}
-      <Tab title="Описание" layout="grid" id="description">
-        <Block
-          title="Описание"
-          icon="info"
-          iconVariant="primary"
-          width="full"
-          fields={DESCRIPTION_FIELDS}
-          data={descriptionData}
-          editable={false}
-        />
-        <Block
-          title="Уровень риска"
-          icon="shield"
-          iconVariant="warning"
-          width="full"
-          fields={[{
-            key: 'risk_level',
-            type: 'custom',
-          label: 'Классификация риска операции',
-            render: (value, editable) => editable
-              ? <Select
-                  value={riskLevel}
-                  onChange={setRiskLevel}
-                  placeholder="Не классифицировано"
-                  options={[
-                    { value: '', label: 'Не классифицировано' },
-                    { value: 'safe', label: 'Безопасная' },
-                    { value: 'risky', label: 'Рискованная' },
-                  ]}
-                />
-              : <span>{value === 'safe' ? 'Безопасная' : value === 'risky' ? 'Рискованная' : 'Не классифицировано'}</span>,
-          }]}
-          data={{ risk_level: tool.risk_level || '' }}
-          editable={editing}
+      <Tab title="Обзор" layout="grid" id="overview" actions={actions}>
+        {errorNotice}
+        <ToolOrigin tool={tool} />
+        <ToolSettingsBlock
+          tool={tool}
+          changes={draft?.changes}
+          saving={update.isPending}
+          onRiskChange={risk_level =>
+            setDraft(
+              current =>
+                current && {
+                  ...current,
+                  changes: { ...current.changes, risk_level },
+                }
+            )
+          }
+          onDeliveryChange={result_delivery =>
+            setDraft(
+              current =>
+                current && {
+                  ...current,
+                  changes: { ...current.changes, result_delivery },
+                }
+            )
+          }
         />
       </Tab>
-
-      <Tab title="Входная схема" layout="grid" id="input-schema">
-        <Block
-          title="Входная схема"
-          icon="arrow-down"
-          iconVariant="info"
-          width="full"
-          fields={INPUT_SCHEMA_FIELDS}
-          data={{ input_schema: tool.input_schema || {} }}
-          editable={false}
-        />
-      </Tab>
-
-      <Tab title="Схема провайдера" layout="grid" id="output-schema">
-        <Block
-          title="Объявленная схема ответа провайдера"
-          icon="arrow-up"
-          iconVariant="success"
-          width="full"
-          fields={OUTPUT_SCHEMA_FIELDS}
-          data={{ output_schema: tool.output_schema || {} }}
-          editable={false}
-        />
-      </Tab>
-
-      <Tab title="Схема данных" layout="grid" id="observed-data-schema">
-        <Block
-          title="Наблюдаемая схема данных"
-          icon="arrow-up"
-          iconVariant="success"
-          width="full"
-          fields={tool.has_observed_data_schema ? OBSERVED_DATA_SCHEMA_FIELDS : undefined}
-          data={{ observed_data_schema: tool.observed_data_schema || {} }}
-          editable={false}
-          headerLabels={(
-            <Badge tone={tool.has_observed_data_schema ? 'success' : 'neutral'}>
-              {tool.has_observed_data_schema ? 'Получена из ответа' : 'Пока нет'}
-            </Badge>
-          )}
-        >
-          {!tool.has_observed_data_schema && (
-            <p>Схема появится после успешного вызова инструмента.</p>
-          )}
-        </Block>
-        <Block
-          title="Режим результата"
-          icon="database"
-          iconVariant="primary"
-          width="full"
-          fields={[{
-            key: 'result_delivery',
-            type: 'custom',
-            label: 'Доставка результата',
-            render: (value, isEditable) => isEditable
-              ? <Select
-                  value={resultDelivery}
-                  onChange={(nextValue) => setResultDelivery(nextValue === 'store' ? 'store' : 'direct')}
-                  options={[
-                    { value: 'direct', label: 'Direct — передавать ответ напрямую' },
-                    { value: 'store', label: 'Store — сохранять как набор данных' },
-                  ]}
-                />
-              : <span>{value === 'store' ? 'Store — набор данных' : 'Direct — прямой ответ'}</span>,
-          }]}
-          data={{ result_delivery: tool.result_delivery }}
-          editable={editing}
-        />
+      <Tab
+        title="Схемы"
+        layout="grid"
+        id="schemas"
+        actions={draft ? actions : []}
+      >
+        {errorNotice}
+        <ToolSchemas tool={tool} />
       </Tab>
     </EntityPageV2>
   );
 }
 
+export function DiscoveredToolViewPage() {
+  const { id = '' } = useParams();
+  const { search } = useLocation();
+  const listPath = `${TOOLS_PATH}${search}`;
+  const detail = useQuery({
+    queryKey: qk.discoveredTools.detail(id),
+    queryFn: () => discoveredToolsApi.get(id),
+    enabled: Boolean(id),
+    staleTime: 30_000,
+  });
+
+  if (detail.data) {
+    return <ToolDetail key={id} tool={detail.data} listPath={listPath} />;
+  }
+
+  return (
+    <EntityPageV2
+      title="Инструмент"
+      mode="view"
+      breadcrumbs={[
+        { label: 'Инструменты', href: listPath },
+        { label: 'Карточка' },
+      ]}
+      loading={detail.isPending}
+    >
+      <Tab title="Обзор" layout="full">
+        <Alert variant="danger" title="Не удалось загрузить инструмент">
+          <Button variant="outline" onClick={() => void detail.refetch()}>
+            Повторить
+          </Button>
+        </Alert>
+      </Tab>
+    </EntityPageV2>
+  );
+}

@@ -106,3 +106,118 @@ def test_expire_chat_context_items_uses_transaction_and_reports_count(monkeypatc
     assert tasks_cleanup.expire_chat_context_items.run() == {"expired": 4}
     repository.expire_due_items.assert_awaited_once_with(limit=tasks_cleanup.CHAT_CONTEXT_EXPIRY_BATCH_SIZE)
     assert transaction_names == ["expire_chat_context_items"]
+
+
+def test_periodic_schedule_has_operator_metadata_and_tracking_headers():
+    from app.services.periodic_task_catalog import PERIODIC_TASK_PRESENTATION
+
+    schedule = build_default_beat_schedule()
+    assert set(schedule) == set(PERIODIC_TASK_PRESENTATION)
+    for slug, entry in schedule.items():
+        name, description = PERIODIC_TASK_PRESENTATION[slug]
+        assert name and description and name != slug
+        assert entry["options"]["headers"]["periodic_slug"] == slug
+
+
+def test_periodic_dispatch_is_gated_by_celery_before_start(monkeypatch):
+    import logging
+    from datetime import datetime, timezone
+
+    from app.workers import periodic_task_tracker as tracker
+
+    start = AsyncMock(side_effect=[(None, False), (datetime.now(timezone.utc), True)])
+    finish = AsyncMock()
+    monkeypatch.setattr(tracker, "_start", start)
+    monkeypatch.setattr(tracker, "_finish", finish)
+
+    task_logger = logging.getLogger("app.tests.periodic_task")
+    handler = tracker.PeriodicRunLogHandler()
+    task_logger.addHandler(handler)
+
+    @celery_app.task(name="test.periodic.tracker")
+    def check_task():
+        task_logger.warning("checked connector token=secret-value")
+        return {"checked": 1}
+
+    try:
+        headers = {"periodic_slug": "tracked"}
+        check_task.apply(headers=headers)
+        finish.assert_not_awaited()
+        outcome = check_task.apply(headers={**headers, "periodic_manual": "1"})
+        assert outcome.get() == {"checked": 1}
+        run, status, retval = finish.await_args.args
+        assert status == "success" and retval == {"checked": 1}
+        assert run.slug == "tracked"
+        assert [event["message"] for event in run.events] == ["checked connector token=***"]
+        assert [call.kwargs["manual"] for call in start.await_args_list] == [False, True]
+        check_task.apply()
+        assert start.await_count == 2
+        assert finish.await_count == 1
+    finally:
+        task_logger.removeHandler(handler)
+        celery_app.tasks.unregister("test.periodic.tracker")
+
+
+def test_run_result_redacts_secrets_and_limits_oversize_payloads():
+    from app.services.periodic_task_service import MAX_RESULT_BYTES, safe_run_result
+
+    assert safe_run_result({"token": "secret-value", "checked": 3}) == ({"token": "***", "checked": 3}, False)
+    assert safe_run_result("x" * MAX_RESULT_BYTES) == (None, True)
+    assert safe_run_result(None) == (None, False)
+
+
+def test_tool_payload_cleanup_disposes_engine_in_its_creation_loop(monkeypatch):
+    import asyncio
+
+    from app.services import tool_result_store
+    from app.workers import tasks_cleanup
+
+    loops = []
+    disposed = []
+
+    def create_engine():
+        owner = asyncio.get_running_loop()
+        loops.append(owner)
+
+        @asynccontextmanager
+        async def begin():
+            assert asyncio.get_running_loop() is owner
+            yield SimpleNamespace(execute=AsyncMock(return_value=SimpleNamespace(rowcount=3)))
+
+        async def dispose():
+            assert asyncio.get_running_loop() is owner
+            disposed.append(owner)
+
+        return SimpleNamespace(begin=begin, dispose=dispose)
+
+    monkeypatch.setattr(tool_result_store, "create_tool_results_engine", create_engine)
+    assert tasks_cleanup.cleanup_expired_tool_payloads.run() == 3
+    assert tasks_cleanup.cleanup_expired_tool_payloads.run() == 3
+    assert disposed == loops and len(set(loops)) == 2
+
+
+def test_discovery_counts_reported_provider_failure(monkeypatch):
+    from app.workers import tasks_health
+
+    instance = SimpleNamespace(id="provider-id", slug="mcp_sql")
+    result = SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [instance]))
+    session = SimpleNamespace(execute=AsyncMock(return_value=result), commit=AsyncMock())
+
+    @asynccontextmanager
+    async def session_scope():
+        yield session
+
+    service = SimpleNamespace(rescan=AsyncMock(return_value={
+        "mcp_upserted": 0,
+        "mcp_failed_providers": [{"provider_slug": "mcp_sql", "error": "Name or service not known"}],
+    }))
+    monkeypatch.setattr(tasks_health, "get_worker_session", session_scope)
+    monkeypatch.setattr(tasks_health, "acquire_advisory_lock", AsyncMock(return_value=True))
+    monkeypatch.setattr(tasks_health, "release_advisory_lock", AsyncMock())
+    monkeypatch.setattr(tasks_health, "ToolDiscoveryService", lambda _session: service)
+
+    summary = tasks_health.rescan_discovery.run()
+    assert summary["providers_scanned"] == 1
+    assert summary["successful_scans"] == 0
+    assert summary["failed_scans"] == 1
+    assert summary["details"][0]["success"] is False

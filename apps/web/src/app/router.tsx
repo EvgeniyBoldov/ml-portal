@@ -1,5 +1,5 @@
 import React, { Suspense, lazy } from 'react';
-import { Navigate, createBrowserRouter, RouterProvider } from 'react-router-dom';
+import { Navigate, createBrowserRouter, RouterProvider, useLocation, useParams } from 'react-router-dom';
 import { AdminGuard } from './router/AdminGuard';
 import { Skeleton } from '@shared/ui/Skeleton';
 
@@ -34,10 +34,11 @@ const CollectionPage = lazy(() => import('@/domains/admin/pages/CollectionPage')
 const CollectionVersionPage = lazy(() => import('@/domains/admin/pages/CollectionVersionPage').then(m => ({ default: m.CollectionVersionPage })));
 const InstancesListPage = lazy(() => import('@/domains/admin/pages/InstancesListPage'));
 const InstancePage = lazy(() => import('@/domains/admin/pages/InstancePage').then(m => ({ default: m.InstancePage })));
-const RbacListPage = lazy(() => import('@/domains/admin/pages/RbacListPage').then(m => ({ default: m.RbacListPage })));
-const RbacRulePage = lazy(() => import('@/domains/admin/pages/RbacRulePage').then(m => ({ default: m.RbacRulePage })));
+const AccessRulesPage = lazy(() => import('@/domains/admin/pages/AccessRulesPage').then(m => ({ default: m.AccessRulesPage })));
+const AccessRulePage = lazy(() => import('@/domains/admin/pages/AccessRulePage').then(m => ({ default: m.AccessRulePage })));
 const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSettingsPage').then(m => ({ default: m.PlatformSettingsPage })));
 const OrchestrationPage = lazy(() => import('@/domains/admin/pages/OrchestrationPage').then(m => ({ default: m.OrchestrationPage })));
+const PeriodicTaskPage = lazy(() => import('@/domains/admin/pages/PeriodicTaskPage'));
 const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasksPage'));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 const MemoryPage = lazy(() => import('@/domains/admin/pages/MemoryPage'));
@@ -64,6 +65,13 @@ const withSuspense = (el: React.ReactNode) => (
     {el}
   </Suspense>
 );
+
+function LegacyAccessRedirect() {
+  const { id } = useParams();
+  const { search, hash } = useLocation();
+  const pathname = id ? `/admin/access/${encodeURIComponent(id)}` : '/admin/access';
+  return <Navigate to={{ pathname, search, hash }} replace />;
+}
 
 const router = createBrowserRouter([
   { path: '/', element: withSuspense(<Login />) },
@@ -133,13 +141,16 @@ const router = createBrowserRouter([
       { path: 'instances/new', element: withSuspense(<InstancePage />) },
       { path: 'instances/:id', element: withSuspense(<InstancePage />) },
       { path: 'instances/:id/edit', element: withSuspense(<InstancePage />) },
-      { path: 'rbac', element: withSuspense(<RbacListPage />) },
-      { path: 'rbac/:id', element: withSuspense(<RbacRulePage />) },
+      { path: 'access', element: withSuspense(<AccessRulesPage />) },
+      { path: 'access/:id', element: withSuspense(<AccessRulePage />) },
+      { path: 'rbac', element: <LegacyAccessRedirect /> },
+      { path: 'rbac/:id', element: <LegacyAccessRedirect /> },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
       { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
       { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
       { path: 'orchestration', element: withSuspense(<OrchestrationPage />) },
       { path: 'periodic-tasks', element: withSuspense(<PeriodicTasksPage />) },
+      { path: 'periodic-tasks/:slug', element: withSuspense(<PeriodicTaskPage />) },
       { path: 'sandbox', element: withSuspense(<SandboxListPage />) },
     ],
   },

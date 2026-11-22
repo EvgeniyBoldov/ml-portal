@@ -47,9 +47,16 @@ def test_result_observation_preserves_unknown_and_nested_reader_cursor() -> None
     assert "untrusted_extra" not in serialized
 
 
-def test_history_and_import_are_native_workspace_operations_without_source_tools() -> None:
-    operations = {item.operation_slug for item in with_workspace_operations([])}
-    assert {"result.history", "result.import", "result.describe", "result.read"} <= operations
+def test_history_and_import_do_not_require_a_current_run_dataset() -> None:
+    assert with_workspace_operations([]) == []
+    operations = {item.operation_slug for item in with_workspace_operations([], prior_history=True, prior_import=True)}
+    assert operations == {"result.history", "result.import"}
+
+
+def test_workspace_read_is_available_for_empty_datasets_but_not_snapshot_continuation() -> None:
+    result = {"result_id": "saved", "row_count": 0, "dataset_meta": {"snapshot_only": True}}
+    operations = {item.operation_slug for item in with_workspace_operations([], current_results=[result])}
+    assert operations == {"result.describe", "result.read"}
 
 
 def test_import_formatter_keeps_provenance_and_does_not_treat_receipt_as_dataset_row() -> None:
@@ -166,3 +173,40 @@ async def test_dispatched_write_timeout_is_unknown_but_read_timeout_remains_retr
     read_result, _ = await ToolExecutor().execute(ToolCall(id="read-1", tool_name="read", arguments={"collection_slug": "instance"}), read_ctx, [read])
     assert read_result.metadata["retryable"] is True
     assert "outcome_unknown" not in read_result.metadata
+
+
+@pytest.mark.asyncio
+async def test_workspace_history_checks_current_scope_and_importable_pages(monkeypatch) -> None:
+    from contextlib import asynccontextmanager
+
+    from app.agents.runtime.result_workspace_tools import load_workspace_history
+    from app.services.runtime_result_reuse_service import RuntimeResultReuseService
+    from app.services.tool_result_store import ResultSnapshotUnavailable
+
+    denied, expired, historical, current = [str(uuid4()) for _ in range(4)]
+    chat, user, tenant, branch = uuid4(), uuid4(), uuid4(), str(uuid4())
+
+    @asynccontextmanager
+    async def session_factory():
+        yield None
+
+    async def read_page(self, *, source_run_id, offset, **scope):
+        assert scope["current_run_id"] == current
+        assert scope["current_chat_id"] == str(chat)
+        assert scope["branch_id"] == branch
+        assert scope["tenant_id"] == tenant and scope["user_id"] == user
+        if source_run_id == denied:
+            raise ResultSnapshotUnavailable()
+        if source_run_id == expired:
+            return {"items": []}
+        if offset == 0:
+            return {"items": [{"importable": False}], "next_offset": 1}
+        return {"items": [{"importable": True}]}
+
+    monkeypatch.setattr(RuntimeResultReuseService, "list_prior_snapshots", read_page)
+    ctx = ToolContext(tenant_id=tenant, user_id=user, chat_id=chat,
+                      extra={"runtime_branch_id": branch, "runtime_prior_result_run_ids": [denied, expired]})
+    ctx.set_runtime_deps(RuntimeDependencies(session_factory=session_factory))
+    assert await load_workspace_history(ctx, current) == ([], False)
+    ctx.extra["runtime_prior_result_run_ids"].append(historical)
+    assert await load_workspace_history(ctx, current) == ([historical], True)

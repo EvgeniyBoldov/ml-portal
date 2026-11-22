@@ -21,6 +21,8 @@ from app.schemas.rbac import (
     CheckAccessRequest,
     CheckAccessResponse,
     EnrichedRuleResponse,
+    ExplainAccessRequest,
+    ExplainAccessResponse,
 )
 
 router = APIRouter()
@@ -59,6 +61,25 @@ async def list_enriched_rules(
         limit=limit,
         include_deprecated=include_deprecated,
     )
+
+
+@router.get("/rules/{rule_id}", response_model=EnrichedRuleResponse)
+async def get_enriched_rule(
+    rule_id: UUID,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> EnrichedRuleResponse:
+    return EnrichedRuleResponse.model_validate(await RbacService(db).get_enriched_rule(rule_id))
+
+
+@router.post("/explain-access", response_model=ExplainAccessResponse)
+async def explain_access(
+    data: ExplainAccessRequest,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> ExplainAccessResponse:
+    """Explain the administrative RBAC decision in priority order."""
+    return await RbacService(db).explain_access(data)
 
 
 @router.get("", response_model=List[RbacRuleResponse])

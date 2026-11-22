@@ -12,6 +12,7 @@ app = Celery(
     "backend",
     broker=BROKER_URL,
     backend=RESULT_BACKEND,
+    task_cls="app.workers.periodic_task_tracker:PeriodicTrackedTask",
     include=[
         # RAG ingest pipeline tasks
         "app.workers.tasks_rag_ingest",
@@ -49,7 +50,7 @@ celery_app = app
 
 def build_default_beat_schedule() -> dict:
     """Return canonical periodic task schedule for the platform."""
-    return {
+    schedule = {
         "shadow-invocation-dispatch": {
             "task": "app.workers.tasks_shadow_invocations.dispatch_shadow_invocations",
             "schedule": 15.0,
@@ -162,6 +163,10 @@ def build_default_beat_schedule() -> dict:
             "schedule": 3600.0,  # 1 hour
         },
     }
+
+    for slug, entry in schedule.items():
+        entry.setdefault("options", {}).setdefault("headers", {})["periodic_slug"] = slug
+    return schedule
 
 
 def get_effective_beat_schedule() -> dict:

@@ -1,6 +1,6 @@
 /**
  * JSONDisplay - Component for displaying JSON data with proper formatting
- * 
+ *
  * Features:
  * - Monospace font with syntax highlighting colors
  * - Scrollable for large JSON content
@@ -9,7 +9,7 @@
  * - Expandable/collapsible
  */
 import { useState } from 'react';
-import { Button } from '@/shared/ui';
+import Button from '@/shared/ui/Button';
 import styles from './JSONDisplay.module.css';
 
 export interface JSONDisplayProps {
@@ -19,25 +19,28 @@ export interface JSONDisplayProps {
   maxHeight?: string;
   /** Additional CSS class */
   className?: string;
+  /** Show the header with result size and actions */
+  showHeader?: boolean;
   /** Show copy button */
   showCopy?: boolean;
   /** Show expand/collapse button */
   showExpand?: boolean;
 }
 
-export function JSONDisplay({ 
-  value, 
-  maxHeight = '400px', 
-  className = '', 
+export function JSONDisplay({
+  value,
+  maxHeight = '400px',
+  className = '',
+  showHeader = true,
   showCopy = true,
-  showExpand = false 
+  showExpand = false,
 }: JSONDisplayProps) {
   const [isExpanded, setIsExpanded] = useState(showExpand);
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
-      await navigator.clipboard.writeText(value);
+      await window.navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch (err) {
@@ -49,8 +52,22 @@ export function JSONDisplay({
     setIsExpanded(!isExpanded);
   };
 
+  if (!showHeader) {
+    return (
+      <pre
+        className={`${styles.jsonDisplaySimple} ${className}`}
+        style={{ maxHeight }}
+      >
+        <code>{value}</code>
+      </pre>
+    );
+  }
+
   return (
-    <div className={`${styles.jsonDisplay} ${className}`} style={{ maxHeight: isExpanded ? 'none' : maxHeight }}>
+    <div
+      className={`${styles.jsonDisplay} ${className}`}
+      style={{ maxHeight: isExpanded ? 'none' : maxHeight }}
+    >
       <div className={styles.header}>
         <div className={styles.headerInfo}>
           <span className={styles.headerTitle}>JSON</span>
@@ -60,20 +77,12 @@ export function JSONDisplay({
         </div>
         <div className={styles.headerActions}>
           {showCopy && (
-            <Button
-              onClick={handleCopy}
-              variant="outline"
-              size="small"
-            >
+            <Button onClick={handleCopy} variant="outline" size="small">
               {copied ? 'Скопировано!' : 'Копировать'}
             </Button>
           )}
           {showExpand && (
-            <Button
-              onClick={toggleExpand}
-              variant="outline"
-              size="small"
-            >
+            <Button onClick={toggleExpand} variant="outline" size="small">
               {isExpanded ? 'Свернуть' : 'Развернуть'}
             </Button>
           )}
@@ -85,4 +94,3 @@ export function JSONDisplay({
     </div>
   );
 }
-

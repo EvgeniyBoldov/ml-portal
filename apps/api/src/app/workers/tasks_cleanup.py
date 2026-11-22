@@ -216,32 +216,30 @@ def cleanup_expired_runtime_tool_results(self):
 def cleanup_expired_tool_payloads(self):
     """Remove expired complete tool payloads from the dedicated JSONB store."""
     import asyncio
-    from app.services.tool_result_store import get_tool_results_engine
+    from app.services.tool_result_store import create_tool_results_engine
 
-    async def _cleanup():
-        async with get_tool_results_engine().begin() as connection:
-            result = await connection.execute(text("""
-                WITH expired AS (
-                    SELECT id FROM runtime_tool_payloads
-                    WHERE expires_at < now()
-                    ORDER BY expires_at
-                    LIMIT 5000
-                )
-                DELETE FROM runtime_tool_payloads p USING expired e WHERE p.id = e.id
-            """))
-            return int(result.rowcount or 0)
+    async def _cleanup() -> int:
+        engine = create_tool_results_engine()
+        try:
+            async with engine.begin() as connection:
+                result = await connection.execute(text("""
+                    WITH expired AS (
+                        SELECT id FROM runtime_tool_payloads
+                        WHERE expires_at < now()
+                        ORDER BY expires_at
+                        LIMIT 5000
+                    )
+                    DELETE FROM runtime_tool_payloads p USING expired e WHERE p.id = e.id
+                """))
+                return int(result.rowcount or 0)
+        finally:
+            await engine.dispose()
 
     try:
         return asyncio.run(_cleanup())
     except Exception as exc:
         logger.error("Failed to clean expired tool payloads: %s", exc, exc_info=True)
         raise self.retry(exc=exc)
-    finally:
-        from app.services.tool_result_store import dispose_tool_results_engine
-        try:
-            asyncio.run(dispose_tool_results_engine())
-        except Exception:
-            logger.warning("Could not dispose tool result cleanup connection", exc_info=True)
 
 
 @shared_task(

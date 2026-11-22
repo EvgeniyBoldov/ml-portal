@@ -1,0 +1,15 @@
+.page {
+  display: contents;
+}
+
+.page h1 {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--sp-2);
+}

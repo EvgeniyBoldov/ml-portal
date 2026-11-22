@@ -59,6 +59,11 @@ Binding rule:
 Operational note:
 - discovery/rescan refreshes the provider's raw schemas and tool descriptors;
 - discovery availability is scoped by the collection's provider relationship;
+- the admin discovery list and detail expose `source_types` as read-only metadata.
+  Local types follow the collection provider kind and global system tools use
+  `system`. MCP types come from active data connectors linked by `access_via_instance_id`
+  and can be `sql` or `api`. These describe provider relationships and do not
+  resolve per-user operation availability;
 - sandbox may override runtime-safe fields, but does not create a second tool
   selection model.
 

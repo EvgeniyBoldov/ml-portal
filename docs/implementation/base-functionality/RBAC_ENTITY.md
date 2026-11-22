@@ -98,3 +98,20 @@ For current base-functional stage:
 - keep one universal override model across entity types,
 - enforce `user > tenant > platform` as invariant,
 - keep default platform stance restrictive for new critical entities where required by release policy.
+
+
+## Admin rule explanation
+
+`POST /api/v1/admin/rbac/explain-access` is an admin-only read operation.
+It accepts a resource type and ID and optionally a user or tenant ID. For a
+user it resolves the default group server-side. With no subject it explains
+the platform decision. The response returns the administrative RBAC effect and
+applicable layers in descending priority, with the rule ID and explicit effect
+when a rule exists. The final default layer supplies deny. The existing
+`check-access` endpoint and the explain endpoint share rule lookup order.
+The explanation covers the administrative rule check for the exact resource
+type and ID. Runtime-specific availability and fallbacks are applied by
+their owning services.
+
+`GET /api/v1/admin/rbac/rules/{rule_id}` returns the enriched rule for direct
+navigation. Enriched rule responses include the lifecycle status.

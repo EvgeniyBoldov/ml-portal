@@ -1,14 +1,27 @@
-.primaryText {
-  font-weight: 500;
+.registry {
+  display: grid;
+  min-width: 0;
+  gap: var(--sp-4);
 }
 
-.secondaryText {
-  color: var(--text-secondary);
-  font-size: 0.8125rem;
-}
-
-.domainList {
+.headerControls {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.search {
+  width: min(18rem, 25vw);
+}
+
+@media (max-width: 768px) {
+  .headerControls {
+    width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .search {
+    width: 100%;
+  }
 }

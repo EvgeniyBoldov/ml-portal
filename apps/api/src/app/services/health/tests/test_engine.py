@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.model_registry import Model
+from app.models.model_registry import Model, ModelType
 from app.models.tool_instance import ToolInstance
 from app.services.health.base import HealthStatus, HealthProbeResult, BackoffPolicy, BACKOFF_POLICY_1M
 from app.services.health.engine import HealthCheckEngine, mark_instance_unhealthy, mark_model_unhealthy
@@ -129,14 +129,15 @@ class TestHealthCheckEngine:
         assert "Connection failed" in results[str(mock_instance.id)].error
     
     @pytest.mark.asyncio
-    async def test_check_models_success(self, engine, embedding_adapter):
+    @pytest.mark.parametrize("model_type", [ModelType.EMBEDDING, "embedding"])
+    async def test_check_models_success(self, engine, embedding_adapter, model_type):
         """Test successful model health check."""
         engine.register_adapter("embedding_model", embedding_adapter)
         
         mock_model = MagicMock(spec=Model)
         mock_model.id = uuid4()
         mock_model.alias = "test-embedding"
-        mock_model.type = "embedding"
+        mock_model.type = model_type
         mock_model.health_status = "healthy"
         mock_model.consecutive_failures = 0
         mock_model.last_error = None
@@ -225,6 +226,19 @@ class TestHealthCheckEngine:
         assert adapter is None
     
     @pytest.mark.asyncio
+    async def test_model_health_uses_registered_backoff_for_enum(self, engine, embedding_adapter):
+        policy = MagicMock(spec=BackoffPolicy)
+        now = datetime.now(timezone.utc)
+        policy.compute_next_check.return_value = now
+        engine.register_adapter("embedding_model", embedding_adapter, policy)
+        model = MagicMock(spec=Model)
+        model.type = ModelType.EMBEDDING
+
+        await engine._update_model_health(model, HealthProbeResult(status=HealthStatus.HEALTHY), now)
+
+        policy.compute_next_check.assert_called_once_with(HealthStatus.HEALTHY, 0, now)
+
+    @pytest.mark.asyncio
     async def test_get_adapter_for_model(self, engine, embedding_adapter):
         """Test getting adapter for model."""
         engine.register_adapter("embedding_model", embedding_adapter)
@@ -262,11 +276,11 @@ class TestUtilityFunctions:
         assert hasattr(call_args, 'where')
         
         # Verify parameters in the update
-        values = call_args.values
-        assert 'health_status' in values.compile().params
-        assert 'consecutive_failures' in values.compile().params
-        assert 'last_error' in values.compile().params
-        assert 'next_check_at' in values.compile().params
+        params = call_args.compile().params
+        assert 'health_status' in params
+        assert params['consecutive_failures_1'] == 1
+        assert 'last_error' in params
+        assert 'next_check_at' in params
     
     @pytest.mark.asyncio
     async def test_mark_model_unhealthy(self):
@@ -286,8 +300,8 @@ class TestUtilityFunctions:
         assert hasattr(call_args, 'where')
         
         # Verify parameters in the update
-        values = call_args.values
-        assert 'health_status' in values.compile().params
-        assert 'consecutive_failures' in values.compile().params
-        assert 'last_error' in values.compile().params
-        assert 'next_check_at' in values.compile().params
+        params = call_args.compile().params
+        assert 'health_status' in params
+        assert params['consecutive_failures_1'] == 1
+        assert 'last_error' in params
+        assert 'next_check_at' in params

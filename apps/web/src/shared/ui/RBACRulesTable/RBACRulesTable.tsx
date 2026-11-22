@@ -1,8 +1,7 @@
 /**
  * RBACRulesTable - shared RBAC table for scoped admin tabs.
  *
- * Uses the same DataTable pattern as the global RBAC list, but can hide
- * the owner column for tenant/user/platform scoped views.
+ * Displays access rules for a user, workgroup or platform.
  */
 import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
@@ -13,7 +12,7 @@ import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances'
 import { rbacApi, type EnrichedRule, type EnrichedRulesFilters } from '@/shared/api/rbac';
 import { buildRbacRuleColumns, resolveRbacSearchText } from '@/domains/admin/shared/rbacRuleTable';
 
-type RBACTableMode = 'platform' | 'tenant' | 'user' | 'global';
+type RBACTableMode = 'platform' | 'tenant' | 'user';
 
 interface RBACRulesTableProps {
   mode: RBACTableMode;

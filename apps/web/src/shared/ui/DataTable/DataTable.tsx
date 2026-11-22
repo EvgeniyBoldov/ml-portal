@@ -79,10 +79,12 @@ export interface DataTableProps<T = any> {
   
   // Search
   searchable?: boolean;
+  searchControl?: 'internal' | 'external';
   searchPlaceholder?: string;
   searchValue?: string;
   onSearchChange?: (value: string) => void;
   searchFilter?: (row: T, query: string) => boolean;
+  columnFilters?: Record<string, DataTableFilterValue>;
   onColumnFiltersChange?: (filters: Record<string, DataTableFilterValue>) => void;
   
   // Pagination
@@ -122,10 +124,12 @@ export default function DataTable<T = any>({
   selectedKeys: controlledSelectedKeys,
   onSelectionChange,
   searchable = false,
+  searchControl = 'internal',
   searchPlaceholder = 'Поиск...',
   searchValue: controlledSearchValue,
   onSearchChange,
   searchFilter,
+  columnFilters: controlledColumnFilters,
   onColumnFiltersChange,
   paginated = false,
   serverPaginated = false,
@@ -163,11 +167,12 @@ export default function DataTable<T = any>({
   const [internalPageSize, setInternalPageSize] = useState(controlledPageSize ?? 50);
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
-  const [columnFilters, setColumnFilters] = useState<Record<string, DataTableFilterValue>>({});
+  const [internalColumnFilters, setInternalColumnFilters] = useState<Record<string, DataTableFilterValue>>({});
 
   // Use controlled or internal state
   const selectedKeys = controlledSelectedKeys ?? internalSelectedKeys;
   const searchValue = controlledSearchValue ?? internalSearchValue;
+  const columnFilters = controlledColumnFilters ?? internalColumnFilters;
   const currentPage = controlledCurrentPage ?? internalCurrentPage;
   const pageSize = controlledPageSize ?? internalPageSize;
 
@@ -218,16 +223,16 @@ export default function DataTable<T = any>({
 
   const updateColumnFilter = useCallback((key: string, value: DataTableFilterValue) => {
     const nextFilters = { ...columnFilters, [key]: value };
-    setColumnFilters(nextFilters);
+    if (controlledColumnFilters === undefined) setInternalColumnFilters(nextFilters);
     onColumnFiltersChange?.(nextFilters);
     setInternalCurrentPage(1);
-  }, [columnFilters, onColumnFiltersChange]);
+  }, [columnFilters, controlledColumnFilters, onColumnFiltersChange]);
 
   const resetColumnFilters = useCallback(() => {
-    setColumnFilters({});
+    if (controlledColumnFilters === undefined) setInternalColumnFilters({});
     onColumnFiltersChange?.({});
     setInternalCurrentPage(1);
-  }, [onColumnFiltersChange]);
+  }, [controlledColumnFilters, onColumnFiltersChange]);
 
   // Filter data
   const filteredData = useMemo(() => {
@@ -309,6 +314,7 @@ export default function DataTable<T = any>({
   const total = totalItems ?? filteredData.length;
   const totalPages = Math.ceil(total / pageSize);
   const offset = (currentPage - 1) * pageSize;
+  const showSearchInput = searchable && searchControl === 'internal';
   const hasActiveColumnFilters = normalizedColumns.some(column =>
     column.filter && !isEmptyFilterValue(columnFilters[column.key], column.filter.kind),
   );
@@ -373,7 +379,7 @@ export default function DataTable<T = any>({
       )}
 
       {/* Toolbar */}
-      {(searchable || selectable) && (
+      {(showSearchInput || selectable || (searchControl === 'external' && hasActiveColumnFilters)) && (
         <div className={styles.toolbar}>
           <div className={styles.toolbarLeft}>
             {selectable && (
@@ -414,7 +420,7 @@ export default function DataTable<T = any>({
                 Сбросить фильтры
               </Button>
             )}
-            {searchable && (
+            {showSearchInput && (
               <Input
                 placeholder={searchPlaceholder}
                 value={searchValue}

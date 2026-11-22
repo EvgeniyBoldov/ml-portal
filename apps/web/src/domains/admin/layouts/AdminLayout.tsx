@@ -1,4 +1,4 @@
-import { Outlet, useNavigate } from 'react-router-dom';
+import { Outlet, useMatch, useNavigate } from 'react-router-dom';
 import { AdminSidebar } from '../components/AdminSidebar';
 import { useAuth } from '@/shared/hooks/useAuth';
 import { AppHeader } from '@/shared/ui/AppHeader';
@@ -6,6 +6,10 @@ import styles from './AdminLayout.module.css';
 
 function AdminLayout() {
   const navigate = useNavigate();
+  const isAccessPage = useMatch('/admin/access/*');
+  const isPeriodicTasksPage = useMatch('/admin/periodic-tasks/*');
+  const isToolsPage = useMatch('/admin/tools/*');
+  const isConnectorsPage = useMatch('/admin/connectors/*');
   const { logout, user } = useAuth();
 
   return (
@@ -20,7 +24,7 @@ function AdminLayout() {
         onLogout={logout}
       />
 
-      <div className={styles.layout}>
+      <div className={(isAccessPage || isPeriodicTasksPage || isToolsPage || isConnectorsPage) ? `${styles.layout} ${styles.compactLayout}` : styles.layout}>
         <AdminSidebar />
         <main className={styles.main}>
           <Outlet />

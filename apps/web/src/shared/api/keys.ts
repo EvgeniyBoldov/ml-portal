@@ -133,7 +133,7 @@ export const qk = {
   },
   agents: {
     all: () => ['agents'] as const,
-    list: (params?: { q?: string }) => ['agents', 'list', params] as const,
+    list: (params?: { q?: string; limit?: number }) => ['agents', 'list', params] as const,
     detail: (slug: string) => ['agents', 'detail', slug] as const,
     versions: (slug: string) => ['agents', 'versions', slug] as const,
     version: (slug: string, version: number) =>
@@ -194,9 +194,9 @@ export const qk = {
   },
   rbac: {
     all: () => ['rbac'] as const,
-    list: (params?: Record<string, unknown>) =>
-      ['rbac', 'list', params] as const,
-    detail: (id: string) => ['rbac', 'detail', id] as const,
+    accessRegister: () => ['rbac', 'access-register'] as const,
+    enrichedDetail: (id: string) => ['rbac', 'enriched-detail', id] as const,
+    explanation: (params: object) => ['rbac', 'explanation', params] as const,
     enrichedRules: (params?: Record<string, unknown>) =>
       ['rbac', 'enriched-rules', params] as const,
   },
@@ -206,6 +206,8 @@ export const qk = {
   },
   periodicTasks: {
     all: () => ['periodic-tasks'] as const,
+    detail: (slug: string) => ['periodic-tasks', 'detail', slug] as const,
+    run: (slug: string, id: string) => ['periodic-tasks', 'run', slug, id] as const,
     list: (params?: { category?: string; is_enabled?: boolean }) =>
       ['periodic-tasks', 'list', params] as const,
   },

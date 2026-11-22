@@ -1,10 +1,12 @@
 """
 Pydantic schemas for RBAC rules API.
 """
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
+
+from app.models.rbac import RbacEffect, ResourceType
 
 
 class RbacRuleCreate(BaseModel):
@@ -56,6 +58,31 @@ class CheckAccessResponse(BaseModel):
     resource_id: UUID
 
 
+class ExplainAccessRequest(BaseModel):
+    user_id: UUID | None = None
+    tenant_id: UUID | None = None
+    resource_type: ResourceType
+    resource_id: UUID
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "ExplainAccessRequest":
+        if self.user_id is not None and self.tenant_id is not None:
+            raise ValueError("Select a user or a tenant; user membership is resolved on the server")
+        return self
+
+
+class AccessDecisionLayer(BaseModel):
+    level: Literal["user", "tenant", "platform", "default"]
+    owner_name: str | None = None
+    rule_id: UUID | None = None
+    effect: RbacEffect | None = None
+
+
+class ExplainAccessResponse(BaseModel):
+    effect: RbacEffect
+    layers: list[AccessDecisionLayer]
+
+
 # ─── Enriched Rules Response ─────────────────────────────────────────
 
 class EnrichedOwnerInfo(BaseModel):
@@ -79,3 +106,4 @@ class EnrichedRuleResponse(BaseModel):
     created_at: str
     created_by_user_id: Optional[str] = None
     created_by_name: Optional[str] = None
+    lifecycle_status: str = "active"

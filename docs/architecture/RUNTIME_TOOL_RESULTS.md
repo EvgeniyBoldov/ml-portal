@@ -39,7 +39,8 @@ text. Successful results selected for Store delivery are redacted and persisted
 in the dedicated `postgres-tool-results` database, including empty and
 single-record responses. Datasets expire after `TOOL_RESULTS_RETENTION_DAYS`
 (default 7, configurable from 1 to 30 days); an hourly cleanup task deletes
-expired payloads. Runtime journal events use the same setting and have their
+expired payloads using its own engine, opened and disposed inside the same
+worker event loop. Runtime journal events use the same setting and have their
 own hourly cleanup task.
 An opaque UUID `result_id`, deterministically derived from the run and initial
 tool call ID, identifies a dataset. Source pages append to that identity; SQL
@@ -81,8 +82,10 @@ property names, but no observed values. The raw sample/result is not copied to
 the primary database for admin review. An existing schema is not overwritten
 by later calls. The provider's declared `output_schema` remains a separate
 contract and is not replaced by the observed schema. Administrators can inspect
-the observed schema and change `result_delivery` on the discovered-tool detail
-page; subsequent calls use that policy. Discovery refresh does not reset these
+the observed schema under «Схемы» on the discovered-tool detail page. The
+«Сохранять ответ как набор данных» toggle sets `result_delivery` to `store`
+when on and `direct` when off. Subsequent calls use that policy.
+Discovery refresh does not reset these
 operator fields.
 
 ## Source protocol and normalization
@@ -163,11 +166,24 @@ runtime audit surface, not the dataset catalog.
 
 ## Native workspace tools
 
-Runtime adds Pydantic-derived `result.describe`, `result.read` and `result.load`
-to agents with resolved operations. `result.sql` is exposed when SQL analysis
-capability (`result.analyze`) was already resolved; the same gate applies
-to `result.aggregate` and `result.find`; this does not silently grant
-analysis capability to domain agents. Workspace read/query failures are returned
+The admin tool registry exposes the Pydantic-derived native workspace schema
+alongside discovered tools. Native entries are read-only and do not create
+discovery rows or alter runtime authorization.
+
+Before each agent model decision, runtime uses the agent's current authorized
+dataset inventory to choose workspace tools in both native and plaintext mode.
+`result.read` and `result.describe` require a visible dataset. The saved dataset
+may contain zero rows. `result.load` additionally requires an executable source
+continuation and a resolved read-only source operation. `result.analyze`,
+`result.sql`, `result.aggregate` and `result.find` also require the resolved
+analysis capability. A saved or imported result can enable tools on the next
+model decision of the same task. On a new or resumed attempt, the prior-run
+inventory is reauthorized. `result.history` requires a live prior snapshot and
+`result.import` requires an importable prior snapshot. These operations can
+be offered before the current run has a dataset. Execution still checks scope,
+expiry, revision, source permissions and configured limits.
+
+Workspace read/query failures are returned
 to the model for repair or a partial/needs declaration; they do not trigger the
 generic two-unsuccessful-tool-steps abort. Global execution budgets still apply.
 Existing result.analyze versions remain

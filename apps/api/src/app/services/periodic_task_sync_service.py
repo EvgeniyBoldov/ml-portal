@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.celery_app import get_effective_beat_schedule
 from app.models.periodic_task import PeriodicTask
+from app.services.periodic_task_catalog import PERIODIC_TASK_PRESENTATION
 
 
 @dataclass
@@ -79,11 +80,13 @@ class PeriodicTaskSyncService:
 
         for item in defs:
             row = by_slug.get(item.slug)
+            presentation = PERIODIC_TASK_PRESENTATION.get(item.slug)
             if row is None:
                 row = PeriodicTask(
                     slug=item.slug,
                     task_path=item.task_path,
-                    name=item.slug.replace("-", " ").title(),
+                    name=presentation[0] if presentation else item.slug,
+                    description=presentation[1] if presentation else None,
                     category=_category_for_slug(item.slug),
                     default_schedule=item.schedule,
                     is_enabled=True,
@@ -91,6 +94,8 @@ class PeriodicTaskSyncService:
                 )
                 self.session.add(row)
                 continue
+            if presentation:
+                row.name, row.description = presentation
             row.task_path = item.task_path
             row.category = _category_for_slug(item.slug)
             row.default_schedule = item.schedule

@@ -1,0 +1,30 @@
+.field {
+  display: grid;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.field label {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.field input,
+.field [role='combobox'] {
+  width: 100%;
+}
+
+.labelRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-2);
+}
+
+.labelRow .searchToggle {
+  padding: 0 var(--sp-1);
+  min-height: 0;
+  color: var(--primary);
+}

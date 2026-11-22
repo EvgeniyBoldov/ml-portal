@@ -1,0 +1,65 @@
+.cell {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-1);
+  overflow-wrap: anywhere;
+}
+
+.cell a {
+  color: var(--primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.cell a:hover,
+.cell a:focus-visible {
+  text-decoration: underline;
+}
+
+.cell small,
+.cell code {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.scrollHint {
+  display: none;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+@media (max-width: 768px) {
+  .scrollHint {
+    display: block;
+  }
+
+  .table table {
+    table-layout: fixed;
+    min-width: 45rem;
+  }
+
+  .table th,
+  .table td {
+    padding-inline: var(--sp-2);
+  }
+
+  .table th:first-child,
+  .table th:nth-child(2) {
+    width: 8rem;
+  }
+
+  .table th:nth-child(4) {
+    width: 10rem;
+  }
+
+  .table th:last-child {
+    width: 10.5rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .cell code,
+  .cell small {
+    font-size: var(--font-size-xs);
+  }
+}

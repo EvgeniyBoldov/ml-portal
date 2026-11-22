@@ -44,17 +44,23 @@ export interface RbacRuleUpdate {
   owner_platform?: boolean;
 }
 
-export interface CheckAccessRequest {
-  user_id: string;
-  tenant_id: string;
-  resource_type: ResourceType;
+export interface ExplainAccessRequest {
+  user_id?: string;
+  tenant_id?: string;
+  resource_type: ResourceType | 'collection' | 'operation';
   resource_id: string;
 }
 
-export interface CheckAccessResponse {
+export interface AccessDecisionLayer {
+  level: RbacLevel | 'default';
+  owner_name: string | null;
+  rule_id: string | null;
+  effect: RbacEffect | null;
+}
+
+export interface ExplainAccessResponse {
   effect: RbacEffect;
-  resource_type: ResourceType;
-  resource_id: string;
+  layers: AccessDecisionLayer[];
 }
 
 // ─── Enriched Rules ──────────────────────────────────────────────────────────
@@ -106,25 +112,6 @@ export interface EnrichedRulesFilters {
 
 export const rbacApi = {
   // Rule CRUD
-  async listRules(params: EnrichedRulesFilters = {}): Promise<RbacRule[]> {
-    const sp = new URLSearchParams();
-    if (params.level) sp.set('level', params.level);
-    if (params.owner_user_id) sp.set('owner_user_id', params.owner_user_id);
-    if (params.owner_tenant_id) sp.set('owner_tenant_id', params.owner_tenant_id);
-    if (params.owner_platform !== undefined) sp.set('owner_platform', String(params.owner_platform));
-    if (params.resource_type) sp.set('resource_type', params.resource_type);
-    if (params.resource_id) sp.set('resource_id', params.resource_id);
-    if (params.effect) sp.set('effect', params.effect);
-    if (params.skip) sp.set('skip', String(params.skip));
-    if (params.limit) sp.set('limit', String(params.limit));
-    if (params.include_deprecated !== undefined) sp.set('include_deprecated', String(params.include_deprecated));
-    return apiRequest(`/admin/rbac?${sp.toString()}`);
-  },
-
-  async getRule(ruleId: string): Promise<RbacRule> {
-    return apiRequest(`/admin/rbac/${ruleId}`);
-  },
-
   async createRule(data: RbacRuleCreate): Promise<RbacRule> {
     return apiRequest('/admin/rbac', {
       method: 'POST',
@@ -146,8 +133,12 @@ export const rbacApi = {
   },
 
   // Access check
-  async checkAccess(data: CheckAccessRequest): Promise<CheckAccessResponse> {
-    return apiRequest('/admin/rbac/check-access', {
+  async getEnrichedRule(ruleId: string): Promise<EnrichedRule> {
+    return apiRequest(`/admin/rbac/rules/${ruleId}`);
+  },
+
+  async explainAccess(data: ExplainAccessRequest): Promise<ExplainAccessResponse> {
+    return apiRequest('/admin/rbac/explain-access', {
       method: 'POST',
       body: JSON.stringify(data),
     });

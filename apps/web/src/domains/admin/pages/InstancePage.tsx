@@ -24,6 +24,7 @@ import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { Button, ConfirmDialog, Badge, HealthIndicator } from '@/shared/ui';
 import DataTable, { type DataTableColumn } from '@/shared/ui/DataTable/DataTable';
 import { type Credential } from '@/shared/api/credentials';
+import { TOOLS_PATH } from '../shared/toolCatalog';
 
 /* ─── Field configs ─── */
 
@@ -529,6 +530,15 @@ export function InstancePage() {
           }),
           extra: mode === 'view'
             ? [
+                ...(instance?.connector_type === 'mcp' ? [
+                  <Button
+                    key="tools"
+                    variant="outline"
+                    onClick={() => navigate(`${TOOLS_PATH}?${new URLSearchParams({ provider: instance.id })}`)}
+                  >
+                    Инструменты
+                  </Button>,
+                ] : []),
                 <Button
                   key="health"
                   variant="success"

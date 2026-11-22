@@ -148,3 +148,51 @@ async def test_create_rule_accepts_owner_binding_for_each_level(
     assert result.owner_tenant_id == owner_tenant_id
     assert result.owner_platform is owner_platform
     rbac.rule_repo.create.assert_awaited_once_with(result)
+
+
+@pytest.mark.asyncio
+async def test_explain_access_uses_user_group_and_matches_check_access(service, monkeypatch):
+    from app.schemas.rbac import ExplainAccessRequest
+    from app.services import rbac_service
+
+    rbac, session, rule = service
+    user_id, tenant_id = uuid4(), uuid4()
+    users = SimpleNamespace(
+        get_by_id=AsyncMock(return_value=SimpleNamespace(id=user_id, login="admin")),
+        get_default_tenant=AsyncMock(return_value=tenant_id),
+    )
+    monkeypatch.setattr(rbac_service, "AsyncUsersRepository", Mock(return_value=users))
+    session.get.return_value = SimpleNamespace(name="Admins")
+    rbac.rule_repo._find_user_rule = AsyncMock(return_value=rule)
+    rbac.rule_repo._find_tenant_rule = AsyncMock(return_value=None)
+    platform = SimpleNamespace(id=uuid4(), effect="deny")
+    rbac.rule_repo._find_platform_rule = AsyncMock(return_value=platform)
+
+    request = ExplainAccessRequest(user_id=user_id, resource_type="agent", resource_id=rule.resource_id)
+    result = await rbac.explain_access(request)
+
+    assert result.effect == await rbac.check_access(user_id, tenant_id, "agent", rule.resource_id)
+    assert [(layer.level, layer.owner_name, layer.rule_id, layer.effect) for layer in result.layers] == [
+        ("user", "admin", rule.id, "allow"),
+        ("tenant", "Admins", None, None),
+        ("platform", None, platform.id, "deny"),
+        ("default", None, None, "deny"),
+    ]
+    rbac.rule_repo._find_tenant_rule.assert_awaited_once_with(tenant_id, "agent", rule.resource_id)
+
+
+@pytest.mark.asyncio
+async def test_explain_access_platform_without_rule_returns_default_deny(service):
+    from app.schemas.rbac import ExplainAccessRequest
+
+    rbac, session, rule = service
+    request = ExplainAccessRequest(resource_type="agent", resource_id=rule.resource_id)
+
+    result = await rbac.explain_access(request)
+
+    assert result.effect == "deny"
+    assert [(layer.level, layer.effect) for layer in result.layers] == [
+        ("platform", None),
+        ("default", "deny"),
+    ]
+    session.execute.assert_awaited_once()

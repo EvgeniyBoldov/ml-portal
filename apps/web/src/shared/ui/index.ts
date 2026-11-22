@@ -39,8 +39,6 @@ export type { BreadcrumbItem } from './EntityPage';
 
 // Row Actions
 
-// RBACRulesTable
-
 // ShortVersionBlock - REMOVED (unused legacy)
 
 // Tooltip

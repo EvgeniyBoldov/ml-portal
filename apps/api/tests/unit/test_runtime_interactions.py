@@ -318,7 +318,7 @@ async def test_agent_loop_preserves_prior_tool_result_across_question_and_answer
     monkeypatch.setattr(module, "serialize_published_operations", lambda operations: [])
     monkeypatch.setattr(module, "serialize_published_collections", lambda *args: [])
     from app.agents.runtime import result_workspace_tools
-    monkeypatch.setattr(result_workspace_tools, "with_workspace_operations", lambda operations: operations)
+    monkeypatch.setattr(result_workspace_tools, "with_workspace_operations", lambda operations, **_: operations)
     parse = module.parse_llm_response
     monkeypatch.setattr(module, "parse_llm_response", lambda text, **kwargs: ParsedResponse(text="", has_tool_calls=True,
         tool_calls=[ToolCall(id=text, tool_name="test." + text, arguments={})]) if text in {"read", "write"} else parse(text, **kwargs))

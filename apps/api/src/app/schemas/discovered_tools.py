@@ -20,39 +20,22 @@ class DiscoveredToolListItem(BaseModel):
     connector_slug: Optional[str] = None
     connector_name: Optional[str] = None
     domains: List[str] = Field(default_factory=list)
+    source_types: List[str] = Field(default_factory=list)
     result_delivery: Literal["direct", "store"] = "direct"
     has_observed_data_schema: bool = False
+    runtime_managed: bool = False
     is_active: bool = True
     last_seen_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
 
-class DiscoveredToolDetailResponse(BaseModel):
-    id: UUID
-    tool_id: Optional[UUID] = None
-    slug: str
-    name: str
-    description: Optional[str] = None
-    risk_level: Optional[Literal["safe", "risky"]] = None
-    source: str
-    provider_instance_id: Optional[UUID] = None
-    connector_slug: Optional[str] = None
-    connector_name: Optional[str] = None
-    domains: List[str] = Field(default_factory=list)
+class DiscoveredToolDetailResponse(DiscoveredToolListItem):
     input_schema: Optional[Dict[str, Any]] = None
     output_schema: Optional[Dict[str, Any]] = None
-    result_delivery: Literal["direct", "store"] = "direct"
     observed_data_schema: Optional[Dict[str, Any]] = None
-    has_observed_data_schema: bool = False
-    is_active: bool = True
-    last_seen_at: Optional[datetime] = None
-    created_at: datetime
-    updated_at: datetime
-
-    model_config = {"from_attributes": True}
 
 
 class RescanResponse(BaseModel):

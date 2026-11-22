@@ -22,7 +22,7 @@ from app.models.memory_scope import (
 )
 from app.models.model_registry import Model
 from app.models.rag_ingest import Source
-from app.services.agent_service import AgentService
+from app.repositories.agent_repository import AgentRepository
 from app.services.chats_service import ChatsService
 from app.services.collection_service import CollectionService
 from app.services.rbac_cleanup_service import RbacCleanupService
@@ -547,8 +547,7 @@ class LifecycleAdminService:
                 resource_type="agent",
                 resource_id=entity_id,
             )
-            svc = AgentService(self.session)
-            await svc.delete_agent(entity_id)
+            await AgentRepository(self.session).delete(entity)
             return LifecycleReport(
                 kind=kind,
                 entity_id=str(entity_id),

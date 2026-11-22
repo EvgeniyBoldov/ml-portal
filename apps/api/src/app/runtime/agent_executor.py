@@ -572,6 +572,12 @@ class AgentExecutor:
         ctx.extra["runtime_datastore_result_ids"] = list(result_references({
             "inputs": context_task.inputs, "dependencies": context_task.dependency_outputs,
         }))
+        prior_inventory = getattr(runtime_state.run_context, "prior_result_inventory", None) or {}
+        ctx.extra["runtime_prior_result_run_ids"] = [
+            str(item["source_run_id"])
+            for item in (prior_inventory.get("source_runs") or [])
+            if isinstance(item, dict) and item.get("source_run_id")
+        ]
 
         # 2. Compose the sub-agent's LLM messages. Goal + explicit agent_input.
         sub_messages = self._build_sub_messages(

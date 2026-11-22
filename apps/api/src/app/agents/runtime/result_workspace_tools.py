@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.agents.context import ToolCall, ToolContext, ToolResult
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.core.config import get_settings
+from app.runtime.memory.tool_ledger import canonical_operation_name
 from app.services.result_workspace import ResultWorkspace
 from app.services.tool_result_store import ResultSnapshotUnavailable, ToolResultStore, ToolResultStoreError
 
@@ -96,15 +97,48 @@ WORKSPACE_TOOLS = {
 }
 
 
-def with_workspace_operations(operations: list[ResolvedOperation]) -> list[ResolvedOperation]:
-    result = list(operations)
+_ANALYSIS_TOOLS = {"result.sql", "result.aggregate", "result.find"}
+_RESULT_TOOLS = {*WORKSPACE_TOOLS, "result.analyze"}
+
+
+def workspace_analysis_enabled(operations: list[ResolvedOperation]) -> bool:
+    return any(canonical_operation_name(op.operation_slug) == "result.analyze" for op in operations)
+
+
+def with_workspace_operations(
+    operations: list[ResolvedOperation], *,
+    current_results: list[dict[str, Any]] | None = None,
+    prior_history: bool = False,
+    prior_import: bool = False,
+) -> list[ResolvedOperation]:
+    current_results = current_results or []
+    allowed: set[str] = set()
+    if prior_history:
+        allowed.add("result.history")
+    if prior_import:
+        allowed.add("result.import")
+    if current_results:
+        allowed.update(("result.describe", "result.read", "result.analyze"))
+        if workspace_analysis_enabled(operations):
+            allowed.update(_ANALYSIS_TOOLS)
+        from app.agents.runtime.tools import OperationExecutionFacade
+        for item in current_results:
+            meta = item.get("dataset_meta") or {}
+            arguments = meta.get("next_arguments")
+            if meta.get("snapshot_only") or not isinstance(arguments, dict) or not arguments:
+                continue
+            source, _ = OperationExecutionFacade._find_operation(item.get("operation") or "", arguments, operations)
+            if source is not None and not source.side_effects and source.risk_level == "safe":
+                allowed.add("result.load")
+                break
+    result = [
+        op for op in operations
+        if canonical_operation_name(op.operation_slug) not in _RESULT_TOOLS
+        or canonical_operation_name(op.operation_slug) in allowed
+    ]
     known = {operation.operation_slug for operation in result}
     for name, (model, description) in WORKSPACE_TOOLS.items():
-        if not operations and name not in {"result.describe", "result.read", "result.history", "result.import"}:
-            continue
-        if name in known:
-            continue
-        if name in {"result.sql", "result.aggregate", "result.find"} and not any("result.analyze" in item.operation_slug for item in operations):
+        if name not in allowed or name in known:
             continue
         result.append(ResolvedOperation(
             operation_slug=name, operation=name, name=name, scope="system",
@@ -115,6 +149,48 @@ def with_workspace_operations(operations: list[ResolvedOperation]) -> list[Resol
                 data_instance_id="runtime-workspace", data_instance_slug="runtime-workspace"),
         ))
     return result
+
+
+async def load_workspace_history(ctx: ToolContext, run_id: str) -> tuple[list[str], bool]:
+    """Confirm live prior snapshots for the chat/branch before advertising history tools."""
+    source_ids = ctx.extra.get("runtime_prior_result_run_ids") or []
+    if not source_ids or not run_id:
+        return [], False
+    session_factory = ctx.get_runtime_deps().session_factory
+    chat_id = str(ctx.extra.get("runtime_chat_id") or ctx.chat_id or "")
+    if not session_factory or not chat_id or not ctx.tenant_id or not ctx.user_id:
+        return [], False
+
+    from app.services.runtime_result_reuse_service import RuntimeResultReuseService
+
+    branch_id = ctx.extra.get("runtime_branch_id")
+    history_runs: list[str] = []
+    can_import = False
+    async with session_factory() as session:
+        reuse = RuntimeResultReuseService(session)
+        for source_id in source_ids:
+            offset = 0
+            while True:
+                try:
+                    page = await reuse.list_prior_snapshots(
+                        source_run_id=source_id, current_run_id=run_id, current_chat_id=chat_id,
+                        owner_id=str(ctx.user_id), branch_id=str(branch_id) if branch_id else None,
+                        tenant_id=ctx.tenant_id, user_id=ctx.user_id, offset=offset, limit=50,
+                    )
+                except ResultSnapshotUnavailable:
+                    break
+                except Exception:
+                    logger.exception("Could not check prior result availability for run_id=%s", source_id)
+                    break
+                items = page.get("items") or []
+                if items and offset == 0:
+                    history_runs.append(source_id)
+                can_import = can_import or any(item.get("importable") is True for item in items)
+                next_offset = page.get("next_offset")
+                if can_import or not isinstance(next_offset, int) or next_offset <= offset:
+                    break
+                offset = next_offset
+    return history_runs, can_import
 
 
 async def execute_workspace(call: ToolCall, ctx: ToolContext, facade: Any,

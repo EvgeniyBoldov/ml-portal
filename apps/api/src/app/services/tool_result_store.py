@@ -71,18 +71,22 @@ def _json_values_equal(left: Any, right: Any) -> bool:
     return equivalent(decode(left), decode(right))
 
 
+def create_tool_results_engine() -> AsyncEngine:
+    """Create a Result Store engine owned by the caller's event loop."""
+    return create_async_engine(
+        get_settings().TOOL_RESULTS_DB_URL,
+        pool_pre_ping=True,
+        pool_size=5,
+        max_overflow=10,
+        json_deserializer=lambda value: json.loads(value, parse_float=Decimal),
+    )
+
+
 def get_tool_results_engine() -> AsyncEngine:
     global _engine
     if _engine is None:
-        _engine = create_async_engine(
-            get_settings().TOOL_RESULTS_DB_URL,
-            pool_pre_ping=True,
-            pool_size=5,
-            max_overflow=10,
-            json_deserializer=lambda value: json.loads(value, parse_float=Decimal),
-        )
+        _engine = create_tool_results_engine()
     return _engine
-
 
 async def dispose_tool_results_engine() -> None:
     global _engine

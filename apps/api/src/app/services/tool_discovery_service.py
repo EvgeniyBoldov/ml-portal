@@ -3,12 +3,13 @@ ToolDiscoveryService — сканирование и кеширование ин
 
 Два источника:
 - LOCAL: из ToolRegistry (builtins), привязанные к конкретному local service instance.
-- MCP: из service.remote.mcp ToolInstance. domains берутся из instance.domain.
+- MCP: из service.remote.mcp ToolInstance. Типы данных определяются по связям коннекторов.
 
 Результаты сохраняются в discovered_tools.
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from uuid import UUID
@@ -23,6 +24,7 @@ from app.agents.registry import ToolRegistry
 from app.core.logging import get_logger
 from app.models.discovered_tool import DiscoveredTool
 from app.models.tool_instance import ToolInstance
+from app.repositories.tool_instance_repository import ToolInstanceRepository
 from app.services.instance_capabilities import is_mcp_service_instance
 from app.services.mcp_jsonrpc_client import mcp_list_tools
 
@@ -171,6 +173,32 @@ class ToolDiscoveryService:
             stmt = stmt.where(DiscoveredTool.is_active == is_active)
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+    async def source_types_for(self, tools: Sequence[DiscoveredTool]) -> Dict[UUID, List[str]]:
+        """Describe configured source types without resolving runtime availability."""
+        mcp_provider_ids = {
+            tool.provider_instance_id
+            for tool in tools
+            if tool.source == "mcp" and tool.provider_instance_id is not None
+        }
+        types_by_provider: dict[UUID, set[str]] = defaultdict(set)
+        if mcp_provider_ids:
+            links = await ToolInstanceRepository(self.session).list_linked_data_types(mcp_provider_ids)
+            for provider_id, source_type in links:
+                types_by_provider[provider_id].add(source_type)
+
+        source_types: dict[UUID, list[str]] = {}
+        for tool in tools:
+            provider_id = tool.provider_instance_id
+            if tool.source == "mcp" and provider_id is not None:
+                source_types[tool.id] = sorted(types_by_provider.get(provider_id, ()))
+            elif tool.source == "local" and provider_id is None:
+                source_types[tool.id] = ["system"] if "system" in tool.domains else []
+            elif tool.source == "local" and tool.provider_instance is not None:
+                config = tool.provider_instance.config or {}
+                provider_domain = LocalProviderKind.to_domain(str(config.get("provider_kind") or "").strip().lower())
+                source_types[tool.id] = [provider_domain.removeprefix("collection.")] if provider_domain else []
+        return source_types
 
     async def probe_mcp_provider(self, provider_instance_id: UUID) -> Dict[str, Any]:
         """

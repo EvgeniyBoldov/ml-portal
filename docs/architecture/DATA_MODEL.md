@@ -21,7 +21,7 @@
 └─────────────┘       └─────────────┘
 ```
 
-Lifecycle статусы используются для soft/hard delete процесса (`active` / `deprecated`) и фоновой GC очистки по retention TTL.
+Lifecycle статусы используются для soft/hard delete процесса (`active` / `deprecated`) и фоновой GC очистки по retention TTL. Для агентов hard delete удаляет связанную политику RBAC и запись агента, включая записи в состоянии `deprecated`.
 
 `Users.is_admin` grants access to the platform admin application. Tenant administrator
 and data editor assignments belong to `UserTenants`: tenant administrators manage

@@ -353,7 +353,7 @@ async def test_native_load_rechecks_permissions_and_keeps_same_dataset(workspace
         source="mcp", scope="system", data_instance_id="netbox", data_instance_slug="netbox",
         input_schema={"type": "object"}, target=ProviderExecutionTarget(operation_slug="netbox_get_objects",
             provider_type="mcp", mcp_tool_name="netbox_get_objects", data_instance_id="netbox", data_instance_slug="netbox"))
-    operations = with_workspace_operations([source])
+    operations = with_workspace_operations([source], current_results=await ToolResultStore().list_for_run(**scope))
     ctx = ToolContext(tenant_id=scope["tenant_id"], user_id=scope["user_id"], extra={"runtime_root_run_id": scope["run_id"]})
     executor = type("Executor", (), {"execute": AsyncMock(return_value=ToolResult.ok({"count": 3,
         "results": [{"id": 2}, {"id": 3}], "next": None}))})()

@@ -81,3 +81,14 @@
     flex-direction: column;
   }
 }
+
+@media (max-width: 1024px) {
+  .compactLayout {
+    flex-direction: row;
+    margin: 0;
+  }
+
+  .compactLayout .main {
+    min-height: 0;
+  }
+}

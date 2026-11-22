@@ -8,7 +8,8 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.tool_instance import ToolInstance
+from app.models.collection import CollectionType
+from app.models.tool_instance import ConnectorType, ToolInstance
 
 
 class ToolInstanceRepository:
@@ -73,6 +74,24 @@ class ToolInstanceRepository:
         result = await self.session.execute(stmt)
         
         return list(result.scalars().all()), total
+
+    async def list_linked_data_types(self, provider_ids: set[UUID]) -> list[tuple[UUID, str]]:
+        stmt = (
+            select(ToolInstance.access_via_instance_id, ToolInstance.connector_subtype)
+            .where(
+                ToolInstance.access_via_instance_id.in_(provider_ids),
+                ToolInstance.connector_type == ConnectorType.DATA.value,
+                ToolInstance.connector_subtype.in_((CollectionType.SQL.value, CollectionType.API.value)),
+                ToolInstance.is_active.is_(True),
+            )
+            .distinct()
+        )
+        result = await self.session.execute(stmt)
+        return [
+            (provider_id, subtype)
+            for provider_id, subtype in result.all()
+            if provider_id is not None and subtype is not None
+        ]
 
     async def get_by_slug(self, slug: str) -> Optional[ToolInstance]:
         """Get instance by slug (globally unique in practice)"""

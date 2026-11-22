@@ -31,7 +31,7 @@ const navigation: NavGroup[] = [
     title: 'Платформа',
     items: [
       { path: '/admin/platform', label: 'Настройки', icon: 'sliders' },
-      { path: '/admin/rbac', label: 'RBAC', icon: 'shield' },
+      { path: '/admin/access', label: 'Права доступа', icon: 'shield-check' },
       { path: '/admin/periodic-tasks', label: 'Периодические задачи', icon: 'activity' },
     ],
   },
@@ -87,6 +87,7 @@ export function AdminSidebar() {
                 <li key={item.path}>
                   <NavLink
                     to={item.path}
+                    aria-label={item.label}
                     end={item.path === '/admin'}
                     className={({ isActive: active }) =>
                       `${styles.navItem} ${active || isActive(item.path) ? styles.active : ''}`

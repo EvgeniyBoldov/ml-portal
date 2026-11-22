@@ -1,109 +1,86 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
-from datetime import datetime, timezone
+from collections import deque
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any
 
-from celery import signals
+from celery import Task, signals
 from celery.exceptions import Ignore
-from sqlalchemy import select
 
-from app.models.periodic_task import PeriodicTask
+from app.services.periodic_task_service import PeriodicTaskService, run_event, safe_run_text
 from app.workers.session_factory import get_worker_session
 
 
-_TASK_TIMES: dict[str, float] = {}
+@dataclass
+class ActiveRun:
+    slug: str
+    task_id: str
+    started_at: datetime
+    started: float
+    events: deque[dict[str, str]] = field(default_factory=lambda: deque(maxlen=36))
 
 
-async def _update_start(task_path: str) -> bool:
-    async with get_worker_session() as session:
-        row = (
-            await session.execute(select(PeriodicTask).where(PeriodicTask.task_path == task_path))
-        ).scalar_one_or_none()
-        if row is None:
-            return True
-        if not row.is_enabled:
-            row.last_run_at = datetime.now(timezone.utc)
-            row.last_status = "skipped"
-            await session.flush()
-            await session.commit()
-            return False
-        row.last_run_at = datetime.now(timezone.utc)
-        row.last_status = "running"
-        row.last_error = None
-        await session.flush()
-        await session.commit()
-        return True
+_active_run: ContextVar[ActiveRun | None] = ContextVar("periodic_active_run", default=None)
 
 
-async def _update_success(task_path: str, duration_ms: int | None) -> None:
-    async with get_worker_session() as session:
-        row = (
-            await session.execute(select(PeriodicTask).where(PeriodicTask.task_path == task_path))
-        ).scalar_one_or_none()
-        if row is None:
+class PeriodicRunLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        run = _active_run.get()
+        if run is not None and record.name.startswith("app.") and record.levelno >= logging.INFO:
+            try:
+                run.events.append(run_event(safe_run_text(record.getMessage(), 500), level=record.levelname))
+            except Exception:
+                self.handleError(record)
+
+
+@signals.after_setup_logger.connect
+def _setup_periodic_log_capture(logger: logging.Logger, **_kwargs: Any) -> None:
+    if not any(isinstance(handler, PeriodicRunLogHandler) for handler in logger.handlers):
+        logger.addHandler(PeriodicRunLogHandler())
+
+
+async def _start(slug: str, task_path: str, task_id: str, *, manual: bool) -> tuple[datetime | None, bool]:
+    async with get_worker_session() as session, session.begin():
+        return await PeriodicTaskService(session).start_run(slug, task_path, task_id, manual=manual)
+
+
+async def _finish(run: ActiveRun, status: str, retval: Any) -> None:
+    duration_ms = round((time.monotonic() - run.started) * 1000)
+    async with get_worker_session() as session, session.begin():
+        await PeriodicTaskService(session).finish_run(
+            run.slug, run.task_id, run.started_at, status, duration_ms, retval, list(run.events),
+        )
+
+
+class PeriodicTrackedTask(Task):
+    def before_start(self, task_id: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+        headers = self.request.headers or {}
+        slug = headers.get("periodic_slug")
+        if not isinstance(slug, str) or not slug:
             return
-        row.last_status = "success"
-        row.last_duration_ms = duration_ms
-        row.last_error = None
-        row.last_run_at = datetime.now(timezone.utc)
-        await session.flush()
-        await session.commit()
-
-
-async def _update_failure(task_path: str, error_text: str, duration_ms: int | None) -> None:
-    async with get_worker_session() as session:
-        row = (
-            await session.execute(select(PeriodicTask).where(PeriodicTask.task_path == task_path))
-        ).scalar_one_or_none()
-        if row is None:
-            return
-        row.last_status = "failure"
-        row.last_duration_ms = duration_ms
-        row.last_error = error_text[:2000]
-        row.last_run_at = datetime.now(timezone.utc)
-        await session.flush()
-        await session.commit()
-
-
-@signals.task_prerun.connect
-def periodic_task_prerun(task_id=None, task=None, **kwargs):
-    if task is None:
-        return
-    task_path = str(getattr(task, "name", "") or "").strip()
-    if not task_path:
-        return
-    _TASK_TIMES[task_id] = time.monotonic()
-    req = getattr(task, "request", None)
-    headers = getattr(req, "headers", {}) or {}
-    is_manual = str(headers.get("periodic_manual", "")).strip() == "1"
-    if is_manual:
-        return
-
-    allowed = asyncio.run(_update_start(task_path))
-    if not allowed:
-        raise Ignore()
+        started_at, execute = asyncio.run(
+            _start(slug, self.name, task_id, manual=headers.get("periodic_manual") == "1")
+        )
+        if not execute:
+            raise Ignore()
+        if started_at is not None:
+            _active_run.set(ActiveRun(slug, task_id, started_at, time.monotonic()))
 
 
 @signals.task_postrun.connect
-def periodic_task_postrun(task_id=None, task=None, state=None, **kwargs):
-    if task is None:
+def periodic_task_postrun(task_id: str, state: str | None, retval: Any, **_kwargs: Any) -> None:
+    run = _active_run.get()
+    if run is None or run.task_id != task_id:
         return
-    task_path = str(getattr(task, "name", "") or "").strip()
-    if not task_path:
-        return
-    started = _TASK_TIMES.pop(task_id, None)
-    duration_ms = int((time.monotonic() - started) * 1000) if started else None
-    if str(state).upper() == "SUCCESS":
-        asyncio.run(_update_success(task_path, duration_ms))
-
-
-@signals.task_failure.connect
-def periodic_task_failure(task_id=None, exception=None, traceback=None, sender=None, **kwargs):
-    task_path = str(getattr(sender, "name", "") or "").strip()
-    if not task_path:
-        return
-    started = _TASK_TIMES.pop(task_id, None)
-    duration_ms = int((time.monotonic() - started) * 1000) if started else None
-    error_text = str(exception or "Task failed")
-    asyncio.run(_update_failure(task_path, error_text, duration_ms))
+    _active_run.set(None)
+    status = {
+        "SUCCESS": "success", "FAILURE": "failure", "RETRY": "retry",
+        "IGNORED": "skipped", "REJECTED": "failure",
+    }.get(state)
+    if status:
+        asyncio.run(_finish(run, status, retval))

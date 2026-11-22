@@ -3,24 +3,36 @@
  */
 import { apiRequest } from './http';
 
+export type ToolRisk = 'safe' | 'risky';
+export type ToolResultDelivery = 'direct' | 'store';
+export type ToolSourceType =
+  | 'system'
+  | 'table'
+  | 'document'
+  | 'template'
+  | 'sql'
+  | 'api';
+
 export interface DiscoveredToolListItem {
   id: string;
   tool_id?: string | null;
   slug: string;
   name: string;
   description: string | null;
-  risk_level: string | null;
-  result_delivery: 'direct' | 'store';
+  risk_level: ToolRisk | null;
+  result_delivery: ToolResultDelivery;
   has_observed_data_schema: boolean;
+  runtime_managed?: boolean;
   source: string;
   provider_instance_id: string | null;
   connector_slug: string | null;
   connector_name: string | null;
   domains: string[];
+  source_types: ToolSourceType[];
   is_active: boolean;
   last_seen_at: string | null;
-  created_at: string;
-  updated_at: string;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 export interface DiscoveredToolDetail extends DiscoveredToolListItem {
@@ -31,13 +43,21 @@ export interface DiscoveredToolDetail extends DiscoveredToolListItem {
 
 export interface RescanResponse {
   message: string;
-  stats: Record<string, unknown>;
+  stats: {
+    skipped?: boolean;
+    local_upserted?: number;
+    system_upserted?: number;
+    mcp_upserted?: number;
+    mcp_failed_providers?: { provider_slug: string }[];
+    marked_inactive?: number;
+    deleted_inactive?: number;
+  };
 }
 
 export interface DiscoveredToolUpdateRequest {
   tool_id?: string | null;
-  risk_level?: string | null;
-  result_delivery?: 'direct' | 'store';
+  risk_level?: ToolRisk | null;
+  result_delivery?: ToolResultDelivery;
 }
 
 interface McpProbeToolItem {
@@ -80,19 +100,25 @@ export const discoveredToolsApi = {
     const searchParams = new URLSearchParams();
     if (params?.source) searchParams.set('source', params.source);
     if (params?.domain) searchParams.set('domain', params.domain);
-    if (params?.is_active !== undefined) searchParams.set('is_active', String(params.is_active));
+    if (params?.is_active !== undefined)
+      searchParams.set('is_active', String(params.is_active));
     const qs = searchParams.toString();
     return apiRequest<DiscoveredToolListItem[]>(
       `/admin/discovered-tools${qs ? `?${qs}` : ''}`,
-      { method: 'GET' },
+      { method: 'GET' }
     );
   },
 
   get: async (id: string): Promise<DiscoveredToolDetail> => {
-    return apiRequest<DiscoveredToolDetail>(`/admin/discovered-tools/${id}`, { method: 'GET' });
+    return apiRequest<DiscoveredToolDetail>(`/admin/discovered-tools/${id}`, {
+      method: 'GET',
+    });
   },
 
-  update: async (id: string, data: DiscoveredToolUpdateRequest): Promise<DiscoveredToolDetail> => {
+  update: async (
+    id: string,
+    data: DiscoveredToolUpdateRequest
+  ): Promise<DiscoveredToolDetail> => {
     return apiRequest<DiscoveredToolDetail>(`/admin/discovered-tools/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(data),
@@ -100,20 +126,32 @@ export const discoveredToolsApi = {
   },
 
   probeMcp: async (providerInstanceId: string): Promise<McpProbeResponse> => {
-    const params = new URLSearchParams({ provider_instance_id: providerInstanceId });
-    return apiRequest<McpProbeResponse>(`/admin/discovered-tools/probe-mcp?${params.toString()}`, {
-      method: 'POST',
+    const params = new URLSearchParams({
+      provider_instance_id: providerInstanceId,
     });
+    return apiRequest<McpProbeResponse>(
+      `/admin/discovered-tools/probe-mcp?${params.toString()}`,
+      {
+        method: 'POST',
+      }
+    );
   },
 
   onboardMcp: async (data: McpOnboardRequest): Promise<McpOnboardResponse> => {
-    return apiRequest<McpOnboardResponse>('/admin/discovered-tools/onboard-mcp', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
+    return apiRequest<McpOnboardResponse>(
+      '/admin/discovered-tools/onboard-mcp',
+      {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }
+    );
   },
 
-  rescan: async (data: { include_local?: boolean; provider_instance_id?: string | null } = { include_local: true }): Promise<RescanResponse> => {
+  rescan: async (
+    data: { include_local?: boolean; provider_instance_id?: string | null } = {
+      include_local: true,
+    }
+  ): Promise<RescanResponse> => {
     return apiRequest<RescanResponse>('/admin/discovered-tools/rescan', {
       method: 'POST',
       body: JSON.stringify(data),

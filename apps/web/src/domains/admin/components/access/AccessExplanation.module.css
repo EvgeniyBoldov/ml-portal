@@ -1,0 +1,72 @@
+.result {
+  display: grid;
+  gap: var(--sp-4);
+}
+
+.summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+}
+
+.layers {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.layer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 9rem);
+  align-items: center;
+  gap: var(--sp-3);
+  min-width: 0;
+  padding: var(--sp-3);
+  overflow-wrap: anywhere;
+}
+
+.layer + .layer {
+  border-top: 1px solid var(--border-color);
+}
+
+.layer[data-source='true'] {
+  background: var(--bg-hover);
+}
+
+.identity,
+.decision {
+  display: grid;
+  justify-items: start;
+  gap: var(--sp-1);
+}
+
+.identity span,
+.decision span:not([class]),
+.layer > span,
+.layer a {
+  font-size: var(--font-size-sm);
+}
+
+.identity span,
+.decision span:not([class]),
+.layer > span {
+  color: var(--text-secondary);
+}
+
+.source {
+  font-size: var(--font-size-xs);
+}
+
+@media (max-width: 600px) {
+  .layer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--sp-2);
+  }
+}
+
+.layer a {
+  color: var(--primary);
+}

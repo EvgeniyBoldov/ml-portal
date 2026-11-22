@@ -14,9 +14,12 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.exceptions import RbacRuleNotFoundError, RbacRuleDuplicateError, ValidationError
+from app.core.exceptions import NotFoundError, RbacRuleNotFoundError, RbacRuleDuplicateError, ValidationError
 from app.models.rbac import RbacRule, RbacLevel, ResourceType, RbacEffect
+from app.models.tenant import Tenants
 from app.repositories.rbac_repository import RbacRuleRepository
+from app.repositories.users_repo import AsyncUsersRepository
+from app.schemas.rbac import AccessDecisionLayer, ExplainAccessRequest, ExplainAccessResponse
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -220,6 +223,38 @@ class RbacService:
             user_id, tenant_id, resource_type, resource_id
         )
 
+    async def explain_access(self, request: ExplainAccessRequest) -> ExplainAccessResponse:
+        tenant_id = request.tenant_id
+        owner_names = {}
+        if request.user_id is not None:
+            users = AsyncUsersRepository(self.session)
+            user = await users.get_by_id(request.user_id)
+            if user is None:
+                raise NotFoundError("User not found")
+            owner_names[RbacLevel.USER] = user.login
+            tenant_id = await users.get_default_tenant(user.id)
+
+        if tenant_id is not None:
+            tenant = await self.session.get(Tenants, tenant_id)
+            if tenant is None:
+                raise NotFoundError("Tenant not found")
+            owner_names[RbacLevel.TENANT] = tenant.name
+
+        layers = [
+            AccessDecisionLayer(
+                level=level.value,
+                owner_name=owner_names.get(level),
+                rule_id=rule.id if rule else None,
+                effect=rule.effect if rule else None,
+            )
+            async for level, rule in self.rule_repo.iter_access_rules(
+                request.user_id, tenant_id, request.resource_type.value, request.resource_id
+            )
+        ]
+        layers.append(AccessDecisionLayer(level="default", effect=RbacEffect.DENY))
+        effect = next(layer.effect for layer in layers if layer.effect is not None)
+        return ExplainAccessResponse(effect=effect, layers=layers)
+
     # ─── Auto-create platform deny ────────────────────────────────────
 
     async def ensure_platform_deny(
@@ -266,13 +301,6 @@ class RbacService:
         """
         List rules with enriched data: owner info + resource names.
         """
-        from app.models.agent import Agent
-        from app.models.tool_instance import ToolInstance
-        from app.models.tool import Tool
-        from app.models.collection import Collection
-        from app.models.user import Users
-        from app.models.tenant import Tenants
-
         rules = await self.rule_repo.list_all_rules(
             level=level,
             owner_user_id=owner_user_id,
@@ -286,6 +314,18 @@ class RbacService:
         )
         if not include_deprecated:
             rules = [r for r in rules if getattr(r, "lifecycle_status", "active") != "deprecated"]
+
+        return await self._enrich_rules(rules)
+
+    async def get_enriched_rule(self, rule_id: UUID) -> Dict[str, Any]:
+        return (await self._enrich_rules([await self.get_rule(rule_id)]))[0]
+
+    async def _enrich_rules(self, rules: list[RbacRule]) -> List[Dict[str, Any]]:
+        from app.models.agent import Agent
+        from app.models.tool_instance import ToolInstance
+        from app.models.tool import Tool
+        from app.models.collection import Collection
+        from app.models.user import Users
 
         if not rules:
             return []
@@ -373,6 +413,7 @@ class RbacService:
                     "slug": resource_info.get("slug"),
                 },
                 "effect": rule.effect,
+                "lifecycle_status": rule.lifecycle_status,
                 "created_at": rule.created_at.isoformat(),
                 "created_by_user_id": str(rule.created_by_user_id) if rule.created_by_user_id else None,
                 "created_by_name": created_by_map.get(rule.created_by_user_id) if rule.created_by_user_id else None,

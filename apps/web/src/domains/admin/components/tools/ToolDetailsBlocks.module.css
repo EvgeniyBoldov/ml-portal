@@ -1,0 +1,52 @@
+.stack {
+  display: grid;
+  min-width: 0;
+  gap: var(--sp-4);
+}
+
+.description,
+.hint {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.meta {
+  display: grid;
+  gap: var(--sp-3);
+  margin: 0;
+}
+
+.meta dt {
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.meta dd {
+  margin: var(--sp-1) 0 0;
+  overflow-wrap: anywhere;
+}
+
+.meta a {
+  color: var(--primary);
+}
+
+.meta a:hover,
+.meta a:focus-visible {
+  text-decoration: underline;
+}
+
+.sourceTypes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+}
+
+.field {
+  display: grid;
+  gap: var(--sp-2);
+}

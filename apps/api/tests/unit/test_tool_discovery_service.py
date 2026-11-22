@@ -272,3 +272,35 @@ async def test_load_mcp_providers_filters_non_mcp_services():
 def test_local_provider_kind_includes_templates():
     assert LocalProviderKind.to_domain("local_templates") == "collection.template"
     assert "local_templates" in LocalProviderKind.known_kinds()
+
+
+@pytest.mark.asyncio
+async def test_catalog_source_types_are_scoped_by_provider():
+    session = MagicMock()
+    linked_provider, unlinked_provider, local_provider = uuid4(), uuid4(), uuid4()
+    session.execute = AsyncMock(return_value=SimpleNamespace(
+        all=lambda: [(linked_provider, "sql"), (linked_provider, "api"), (linked_provider, "api")]
+    ))
+    mcp = SimpleNamespace(id=uuid4(), source="mcp", provider_instance_id=linked_provider)
+    same_provider = SimpleNamespace(id=uuid4(), source="mcp", provider_instance_id=linked_provider)
+    unlinked = SimpleNamespace(id=uuid4(), source="mcp", provider_instance_id=unlinked_provider)
+    builtin = SimpleNamespace(id=uuid4(), source="local", provider_instance_id=None, domains=["system"])
+    tables = SimpleNamespace(
+        id=uuid4(), source="local", provider_instance_id=local_provider,
+        provider_instance=SimpleNamespace(config={"provider_kind": "local_tables"}),
+        domains=["collection.table", "collection.document"],
+    )
+
+    result = await ToolDiscoveryService(session).source_types_for([mcp, same_provider, unlinked, builtin, tables])
+
+    assert result == {
+        mcp.id: ["api", "sql"],
+        same_provider.id: ["api", "sql"],
+        unlinked.id: [],
+        builtin.id: ["system"],
+        tables.id: ["table"],
+    }
+    session.execute.assert_awaited_once()
+    query = session.execute.await_args.args[0]
+    assert "tool_instances.is_active IS true" in str(query)
+    assert set(query.compile().params["access_via_instance_id_1"]) == {linked_provider, unlinked_provider}

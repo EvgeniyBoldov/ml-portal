@@ -181,3 +181,21 @@ async def test_restore_restores_entity_and_deprecated_dependencies():
     assert dependent.delete_cascade is False
     assert dependent.deprecated_root_kind is None
     assert dependent.deprecated_root_id is None
+
+
+@pytest.mark.asyncio
+async def test_hard_delete_agent_accepts_deprecated_agent(monkeypatch):
+    from app.services.lifecycle_admin_service import RbacCleanupService
+
+    agent = SimpleNamespace(id=uuid4(), lifecycle_status="deprecated")
+    session = AsyncMock()
+    session.get.return_value = agent
+    remove_rules = AsyncMock(return_value=2)
+    monkeypatch.setattr(RbacCleanupService, "remove_rules_for_resource", remove_rules)
+
+    report = await LifecycleAdminService(session).hard_delete("agent", agent.id)
+
+    assert report.lifecycle_status == "deleted"
+    assert report.rbac_rules_removed == 2
+    remove_rules.assert_awaited_once_with(resource_type="agent", resource_id=agent.id)
+    session.delete.assert_awaited_once_with(agent)

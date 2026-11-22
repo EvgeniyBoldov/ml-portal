@@ -84,6 +84,7 @@
 }
 
 .jsonDisplaySimple code {
+  overflow-wrap: anywhere;
   background: transparent;
   color: inherit;
   font-family: inherit;

@@ -56,7 +56,7 @@ export default function MemoryJobPage() {
   const trace = rawTrace;
   const selectedTarget = target ? resolveTraceInspectionTarget(trace, target.key) ?? target : null;
   const title = job?.document_title || job?.document_filename || 'Извлечение памяти';
-  const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: 'Мемори', href: '/admin/agent-runs?tab=memory' }, { label: title }];
+  const breadcrumbs: BreadcrumbItem[] = [{ label: 'Запуски агентов', href: '/admin/agent-runs' }, { label: title }];
   return (
     <EntityPageV2 title={title} subtitle={job?.trace_run_id || 'Ожидание запуска'} mode="view" breadcrumbs={breadcrumbs} backPath="/admin/agent-runs" loading={isLoading}
       headerActions={<Button onClick={() => downloadTraceLog(rawTrace, [], traceElapsedMs(rawTrace))} disabled={!job?.events.length}>Скачать лог</Button>}>

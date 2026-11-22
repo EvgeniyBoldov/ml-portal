@@ -9,7 +9,7 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
-from app.models.model_registry import Model
+from app.models.model_registry import Model, ModelType
 from app.models.tool_instance import ToolInstance
 from app.services.health.base import (
     HealthCheckAdapter,
@@ -23,6 +23,11 @@ from app.services.health.base import (
 logger = get_logger(__name__)
 
 T = TypeVar("T", bound=Union[ToolInstance, Model])
+
+
+def _model_target_type(model_type: ModelType | str) -> str:
+    value = model_type.value if isinstance(model_type, ModelType) else model_type
+    return f"{value}_model"
 
 
 class HealthCheckEngine:
@@ -186,7 +191,7 @@ class HealthCheckEngine:
     
     def _get_adapter_for_model(self, model: Model) -> Optional[HealthCheckAdapter]:
         """Get adapter for a model."""
-        return self._adapters.get(f"{model.type}_model")
+        return self._adapters.get(_model_target_type(model.type))
     
     async def _update_tool_instance_health(
         self,
@@ -234,7 +239,7 @@ class HealthCheckEngine:
             model.last_error = result.error
         
         # Calculate next check time
-        model_type = f"{model.type}_model"
+        model_type = _model_target_type(model.type)
         policy = self._policies.get(model_type, BACKOFF_POLICY_1M)
         status = HealthStatus.HEALTHY if result.is_healthy() else HealthStatus.UNHEALTHY
         next_check = policy.compute_next_check(status, model.consecutive_failures, now)

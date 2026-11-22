@@ -1,182 +1,169 @@
-import { useMemo } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 
-import { periodicTasksApi, qk, type PeriodicTask } from '@/shared/api';
-import { EntityPageV2, Tab, Badge, Button, DataTable, type DataTableColumn } from '@/shared/ui';
-import { useErrorToast, useSuccessToast } from '@/shared/ui/Toast';
+import { qk } from '@/shared/api/keys';
+import {
+  periodicTasksApi,
+  type PeriodicTask,
+} from '@/shared/api/periodicTasks';
+import {
+  Badge,
+  Button,
+  DataTable,
+  EntityPageV2,
+  Input,
+  Tab,
+  type DataTableColumn,
+} from '@/shared/ui';
+import {
+  categories,
+  formatSchedule,
+  formatTimestamp,
+  PERIODIC_TASKS_PATH,
+  scheduleStatus,
+  scheduleStatuses,
+} from '../components/periodicTasks/periodicTaskLabels';
+import styles from './PeriodicTasksPage.module.css';
 
-function formatSchedule(schedule: Record<string, unknown>): string {
-  const type = String(schedule.type || 'unknown');
-  if (type === 'interval') return `every ${String(schedule.seconds || '?')}s`;
-  if (type === 'crontab') {
-    return `${String(schedule.minute ?? '*')} ${String(schedule.hour ?? '*')} ${String(schedule.day_of_month ?? '*')} ${String(schedule.month_of_year ?? '*')} ${String(schedule.day_of_week ?? '*')}`;
-  }
-  return JSON.stringify(schedule);
+function TaskLink({ task }: { task: PeriodicTask }) {
+  const [params] = useSearchParams();
+  const query = params.get('q');
+  const search = query ? `?${new URLSearchParams({ q: query })}` : '';
+  return (
+    <Link
+      to={`${PERIODIC_TASKS_PATH}/${encodeURIComponent(task.slug)}${search}`}
+    >
+      {task.name}
+    </Link>
+  );
 }
 
-function formatDate(value?: string | null): string {
-  if (!value) return '—';
-  return new Date(value).toLocaleString('ru-RU');
-}
-
-function statusTone(status?: string | null): 'neutral' | 'success' | 'warn' | 'danger' | 'info' {
-  if (!status) return 'neutral';
-  if (status === 'success') return 'success';
-  if (status === 'running' || status === 'queued') return 'info';
-  if (status === 'failure') return 'danger';
-  if (status === 'skipped') return 'warn';
-  return 'neutral';
-}
-
-const STATUS_OPTIONS = [
-  { value: '', label: 'Все' },
-  { value: 'success', label: 'success' },
-  { value: 'running', label: 'running' },
-  { value: 'queued', label: 'queued' },
-  { value: 'failure', label: 'failure' },
-  { value: 'skipped', label: 'skipped' },
+const columns: DataTableColumn<PeriodicTask>[] = [
+  {
+    key: 'name',
+    label: 'Задача',
+    width: '48%',
+    sortable: true,
+    sortValue: row => row.name,
+    render: row => (
+      <div className={styles.task}>
+        <TaskLink task={row} />
+        {row.description && <span>{row.description}</span>}
+      </div>
+    ),
+  },
+  {
+    key: 'schedule',
+    label: 'Расписание',
+    render: row =>
+      row.is_orphaned ? '—' : formatSchedule(row.default_schedule),
+  },
+  {
+    key: 'enabled',
+    label: 'Статус расписания',
+    sortable: true,
+    sortValue: row => scheduleStatus(row).label,
+    filter: {
+      kind: 'select',
+      options: scheduleStatuses.map(({ value, label }) => ({ value, label })),
+      getValue: row => scheduleStatus(row).value,
+    },
+    render: row => {
+      const status = scheduleStatus(row);
+      return <Badge tone={status.tone}>{status.label}</Badge>;
+    },
+  },
+  {
+    key: 'last_run',
+    label: 'Последний запуск',
+    sortable: true,
+    sortValue: row => row.last_run_at ?? '',
+    render: row => formatTimestamp(row.last_run_at),
+  },
 ];
 
-export default function PeriodicTasksPage() {
-  const queryClient = useQueryClient();
-  const showError = useErrorToast();
-  const showSuccess = useSuccessToast();
+function matchesTask(task: PeriodicTask, query: string) {
+  const searchable = [
+    task.name,
+    task.description,
+    task.slug,
+    categories[task.category],
+    task.category,
+    scheduleStatus(task).label,
+    formatSchedule(task.default_schedule),
+  ]
+    .join(' ')
+    .toLowerCase()
+    .replace(/ё/g, 'е');
+  return query
+    .trim()
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .split(/\s+/)
+    .every(word => searchable.includes(word));
+}
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
+export default function PeriodicTasksPage() {
+  const [params, setParams] = useSearchParams();
+  const search = params.get('q') ?? '';
+  const list = useQuery({
     queryKey: qk.periodicTasks.list(),
     queryFn: () => periodicTasksApi.list(),
     refetchInterval: 5000,
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: ({ slug, enabled }: { slug: string; enabled: boolean }) => periodicTasksApi.toggle(slug, enabled),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.periodicTasks.all() });
-      showSuccess('Статус задачи обновлен');
-    },
-    onError: (e: Error) => showError(e.message || 'Не удалось изменить статус задачи'),
-  });
-
-  const runNowMutation = useMutation({
-    mutationFn: (slug: string) => periodicTasksApi.runNow(slug),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: qk.periodicTasks.all() });
-      showSuccess('Задача отправлена в выполнение');
-    },
-    onError: (e: Error) => showError(e.message || 'Не удалось запустить задачу'),
-  });
-
-  const columns: DataTableColumn<PeriodicTask>[] = useMemo(() => [
-    {
-      key: 'slug',
-      label: 'Slug',
-      sortable: true,
-      filter: { kind: 'text', placeholder: 'Фильтр slug...' },
-      sortValue: (row) => row.slug,
-      render: (row) => <code>{row.slug}</code>,
-    },
-    {
-      key: 'category',
-      label: 'Категория',
-      sortable: true,
-      filter: { kind: 'text', placeholder: 'Фильтр категории...' },
-      sortValue: (row) => row.category,
-      render: (row) => <Badge tone="neutral">{row.category}</Badge>,
-    },
-    {
-      key: 'schedule',
-      label: 'Расписание',
-      sortable: true,
-      sortValue: (row) => formatSchedule(row.default_schedule || {}),
-      render: (row) => formatSchedule(row.default_schedule || {}),
-    },
-    {
-      key: 'enabled',
-      label: 'Статус',
-      sortable: true,
-      filter: {
-        kind: 'select',
-        options: [
-          { value: '', label: 'Все' },
-          { value: 'true', label: 'Включена' },
-          { value: 'false', label: 'Выключена' },
-        ],
-        match: 'equals',
-        getValue: (row) => String(Boolean(row.is_enabled)),
-      },
-      sortValue: (row) => Number(Boolean(row.is_enabled)),
-      render: (row) => <Badge tone={row.is_enabled ? 'success' : 'warn'}>{row.is_enabled ? 'Включена' : 'Выключена'}</Badge>,
-    },
-    {
-      key: 'last_run',
-      label: 'Последний запуск',
-      sortable: true,
-      sortValue: (row) => row.last_run_at ?? '',
-      render: (row) => formatDate(row.last_run_at),
-    },
-    {
-      key: 'last_status',
-      label: 'Результат',
-      sortable: true,
-      filter: {
-        kind: 'select',
-        options: STATUS_OPTIONS,
-        match: 'equals',
-        getValue: (row) => row.last_status ?? '',
-      },
-      sortValue: (row) => row.last_status ?? '',
-      render: (row) => <Badge tone={statusTone(row.last_status)}>{row.last_status || '—'}</Badge>,
-    },
-    {
-      key: 'last_duration_ms',
-      label: 'Длительность',
-      sortable: true,
-      sortValue: (row) => row.last_duration_ms ?? -1,
-      render: (row) => row.last_duration_ms != null ? `${row.last_duration_ms}ms` : '—',
-    },
-    {
-      key: 'actions',
-      label: 'Действия',
-      render: (row) => (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            variant="outline"
-            onClick={() => runNowMutation.mutate(row.slug)}
-            disabled={runNowMutation.isPending || row.is_orphaned}
-          >
-            Старт
-          </Button>
-          <Button
-            variant={row.is_enabled ? 'danger' : 'success'}
-            onClick={() => toggleMutation.mutate({ slug: row.slug, enabled: !row.is_enabled })}
-            disabled={toggleMutation.isPending}
-          >
-            {row.is_enabled ? 'Выключить' : 'Включить'}
-          </Button>
-        </div>
-      ),
-    },
-  ], [runNowMutation, toggleMutation]);
-
   return (
-    <EntityPageV2 title="Периодические задачи" mode="view" loading={isLoading} breadcrumbs={[{ label: 'Периодические задачи' }]}>
+    <EntityPageV2
+      title="Периодические задачи"
+      mode="view"
+      breadcrumbs={[{ label: 'Периодические задачи' }]}
+    >
       <Tab
-        title="Список"
+        title="Задачи"
         layout="full"
         actions={[
-          <Button key="refresh" variant="outline" onClick={() => refetch()} disabled={isFetching}>
-            {isFetching ? 'Обновление...' : 'Обновить'}
-          </Button>,
+          <div className={styles.headerControls} key="task-controls">
+            <Input
+              className={styles.search}
+              type="search"
+              aria-label="Поиск периодических задач"
+              placeholder="Поиск по задачам…"
+              value={search}
+              onChange={event => {
+                const next = new URLSearchParams(params);
+                if (event.target.value) next.set('q', event.target.value);
+                else next.delete('q');
+                setParams(next, { replace: true });
+              }}
+            />
+            <Button
+              variant="outline"
+              onClick={() => void list.refetch()}
+              loading={list.isFetching}
+            >
+              Обновить
+            </Button>
+          </div>,
         ]}
       >
-        <DataTable
-          columns={columns}
-          data={data?.items ?? []}
-          keyField="slug"
-          searchable
-          searchPlaceholder="Поиск по задачам..."
-          emptyText="Периодические задачи не найдены"
-        />
+        {list.isError && (
+          <p role="alert">Не удалось загрузить задачи. Нажмите «Обновить».</p>
+        )}
+        {!list.isError && (
+          <div className={styles.table}>
+            <DataTable
+              columns={columns}
+              data={list.data?.items ?? []}
+              keyField="slug"
+              loading={list.isPending}
+              searchable
+              searchControl="external"
+              searchValue={search}
+              searchFilter={matchesTask}
+              emptyText="Периодические задачи не найдены"
+            />
+          </div>
+        )}
       </Tab>
     </EntityPageV2>
   );

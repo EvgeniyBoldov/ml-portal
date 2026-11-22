@@ -427,7 +427,7 @@ def rescan_discovery(self: Task) -> Dict[str, Any]:
                             "tools_updated": scan_result.get("mcp_upserted", 0),
                             "tools_removed": scan_result.get("marked_inactive", 0),
                             "scan_meta": scan_result,
-                            "success": True
+                            "success": not scan_result.get("mcp_failed_providers")
                         })
                         
                         logger.info(f"Discovery rescan for {instance.slug}: {scan_result}")
