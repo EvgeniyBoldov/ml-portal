@@ -38,7 +38,7 @@ async def test_sandbox_overrides_cannot_disable_actor_limits():
 
 @pytest.mark.asyncio
 async def test_model_transport_limits_allow_zero_retries():
-    result = SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(request_timeout_s=75, max_retries=0))
+    result = SimpleNamespace(scalar_one_or_none=lambda: SimpleNamespace(request_timeout_s=75, max_retries=0, context_window_tokens=None))
     service = RuntimeLimitsService(SimpleNamespace(execute=AsyncMock(return_value=result)))
     assert await service.resolve_model("local") == ModelCallLimits(request_timeout_s=75, max_retries=0)
 

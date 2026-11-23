@@ -1,3 +1,7 @@
+import json
+
+import pytest
+
 from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
 from app.agents.protocol import build_tools_payload
 from app.agents.runtime.prompt_contract import build_prompt_input_schema
@@ -76,3 +80,82 @@ def test_jira_subtasks_are_requested_as_fields_not_include_sections():
     description = build_prompt_operation_description(operation)
     assert "not an include value" in description
     assert "missing or null subtasks" in description
+
+
+def test_both_calling_modes_keep_targets_and_nested_schema_references() -> None:
+    from jsonschema import Draft202012Validator
+    from app.agents.runtime.prompt_assembler import PromptAssembler
+
+    operation = _operation()
+    operation.input_schema = {
+        "type": "object",
+        "properties": {"filter": {"$ref": "#/$defs/Filter"}},
+        "$defs": {"Filter": {"type": "object", "required": ["name"]}},
+    }
+    operations = [operation.model_copy(update={"collection_slug": f"target-{index}"}) for index in range(25)]
+    declarations = build_tools_payload(operations)
+    assert PromptAssembler().assemble_operation_schemas(operations) == declarations
+    parameters = declarations[0]["function"]["parameters"]
+    assert "target-24" in parameters["properties"]["collection_slug"]["enum"]
+    validator = Draft202012Validator(parameters)
+    assert validator.is_valid({"collection_slug": "target-24", "filter": {"name": "example"}})
+    assert not validator.is_valid({"collection_slug": "target-24", "filter": {}})
+
+
+@pytest.mark.parametrize("resource_id", [None, "https://example.invalid/shared-schema"])
+def test_different_collection_schemas_validate_calls_in_both_modes(resource_id: str | None) -> None:
+    from jsonschema import Draft202012Validator
+
+    from app.agents.protocol import parse_llm_response, parse_native_tool_calls
+    from app.agents.runtime.prompt_assembler import PromptAssembler
+
+    def schema(key, value_type):
+        result = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {key: {"$ref": f"{resource_id or ''}#/$defs/Value"}},
+            "required": [key],
+            "$defs": {"Value": {"type": value_type}},
+        }
+        if resource_id:
+            result["$id"] = resource_id
+        return result
+
+    first = _operation().model_copy(update={"input_schema": schema("query", "string")})
+    second = first.model_copy(update={
+        "collection_slug": "inventory",
+        "input_schema": schema("port", "integer"),
+    })
+    third = second.model_copy(update={"collection_slug": "inventory-copy"})
+    operations = [first, second, third]
+    declarations = build_tools_payload(operations)
+    assert PromptAssembler().assemble_operation_schemas(operations) == declarations
+    function = declarations[0]["function"]
+    parameters = function["parameters"]
+    assert parameters["required"] == ["collection_slug"]
+    assert parameters["properties"]["collection_slug"]["enum"] == ["atlant", "inventory", "inventory-copy"]
+    assert len(parameters["anyOf"]) == 2
+    Draft202012Validator.check_schema(parameters)
+    validator = Draft202012Validator(parameters)
+
+    for args, valid in [
+        ({"collection_slug": "atlant", "query": "router"}, True),
+        ({"collection_slug": "inventory", "port": 1}, True),
+        ({"collection_slug": "inventory-copy", "port": 0}, True),
+        ({"collection_slug": "inventory", "port": "1"}, False),
+        ({"collection_slug": "inventory", "query": "router"}, False),
+        ({"collection_slug": "atlant", "query": "router", "port": 1}, False),
+        ({"collection_slug": "atlant"}, False),
+        ({"port": 1}, False),
+        ({"collection_slug": "other", "port": 1}, False),
+    ]:
+        text_call = json.dumps({"tool": function["name"], "arguments": args})
+        text_parsed = parse_llm_response(text_call)
+        native_parsed = parse_native_tool_calls({
+            "choices": [{"message": {"tool_calls": [{"id": "call-1", "function": {
+                "name": function["name"], "arguments": json.dumps(args),
+            }}]}}],
+        })
+        assert native_parsed is not None
+        assert validator.is_valid(text_parsed.tool_calls[0].arguments) == valid
+        assert validator.is_valid(native_parsed.tool_calls[0].arguments) == valid

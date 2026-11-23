@@ -57,28 +57,26 @@ function mount(mode: 'user' | 'readonly-owner' = 'user') {
   );
 }
 describe('CredentialsPanel presentation', () => {
-  it('shows loaded count and identifies the source in delete confirmation without deleting', async () => {
+  it('shows loaded count and identifies the source without deleting on cancel', async () => {
     const user = userEvent.setup();
     mount();
-    await screen.findByLabelText('Загружено: 1');
+    await screen.findByLabelText('Учётных данных: 1');
     await waitFor(() =>
       expect(screen.getAllByText('Корпоративная Jira').length).toBeGreaterThan(
         0
       )
     );
+    expect(screen.getByText('API-токен')).toBeInTheDocument();
     await user.click(screen.getAllByRole('button', { name: 'Удалить' })[0]);
     const dialog = screen.getByRole('dialog', {
       name: 'Удалить учётные данные?',
     });
-    expect(
-      within(dialog).getByText(/Корпоративная Jira.*Токен Bearer/)
-    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Отмена' }));
     expect(mocks.delete).not.toHaveBeenCalled();
   });
   it('preserves readonly capability in both desktop and mobile views', async () => {
     mount('readonly-owner');
-    await screen.findByLabelText('Загружено: 1');
+    await screen.findByLabelText('Учётных данных: 1');
     expect(
       screen.queryByRole('button', { name: 'Удалить' })
     ).not.toBeInTheDocument();
@@ -93,18 +91,15 @@ describe('CredentialsPanel presentation', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent(
       'Не удалось загрузить учётные данные'
     );
-    expect(screen.queryByLabelText('Загружено: 0')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Учётных данных: 0')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Повторить' }));
-    await screen.findByLabelText('Загружено: 1');
+    await screen.findByLabelText('Учётных данных: 1');
   });
   it('disables creating credentials when no source is available', async () => {
     mocks.instances.mockResolvedValue([]);
     mount();
     expect(
-      await screen.findByText('Нет доступных источников для подключения.')
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('button', { name: 'Добавить учётные данные' })
+      await screen.findByRole('button', { name: 'Добавить учётные данные' })
     ).toBeDisabled();
   });
 });

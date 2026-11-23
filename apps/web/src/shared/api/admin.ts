@@ -715,12 +715,6 @@ export const adminApi = {
   async rejectShadowMemoryCandidate(id: string, reason: string): Promise<ShadowMemoryCandidate> {
     return apiRequest(`/admin/memory/staging/candidates/${id}/reject`, { method: 'POST', body: JSON.stringify({ reason }) });
   },
-  async getRetryableShadowSnapshots(): Promise<Array<{ snapshot_id: string; document_title: string; status: string; attempt_number: number | null }>> {
-    return apiRequest('/admin/memory/staging/retryable-snapshots');
-  },
-  async reextractShadowMemorySnapshot(id: string): Promise<{ snapshot_id: string; attempt_id: string; attempt_number: number; status: string }> {
-    return apiRequest(`/admin/memory/staging/snapshots/${id}/reextract`, { method: 'POST' });
-  },
   async getMemoryScopeProposals(status: 'pending' | 'needs_review' | 'awaiting_term' | 'approved' | 'rejected' = 'pending', params: { limit?: number; offset?: number } = {}): Promise<MemoryScopeProposalAdminItem[]> {
     const search = new URLSearchParams({ status });
     if (params.limit !== undefined) search.set('limit', String(params.limit));

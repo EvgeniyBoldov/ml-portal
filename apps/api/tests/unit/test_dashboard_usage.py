@@ -1,4 +1,4 @@
-"""Accounting is independent of diagnostics and excludes sandbox at admission."""
+"""Accounting is independent of diagnostics and admits known runtime origins (chat, shadow, sandbox, worker)."""
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -12,12 +12,32 @@ from app.services.runtime_event_logger import RuntimeEventLogger, RuntimeLogCont
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("origin", ["sandbox", "worker", "health", "unknown"])
-async def test_nonproduction_origins_never_open_accounting_session(origin):
+@pytest.mark.parametrize("origin", ["health", "unknown"])
+async def test_nonruntime_origins_never_open_accounting_session(origin):
     factory = Mock(side_effect=AssertionError("must not access database"))
     context = SimpleNamespace(origin=origin, user_id=uuid4())
     await record_usage(context, "llm_response", {"entity_id": str(uuid4())}, factory)
     factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["chat", "shadow", "sandbox", "worker"])
+async def test_runtime_origins_open_accounting_session(origin, monkeypatch):
+    upsert = AsyncMock()
+    monkeypatch.setattr("app.services.platform_usage_service.PlatformUsageRepository", lambda _: SimpleNamespace(upsert=upsert))
+
+    @asynccontextmanager
+    async def transaction():
+        yield
+
+    @asynccontextmanager
+    async def session():
+        yield SimpleNamespace(begin=transaction)
+
+    context = SimpleNamespace(origin=origin, user_id=uuid4(), run_id=uuid4())
+    await record_usage(context, "run_start", {"entity_id": str(context.run_id)}, session)
+    upsert.assert_awaited_once()
+    assert upsert.await_args.args[0]["entity_id"] == str(context.run_id)
 
 
 @pytest.mark.asyncio

@@ -47,12 +47,7 @@ def test_jira_tools_are_bounded_and_write_tools_are_not_read_only():
     assert names["jira_search_issues"]["annotations"]["readOnlyHint"] is True
     assert names["jira_create_issue"]["annotations"]["readOnlyHint"] is False
     assert names["jira_get_issue"]["inputSchema"]["x-runtime"]["risk_level"] == "safe"
-    assert names["jira_create_issue"]["inputSchema"]["x-runtime"] == {
-        "risk_level": "write",
-        "side_effects": True,
-        "requires_confirmation": True,
-        "credential_scope": "user",
-    }
+    assert names["jira_create_issue"]["inputSchema"]["x-runtime"] == {"risk_level": "risky"}
     assert jira_server._limit(9999) == jira_server.MAX_RESULTS
 
 
@@ -61,7 +56,7 @@ def test_issue_key_is_url_encoded_before_becoming_a_path_segment():
 
 
 def test_jira_mcp_error_log_message_redacts_credentials():
-    message = jira_server._safe_error_message(
+    message = jira_server.safe_error_detail(
         ValueError('Broker failed: token="secret-token" password=secret-password Authorization: Bearer abc123')
     )
 

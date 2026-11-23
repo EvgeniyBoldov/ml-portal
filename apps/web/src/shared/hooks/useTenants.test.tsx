@@ -31,8 +31,8 @@ describe('useTenants', () => {
     });
 
     await act(async () => { await result.current.fetchNextPage(); });
+    await waitFor(() => expect(result.current.tenants.map(row => row.id)).toEqual(['1', '2']));
 
-    expect(result.current.tenants.map(row => row.id)).toEqual(['1', '2']);
     expect(mocks.getTenants).toHaveBeenNthCalledWith(2, {
       page: 2, size: 100, search: 'Operations', include_deprecated: true,
     });

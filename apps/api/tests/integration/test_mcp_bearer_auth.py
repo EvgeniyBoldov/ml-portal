@@ -22,6 +22,14 @@ def mcp(monkeypatch):
     session = AsyncMock()
     app.dependency_overrides[db_session] = lambda: session
     user_id, tenant_id = uuid4(), uuid4()
+    # Bearer auth resolves the JWT subject against the real user store.
+    from app.services import bearer_authentication_service
+    auth_session = AsyncMock()
+    auth_session.__aenter__.return_value = auth_session
+    auth_session.get.return_value = SimpleNamespace(id=user_id, email="mcp@example.test", is_enabled=True, is_admin=False)
+    auth_session.execute.return_value.scalars.return_value.all.return_value = []
+    monkeypatch.setattr(bearer_authentication_service, "get_session_factory", lambda: lambda: auth_session)
+    monkeypatch.setattr(bearer_authentication_service, "ApiTokensRepository", lambda session: SimpleNamespace(active_tenant_ids=AsyncMock(return_value=[str(tenant_id)])))
     token = create_access_token(str(user_id), "mcp@example.test", "reader", [], [])
     monkeypatch.setattr(module, "resolve_active_user_tenant_ids", AsyncMock(return_value=[tenant_id]))
     ping = AsyncMock(return_value={})

@@ -13,7 +13,8 @@ def test_native_prompt_keeps_usage_but_does_not_repeat_tool_contracts():
     collection = SimpleNamespace(collection_slug="inventory", slug="inventory", name="Inventory",
         collection_type="api", usage_purpose="Read devices", data_description="Device inventory",
         usage_rules="List objects; search only by non-empty text.", remote_tables=[],
-        schema_fields=[{"name": "examples", "type": "json"}])
+        schema_fields=[{"name": "examples", "type": "json"},
+                       {"name": "hostname", "type": "string", "filterable": True}])
     operation = SimpleNamespace(scope="collection", collection_slug="inventory",
         operation="get_devices", operation_slug="collection.inventory.get_devices", name="Devices",
         description="UNIQUE_TOOL_DESCRIPTION", published=None,
@@ -29,6 +30,8 @@ def test_native_prompt_keeps_usage_but_does_not_repeat_tool_contracts():
     assert "UNIQUE_SYSTEM_DESCRIPTION" not in prompt
     assert "вход:" not in prompt
     assert "метаданные каталога" in prompt
+    assert "`hostname`" in prompt
+    assert "`examples`" not in prompt
     assert "result.describe" in prompt
     assert "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА" in prompt
     assert "Не отвечай по памяти" in prompt

@@ -20,6 +20,7 @@ def _user(**overrides):
         "email": None,
         "full_name": None,
         "role": "reader",
+        "is_admin": False,
         "is_active": True,
         "auth_provider": "local",
         "deactivated_reason": None,

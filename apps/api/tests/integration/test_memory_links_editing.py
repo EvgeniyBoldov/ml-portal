@@ -53,11 +53,11 @@ async def db():
 
 
 async def seed(db, *, resolved=True):
-    old = MemoryScope(scope_type="team", key="team.old", name="Old team")
-    team = MemoryScope(scope_type="team", key="team.ops", name="Operations")
-    project = MemoryScope(scope_type="project", key="project.test", name="Test project")
+    old = MemoryScope(scope_type="project", key="old", name="Old operations")
+    operations = MemoryScope(scope_type="project", key="ops", name="Operations")
+    project = MemoryScope(scope_type="project", key="test", name="Test project")
     term = GlossaryTerm(canonical_term="Network", normalized_term="network", definition="Synthetic definition")
-    db.add_all([old, team, project, term])
+    db.add_all([old, operations, project, term])
     await db.flush()
     content = {"statement": "Record equipment", "effect": "require", "conditions": ["Before changes"]}
     item = MemoryItem(scope="company", item_type="rule", subject="Equipment", normalized_subject="equipment",
@@ -92,69 +92,61 @@ async def seed(db, *, resolved=True):
             claims.append(claim)
         candidates.append(candidate)
     await db.commit()
-    return item, old, team, project, term, candidates, claims
+    return item, old, operations, project, term, candidates, claims
 
 
 @pytest.mark.asyncio
 async def test_published_atom_updates_all_sources_and_runtime_filter_without_changing_evidence(db):
-    item, old, team, project, term, candidates, claims = await seed(db)
+    item, old, operations, project, term, candidates, claims = await seed(db)
     visibility = [claim.visibility_tenant_id for claim in claims]
     await MemoryLinksService(db).update_item(item_id=item.id, actor_id=uuid4(),
-        scope_ids=[team.id, project.id], glossary_term_ids=[term.id])
+        scope_ids=[operations.id, project.id], glossary_term_ids=[term.id])
     await db.commit()
     for candidate, claim, tenant_id in zip(candidates, claims, visibility):
         bindings = (await db.execute(select(MemoryCandidateScope.scope_id, MemoryCandidateScope.status)
                                      .where(MemoryCandidateScope.candidate_id == candidate.id))).all()
-        assert dict(bindings) == {old.id: "rejected", team.id: "confirmed", project.id: "confirmed"}
-        assert set(await db.scalars(select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == claim.id))) == {team.id, project.id}
+        assert dict(bindings) == {old.id: "rejected", operations.id: "confirmed", project.id: "confirmed"}
+        assert set(await db.scalars(select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == claim.id))) == {operations.id, project.id}
         assert candidate.related_entities == [{"type": "system", "name": "Synthetic system"},
             {"type": "glossary_term", "id": str(term.id), "name": "Network"}]
         assert candidate.resolution_status == "resolved" and candidate.visibility_tenant_id == tenant_id
         assert claim.content == item.content and claim.evidence_section_ids == ["s1"]
         assert claim.visibility_tenant_id == tenant_id and claim.applicability == item.applicability
-        assert claim.scope_signature == item.scope_signature == _scope_signature([team, project])
+        assert claim.scope_signature == item.scope_signature == _scope_signature([operations, project])
     assert item.content_text == "Synthetic content" and item.visibility == {"mode": "source"}
-    for keys, expected in [(["team.old"], set()), (["team.ops", "project.test"], {claim.id for claim in claims})]:
+    for keys, expected in [(["old"], set()), (["ops", "test"], {claim.id for claim in claims})]:
         assert set(await db.scalars(select(MemoryClaim.id).join(MemoryItem, MemoryItem.id == MemoryClaim.memory_item_id).where(
             applicable_claim(project_ids=[], scope_keys=keys, tenant_id=None)))) == expected
     assert len(list(await db.scalars(select(MemoryCandidateDecision)))) == 2
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("project_branch", ["empty", "all", "concrete", "no_scopes"])
-async def test_project_selection_distinguishes_all_concrete_and_non_project_memory(db, project_branch):
-    item, _, team, project, _, _, claims = await seed(db)
-    all_projects = MemoryScope(scope_type="project", key="project.all", name="All projects", is_all=True)
-    db.add(all_projects)
-    await db.flush()
-    selected = [] if project_branch == "no_scopes" else [team.id]
-    if project_branch == "all":
-        selected.append(all_projects.id)
-    elif project_branch == "concrete":
-        selected.append(project.id)
+@pytest.mark.parametrize("scope_keys", [[], ["ops"], ["test"], ["ops", "test"]])
+async def test_scope_selection_uses_exact_flat_slugs(db, scope_keys):
+    item, _, operations, project, _, _, claims = await seed(db)
+    scopes = {scope.key: scope.id for scope in (operations, project)}
     await MemoryLinksService(db).update_item(item_id=item.id, actor_id=uuid4(),
-        scope_ids=selected, glossary_term_ids=[])
+        scope_ids=[scopes[key] for key in scope_keys], glossary_term_ids=[])
     await db.commit()
-    for keys, expected in [(["team.ops"], project_branch in {"empty", "no_scopes"}),
-                           (["team.ops", "project.test"], project_branch in {"all", "concrete"}),
-                           (["team.ops", "project.other"], project_branch == "all")]:
+    for selected in ([], ["ops"], ["test"], ["other"], ["test", "other"]):
         visible = set(await db.scalars(select(MemoryClaim.id).join(MemoryItem, MemoryItem.id == MemoryClaim.memory_item_id)
-            .where(MemoryItem.id == item.id, applicable_claim(project_ids=[], scope_keys=keys, tenant_id=None))))
-        assert visible == ({claim.id for claim in claims} if expected else set())
+            .where(MemoryItem.id == item.id, applicable_claim(project_ids=[], scope_keys=selected, tenant_id=None))))
+        matches = bool(set(scope_keys).intersection(selected)) or not (scope_keys or selected)
+        assert visible == ({claim.id for claim in claims} if matches else set())
 
 
 @pytest.mark.asyncio
 async def test_identity_collision_rejects_edit_without_altering_bindings(db):
-    item, old, team, _, _, _, claims = await seed(db)
+    item, old, operations, _, _, _, claims = await seed(db)
     duplicate = MemoryItem(scope="company", item_type=item.item_type, subject=item.subject,
-        normalized_subject=item.normalized_subject, scope_signature=_scope_signature([team]),
+        normalized_subject=item.normalized_subject, scope_signature=_scope_signature([operations]),
         content=item.content, content_text=item.content_text)
     db.add(duplicate)
     await db.commit()
     item_id, claim_id, old_id = item.id, claims[0].id, old.id
     with pytest.raises(ValueError, match="уже существует"):
         await MemoryLinksService(db).update_item(item_id=item_id, actor_id=uuid4(),
-            scope_ids=[team.id], glossary_term_ids=[])
+            scope_ids=[operations.id], glossary_term_ids=[])
     await db.rollback()
     assert list(await db.scalars(select(MemoryClaimScope.scope_id).where(MemoryClaimScope.claim_id == claim_id))) == [old_id]
     assert not list(await db.scalars(select(MemoryCandidateDecision)))
@@ -162,13 +154,13 @@ async def test_identity_collision_rejects_edit_without_altering_bindings(db):
 
 @pytest.mark.asyncio
 async def test_approval_failure_rolls_back_submitted_links(db, monkeypatch):
-    _, old, team, _, term, candidates, _ = await seed(db, resolved=False)
+    _, old, operations, _, term, candidates, _ = await seed(db, resolved=False)
     candidate_id, old_id = candidates[0].id, old.id
     dispatch = AsyncMock()
     monkeypatch.setattr(routes, "dispatch_memory_index", dispatch)
     monkeypatch.setattr(ShadowMemoryPublicationService, "approve", AsyncMock(side_effect=ValueError("Synthetic approval failure")))
     request = routes.ShadowCandidateDecisionRequest(tags=routes.ShadowCandidateTagsRequest(
-        scope_ids=[team.id], glossary_term_ids=[term.id]))
+        scope_ids=[operations.id], glossary_term_ids=[term.id]))
     with pytest.raises(HTTPException, match="Synthetic approval failure"):
         await routes.approve_shadow_candidate(candidate_id, request, db=db, user=SimpleNamespace(id=str(uuid4())))
     candidate = await db.get(MemoryExtractionCandidate, candidate_id)
@@ -182,15 +174,15 @@ async def test_approval_failure_rolls_back_submitted_links(db, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_approval_saves_links_and_returns_published_identity(db, monkeypatch):
-    _, _, team, _, term, candidates, _ = await seed(db, resolved=False)
+    _, _, operations, _, term, candidates, _ = await seed(db, resolved=False)
     dispatch = AsyncMock()
     monkeypatch.setattr(routes, "dispatch_memory_index", dispatch)
     response = await routes.approve_shadow_candidate(candidates[0].id,
         routes.ShadowCandidateDecisionRequest(tags=routes.ShadowCandidateTagsRequest(
-            scope_ids=[team.id], glossary_term_ids=[term.id])),
+            scope_ids=[operations.id], glossary_term_ids=[term.id])),
         db=db, user=SimpleNamespace(id=str(uuid4())))
     assert response.resolution_status == "resolved" and response.published_item_id is not None
-    assert response.scope_ids == [team.id] and response.glossary_term_ids == [term.id]
+    assert response.scope_ids == [operations.id] and response.glossary_term_ids == [term.id]
     dispatch.assert_awaited_once_with({response.published_item_id})
 
 

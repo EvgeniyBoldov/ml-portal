@@ -20,6 +20,7 @@ _LOCAL_ENRICHMENT_COLLECTION_TYPES = {
 }
 _EXACT_DISTINCT_LIMIT = 25
 _TOP_VALUES_LIMIT = 10
+COLLECTION_INFO_FIELD_PAGE_SIZE = 24
 
 
 @dataclass(slots=True)
@@ -229,6 +230,7 @@ class LocalCollectionInfoEnricher:
         session: Any,
         collection: Collection,
         operations: Sequence[ResolvedOperation],
+        selected_fields: set[str] | None = None,
     ) -> Dict[str, Any]:
         table_name = str(getattr(collection, "table_name", "") or "").strip()
         if not table_name or not _is_safe_identifier(table_name):
@@ -244,7 +246,8 @@ class LocalCollectionInfoEnricher:
         field_profiles: Dict[str, Any] = {}
         for field in _iter_profiled_fields(collection):
             field_name = str(field.get("name") or "").strip()
-            if not field_name or not _is_safe_identifier(field_name):
+            if ((selected_fields is not None and field_name not in selected_fields)
+                    or not _is_safe_identifier(field_name)):
                 continue
             profile = await self._build_field_profile(
                 session=session,
@@ -466,6 +469,7 @@ class CollectionInfoEnrichmentProvider:
         session: Any,
         collection: Collection,
         operations: Sequence[ResolvedOperation],
+        selected_fields: set[str] | None = None,
     ) -> Dict[str, Any]:
         collection_type = str(collection.collection_type or "").strip().lower()
         if collection_type in _LOCAL_ENRICHMENT_COLLECTION_TYPES:
@@ -473,6 +477,7 @@ class CollectionInfoEnrichmentProvider:
                 session=session,
                 collection=collection,
                 operations=operations,
+                selected_fields=selected_fields,
             )
         return await self.remote_enricher.build(
             session=session,
@@ -494,6 +499,7 @@ class CollectionInfoResponseBuilder:
         collection: Collection,
         operations: Sequence[ResolvedOperation],
         inspection_payload: Dict[str, Any],
+        selected_fields: set[str] | None = None,
     ) -> Dict[str, Any]:
         status_snapshot = await CollectionStatusSnapshotService(session).get_status_snapshot(collection)
         collection_payload = self.metadata_loader.build_collection_payload(
@@ -511,6 +517,7 @@ class CollectionInfoResponseBuilder:
                 session=session,
                 collection=collection,
                 operations=operations,
+                selected_fields=selected_fields,
             ),
         }
 

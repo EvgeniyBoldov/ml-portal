@@ -640,15 +640,30 @@ Shared local providers expose only handlers whose current `domains` include the
 target collection's runtime domain. `collection.info` supports every collection.
 Remote MCP capabilities come from the selected provider's active discovery;
 their names and optional domains are not interpreted as local collection types.
-Native `collection_slug` enums list only executable targets for that operation.
-System tools remain independent of collection bindings and retain RBAC checks.
+Both calling modes publish the same canonical function inventory. The
+`collection_slug` enum includes every executable target for that operation,
+even when the collection card reaches its display limit. A shared operation
+with different binding schemas publishes an `anyOf` declaration keyed by
+`collection_slug`. Collections with identical schemas share a branch. Each
+branch preserves required arguments and resolves its own schema references.
+Execution validates arguments against the resolved binding.
 
-With native tool calling, collection cards contain purpose, data description,
-full usage rules and operation names. Operation descriptions and argument
-contracts appear once, in `tools`; the redundant system operation card is
-omitted. API collection fields are explicitly labelled catalog metadata, not
-observed response fields. Actual dataset fields come from `result.describe`.
-Policies and operation rules are not truncated by character budgets.
+Collection cards show purpose, data description, usage notes, operation names
+and a bounded preview of filterable fields. For API collections these fields
+describe catalog metadata. Use `result.describe` for fields observed in saved
+responses. `collection.info` returns a schema page and profiles only fields on
+that page. Its stored payload records the page in `schema.field_page`. The model
+projection reports `shown` and `total` for each bounded list. To continue the
+visible schema field list, pass `coverage.fields.next_offset` as `field_offset`.
+Pass `field` to inspect one exact field with its filter hints and available
+profile. Field inspection takes precedence over the offset. The projection
+retains enrichment status and mode, observed-value availability, row counts
+and temporal bounds when the collection supplies them.
+
+Each model decision receives the remaining LLM and operation call counts in
+its datastore block, including the current response.
+The prompt shows document-search instructions when `memory.search` is available
+and includes the document-memory block when it contains passages.
 
 The completion prompt contains one advisory presentation contract, preserving
 distinct expected-data hints without duplicating identical schemas or exposing
@@ -700,6 +715,18 @@ requester; the client sends only the interaction ID and response.
 - Planner questions resume the saved planner checkpoint in the same plan.
 - Agent questions and operation confirmations resume the same task's saved LLM
   context, tool receipts and agent version. Completed tasks are not replayed.
+  When confirmation interrupts a tool batch, the runtime allocates one model
+  context budget across completed operations and rechecks it after adding
+  recovery references. Direct results that exceed their available space are
+  saved with `result.read` receipts. File results require reauthorization;
+  bounded MCP warnings stay with the result receipts. The checkpoint keeps the
+  pending operations in call order and retains results from earlier batches.
+  The runtime reconstructs its memory and datastore messages on resume.
+  It checks the available context before requesting confirmation and again
+  with the actual response before dispatching the next model request. If
+  saving a completed operation result fails, the runtime retries storage
+  once using the same call ID. A persistent storage failure is reported in
+  the model receipt with the operation marked as executed.
 - Planner/task answers bypass TurnPreflight. A negative boolean response returns
   to its requester; for an operation gate it rejects the operation and returns
   control to planner. Cancellation terminates the paused run.
@@ -711,6 +738,12 @@ The full contract, persistence, policy and trace behavior are described in
 [Runtime Interactions](./RUNTIME_INTERACTIONS.md).
 
 ## Tool surfaces
+
+The model receives a structured error receipt with `error_code`, `message`
+and `retryable`. When an operation may already have taken effect, the receipt
+sets `outcome_unknown=true` and `retryable=false`. MCP diagnostics may be
+abbreviated to fit the model context. Journal events retain their own fields
+for user and operator diagnostics.
 
 Collection tools are exposed by the resolved local provider or remote MCP
 provider, with platform collection defaults where applicable. Current local

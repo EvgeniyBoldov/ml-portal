@@ -88,8 +88,8 @@ async def test_catalog_outage_is_explicit_and_absent_context_does_not_query(monk
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("resumed", [False, True])
-async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_results(monkeypatch, resumed):
+@pytest.mark.parametrize("checkpoint_format", ["fresh", "legacy", "legacy_with_memory", "current"])
+async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_results(monkeypatch, checkpoint_format):
     from uuid import uuid4
     from app.agents.runtime import agent as module
     from app.agents.runtime.agent import AgentToolRuntime
@@ -118,9 +118,17 @@ async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_
              "runtime_datastore_task_ids": ["consumer", "producer"],
              "runtime_datastore_files": [{"ref": {"artifact_id": "input", "file_name": "input.pdf"},
                                           "snippet": "PRIVATE_FILE"}]}
-    if resumed:
-        extra["interaction_resume_checkpoint"] = {"messages": [{"role": "user", "content":
-            '[Datastore — available file and result metadata]\n{"items":[{"result_id":"STALE"}]}'}]}
+    if checkpoint_format != "fresh":
+        saved_messages = [{"role": "user", "content": "Restore this transcript"}]
+        if checkpoint_format != "current":
+            saved_messages.insert(0, {"role": "user", "content":
+                '[Datastore — available file and result metadata]\n{"items":[{"result_id":"STALE"}]}'})
+        if checkpoint_format == "legacy_with_memory":
+            saved_messages.insert(0, {"role": "user", "content": "[Document memory for this task]\nOld passages"})
+        extra["interaction_resume_checkpoint"] = {
+            "messages": saved_messages,
+            **({"messages_include_runtime_context": False} if checkpoint_format == "current" else {}),
+        }
     ctx = SimpleNamespace(extra=extra, get_runtime_deps=lambda: deps,
                           set_runtime_deps=lambda value: None, log_intent=AsyncMock())
     request = SimpleNamespace(agent=SimpleNamespace(slug="research"), resolved_operations=[],
@@ -133,4 +141,10 @@ async def test_agent_llm_receives_one_current_inventory_with_own_and_dependency_
     inventory = json.loads(inventories[0].split("\n", 1)[1])
     assert [item.get("artifact_id") or item.get("result_id") for item in inventory["items"]] == [
         "input", "own", "dependency"]
+    budget = inventory["remaining_runtime_budget_including_current_response"]
+    assert budget["llm_calls"] == 2 and budget["operation_calls"] == PolicyLimits().max_tool_calls_total
+    assert not any(item["content"].startswith("[Remaining runtime budget") for item in messages)
     assert "PRIVATE_" not in inventories[0] and "STALE" not in inventories[0]
+    assert all("Old passages" not in item["content"] for item in messages)
+    if checkpoint_format != "fresh":
+        assert {"role": "user", "content": "Restore this transcript"} in messages

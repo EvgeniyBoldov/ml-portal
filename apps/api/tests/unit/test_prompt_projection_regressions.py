@@ -103,7 +103,9 @@ def test_dependency_prompt_preserves_null_but_omits_operational_diagnostic_messa
     assert '"description": null' in prompt
     assert marker not in prompt
     assert "diagnostic" in prompt.lower()
-    assert "needs" in prompt.lower() and "unfulfillable" in prompt.lower()
+    from app.runtime.task_completion_prompt import build_task_completion_prompt
+    completion = build_task_completion_prompt(task)
+    assert "needs" in completion and "unfulfillable" in completion
 
 
 def test_fake_trace_null_output_warning_stays_null_and_diagnostic_text_stays_out_of_prompt():
@@ -201,14 +203,13 @@ def test_protocol_repair_preserves_successful_tool_history():
 def test_operation_contract_has_one_transport_and_no_extra_system_card(native):
     from app.agents.contracts import ResolvedOperation, ProviderExecutionTarget
     from app.agents.runtime.prompt_assembler import PromptAssembler
-    from app.agents.runtime.policy import PolicyLimits
     operation = ResolvedOperation(operation_slug="test.read", operation="test.read", name="Read", scope="system",
         description="read observed records", source="local", data_instance_id="system", data_instance_slug="system",
         input_schema={"type": "object", "properties": {"source_ref": {"type": "string"}}},
         target=ProviderExecutionTarget(operation_slug="test.read", provider_type="local", handler_slug="test.read",
                                       data_instance_id="system", data_instance_slug="system"))
     request = SimpleNamespace(prompt="Agent policy", agent_version=None, resolved_data_instances=[])
-    bundle = PromptAssembler().assemble(request, policy_limits=PolicyLimits(),
+    bundle = PromptAssembler().assemble(request,
         resolved_operations=[operation], platform_config={"native_tool_calling": native})
     assert ("ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА" in bundle.system_operations_prompt) is native
     assert bundle.system_prompt.count('"properties"') == (0 if native else 1)

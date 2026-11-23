@@ -27,6 +27,7 @@ async def test_template_response_survives_changed_encoder_dimension(builder):
         has_vector_search=True, vector_config={}, qdrant_collection_name="coll_template",
         vectorized_rows=3, total_chunks=3, failed_rows=0, vectorization_progress=100.0,
         is_fully_vectorized=True, data_instance_id=uuid4(), data_instance=None, last_sync_at=None,
+        memory_enabled=False,
         is_active=True, current_version_id=None, created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )

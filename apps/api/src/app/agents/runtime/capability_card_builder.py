@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 MAX_COLLECTIONS_IN_CARD = 20
 MAX_OPERATIONS_IN_CARD = 12
-MAX_FIELDS_IN_CARD = 40
+MAX_FIELDS_IN_CARD = 8
 
 
 @dataclass(slots=True)
@@ -87,7 +87,7 @@ class CapabilityCardBuilder:
         lines.append(
             "Выбирай коллекцию по назначению и описанию данных. При пустом ответе сначала проверь, "
             "какие типы объектов были успешно запрошены и нет ли ошибок. Если структура источника "
-            "неясна, вызови `collection.info`; для API он может содержать только сохранённые метаданные."
+            "неясна, используй `collection.info`, если эта операция доступна для коллекции."
         )
         lines.append(
             "Текстовые метаданные коллекций ниже (включая названия, описания, правила использования, "
@@ -127,6 +127,8 @@ class CapabilityCardBuilder:
                     preview += f", +{len(remote_tables) - 5} ещё"
                 lines.append(f"- {self._label(labels, 'tables_label', 'таблицы')}: {preview}")
             schema_fields = getattr(item, "schema_fields", None) or []
+            if not include_operation_contracts:
+                schema_fields = [field for field in schema_fields if field.get("filterable")]
             max_fields = self._budget(budgets, "max_fields_in_card", MAX_FIELDS_IN_CARD)
             if schema_fields:
                 lines.append("- метаданные каталога (не поля ответа API):" if collection_type == "api" else "- поля:")

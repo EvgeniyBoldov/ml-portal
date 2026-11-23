@@ -92,9 +92,13 @@ class TestRAGStatusManager:
     @pytest.fixture
     def status_manager(self, mock_repo_factory, mock_event_publisher):
         """Create RAGStatusManager with mocks"""
+        # _lock_document_row awaits session.scalar(...); stop_ingest awaits
+        # session.execute(...) and reads .scalar_one_or_none() off the result.
+        # Returning None keeps the manager on the "document missing" path.
         execute_result = MagicMock()
-        execute_result.scalar_one_or_none = MagicMock(return_value=uuid4())
+        execute_result.scalar_one_or_none = MagicMock(return_value=None)
         session = MagicMock()
+        session.scalar = AsyncMock(return_value=None)
         session.execute = AsyncMock(return_value=execute_result)
         session.flush = AsyncMock()
         manager = RAGStatusManager(
@@ -311,7 +315,15 @@ async def test_stop_rag_does_not_cancel_independent_long_memory_nodes():
     from unittest.mock import AsyncMock, MagicMock
     from uuid import uuid4
     from app.services.rag_status_manager import RAGStatusManager
-    manager = RAGStatusManager(MagicMock(), MagicMock())
+    # stop_ingest locks the RAGDocument row first: session.execute(...) result
+    # must expose .scalar_one_or_none() (None => no run/outbook cleanup runs).
+    execute_result = MagicMock()
+    execute_result.scalar_one_or_none = MagicMock(return_value=None)
+    session = MagicMock()
+    session.scalar = AsyncMock(return_value=None)
+    session.execute = AsyncMock(return_value=execute_result)
+    session.flush = AsyncMock()
+    manager = RAGStatusManager(session, MagicMock())
     manager.status_repo.get_nodes_by_doc_id = AsyncMock(return_value=[
         SimpleNamespace(node_type="memory", node_key="knowledge", status="processing"),
         SimpleNamespace(node_type="memory", node_key="graph", status="queued"),

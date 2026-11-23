@@ -12,7 +12,10 @@ from app.agents.context import ToolContext, ToolResult
 from app.agents.handlers.versioned_tool import VersionedTool, register_tool, tool_version
 from app.core.logging import get_logger
 from app.models.collection import FieldType
-from app.services.collection_info_service import build_default_collection_info_response_builder
+from app.services.collection_info_service import (
+    COLLECTION_INFO_FIELD_PAGE_SIZE,
+    build_default_collection_info_response_builder,
+)
 
 logger = get_logger(__name__)
 
@@ -25,6 +28,8 @@ _INPUT_SCHEMA_V1 = {
             "type": "string",
             "description": "The collection to inspect",
         },
+        "field": {"type": "string", "minLength": 1, "description": "Inspect one exact field name and its filter hints"},
+        "field_offset": {"type": "integer", "minimum": 0, "description": "Start the schema field page at this offset"},
     },
     "required": ["collection_slug"],
 }
@@ -38,6 +43,8 @@ _OUTPUT_SCHEMA_V1 = {
         "contracts": {"type": "object"},
         "schema": {"type": "object"},
         "filter_hints": {"type": "object"},
+        "requested_field": {"type": "string"},
+        "field_offset": {"type": "integer"},
         "runtime_enrichment": {"type": "object"},
     },
 }
@@ -82,13 +89,13 @@ class CollectionInfoTool(VersionedTool):
         if not collection_slug:
             return ToolResult.fail("collection_slug is required", logs=log.entries_dict())
 
-        dimensions: List[str] = []
+        requested_field = str(args.get("field") or "").strip()
         limit_per_dimension = 10
 
         log.info(
             "Starting collection catalog inspection",
             collection=collection_slug,
-            dimensions=dimensions,
+            field=requested_field or None,
             limit_per_dimension=limit_per_dimension,
         )
 
@@ -122,21 +129,38 @@ class CollectionInfoTool(VersionedTool):
                 specific_fields = [self._field_view(field) for field in collection.get_specific_fields()]
                 system_fields = [self._field_view(field) for field in collection.get_system_fields()]
                 all_fields = [*specific_fields, *user_fields, *system_fields]
-                filterable_fields = [field["name"] for field in collection.get_filterable_fields()]
-                sortable_fields = [field["name"] for field in collection.get_sortable_fields()]
+                offset = min(int(args.get("field_offset") or 0), len(all_fields))
+                if requested_field:
+                    fields = [field for field in all_fields if field["name"] == requested_field]
+                    field_page = {"offset": 0, "total": len(fields), "shown": len(fields)}
+                else:
+                    fields = all_fields[offset:offset + COLLECTION_INFO_FIELD_PAGE_SIZE]
+                    field_page = {"offset": offset, "total": len(all_fields), "shown": len(fields)}
+                    if offset + len(fields) < len(all_fields):
+                        field_page["next_offset"] = offset + len(fields)
+                selected_fields = {field["name"] for field in fields}
+                filterable_fields = [
+                    field for field in collection.get_filterable_fields()
+                    if field["name"] in selected_fields
+                ]
                 schema_payload = {
-                    "fields": all_fields,
-                    "user_fields": user_fields,
-                    "specific_fields": specific_fields,
-                    "system_fields": system_fields,
-                    "filterable_fields": filterable_fields,
-                    "sortable_fields": sortable_fields,
-                    "retrieval_fields": list(collection.vector_fields),
-                    "prompt_context_fields": [field["name"] for field in collection.get_prompt_context_fields()],
+                    "fields": fields,
+                    "field_page": field_page,
+                    "user_fields": [field for field in user_fields if field["name"] in selected_fields],
+                    "specific_fields": [field for field in specific_fields if field["name"] in selected_fields],
+                    "system_fields": [field for field in system_fields if field["name"] in selected_fields],
+                    "filterable_fields": [field["name"] for field in filterable_fields],
+                    "sortable_fields": [
+                        field["name"] for field in collection.get_sortable_fields()
+                        if field["name"] in selected_fields
+                    ],
+                    "retrieval_fields": [name for name in collection.vector_fields if name in selected_fields],
+                    "prompt_context_fields": [
+                        field["name"] for field in collection.get_prompt_context_fields()
+                        if field["name"] in selected_fields
+                    ],
                 }
 
-                stats_payload: Dict[str, Any] = {}
-                dimensions_payload: Dict[str, Any] = {}
                 filter_hints_payload: Dict[str, Any] = {
                     "usage_rule": (
                         "Use these field contracts and observed values before applying filters. "
@@ -146,25 +170,8 @@ class CollectionInfoTool(VersionedTool):
                 }
 
                 if collection.table_name and self._is_safe_identifier(collection.table_name):
-                    stats_payload = await self._collect_local_stats(session, collection.table_name)
                     allowed_dimensions = self._resolve_allowed_dimensions(collection)
-                    inspect_dimensions = self._resolve_dimensions_to_inspect(
-                        collection=collection,
-                        requested_dimensions=dimensions,
-                        allowed_dimensions=allowed_dimensions,
-                    )
-                    for dimension in inspect_dimensions:
-                        if not self._is_safe_identifier(dimension):
-                            continue
-                        values = await self._collect_dimension_values(
-                            session=session,
-                            table_name=collection.table_name,
-                            field_name=dimension,
-                            limit=limit_per_dimension,
-                        )
-                        dimensions_payload[dimension] = values
-
-                    for field in collection.get_filterable_fields():
+                    for field in filterable_fields:
                         field_name = str(field.get("name") or "").strip()
                         if not field_name or field_name not in allowed_dimensions or not self._is_safe_identifier(field_name):
                             continue
@@ -174,26 +181,10 @@ class CollectionInfoTool(VersionedTool):
                             field=field,
                             table_name=collection.table_name,
                             limit=limit_per_dimension,
-                            precomputed_values=dimensions_payload.get(field_name),
                         )
                         if hint is not None:
                             filter_hints_payload["fields"][field_name] = hint
 
-                remote_catalog = {
-                    "tables": self._extract_remote_tables(
-                        collection.table_schema if isinstance(collection.table_schema, dict) else {},
-                        collection.source_contract if isinstance(collection.source_contract, dict) else {},
-                    ),
-                    "last_sync_at": collection.last_sync_at.isoformat() if collection.last_sync_at else None,
-                }
-
-                inspection_payload = {
-                    "schema": schema_payload,
-                    "filter_hints": filter_hints_payload,
-                    "stats": stats_payload,
-                    "dimensions": dimensions_payload,
-                    "remote_catalog": remote_catalog,
-                }
                 info_builder = build_default_collection_info_response_builder()
                 runtime_deps = ctx.get_runtime_deps()
                 resolved_operations = info_builder.operation_resolver.resolve_for_collection(
@@ -205,8 +196,14 @@ class CollectionInfoTool(VersionedTool):
                     session=session,
                     collection=collection,
                     operations=resolved_operations,
-                    inspection_payload=inspection_payload,
+                    inspection_payload={"schema": schema_payload, "filter_hints": filter_hints_payload},
+                    selected_fields=selected_fields,
                 )
+
+                if requested_field:
+                    response_payload["requested_field"] = requested_field
+                else:
+                    response_payload["field_offset"] = offset
 
                 return ToolResult.ok(
                     data=response_payload,
@@ -232,40 +229,8 @@ class CollectionInfoTool(VersionedTool):
         }
 
     @staticmethod
-    def _resolve_dimensions_to_inspect(
-        *,
-        collection: Any,
-        requested_dimensions: List[str],
-        allowed_dimensions: set[str],
-    ) -> List[str]:
-        if requested_dimensions:
-            return [item for item in requested_dimensions if item in allowed_dimensions]
-        if getattr(collection, "collection_type", None) == "document":
-            return sorted({
-                str(field.get("name") or "").strip()
-                for field in collection.get_filterable_fields()
-                if str(field.get("name") or "").strip() in allowed_dimensions
-            })
-        return []
-
-    @staticmethod
     def _is_safe_identifier(value: str) -> bool:
         return bool(value and _IDENTIFIER_PATTERN.match(value))
-
-    @staticmethod
-    async def _collect_local_stats(session: Any, table_name: str) -> Dict[str, Any]:
-        q = text(
-            f"SELECT COUNT(*)::bigint AS total_rows, "
-            f"MAX(_created_at) AS last_created_at, "
-            f"MAX(_updated_at) AS last_updated_at "
-            f"FROM {table_name}"
-        )
-        row = (await session.execute(q)).mappings().first() or {}
-        return {
-            "total_rows": int(row.get("total_rows") or 0),
-            "last_created_at": row.get("last_created_at").isoformat() if row.get("last_created_at") else None,
-            "last_updated_at": row.get("last_updated_at").isoformat() if row.get("last_updated_at") else None,
-        }
 
     async def _collect_dimension_values(
         self,
@@ -297,21 +262,18 @@ class CollectionInfoTool(VersionedTool):
         field: Dict[str, Any],
         table_name: str,
         limit: int,
-        precomputed_values: List[Dict[str, Any]] | None = None,
     ) -> Dict[str, Any] | None:
         field_name = str(field.get("name") or "").strip()
         data_type = str(field.get("data_type") or "").strip()
         if not field_name:
             return None
 
-        top_values = list(precomputed_values or [])
-        if not top_values:
-            top_values = await self._collect_dimension_values(
-                session=session,
-                table_name=table_name,
-                field_name=field_name,
-                limit=limit,
-            )
+        top_values = await self._collect_dimension_values(
+            session=session,
+            table_name=table_name,
+            field_name=field_name,
+            limit=limit,
+        )
         distinct_count = await self._count_distinct_values(
             session=session,
             table_name=table_name,
@@ -396,60 +358,3 @@ class CollectionInfoTool(VersionedTool):
                 continue
             allowed.add(name)
         return allowed
-
-    @staticmethod
-    def _extract_remote_tables(table_schema: Dict[str, Any], source_contract: Dict[str, Any]) -> List[Dict[str, Any]]:
-        result: List[Dict[str, Any]] = []
-        seen = set()
-
-        def _push(schema_name: str | None, table_name: str | None, columns: Any = None) -> None:
-            table = str(table_name or "").strip()
-            if not table:
-                return
-            schema = str(schema_name or "").strip() or None
-            key = (schema or "", table)
-            if key in seen:
-                return
-            seen.add(key)
-            result.append(
-                {
-                    "schema": schema,
-                    "table": table,
-                    "columns_count": len(columns) if isinstance(columns, list) else None,
-                }
-            )
-
-        for source in (table_schema, source_contract):
-            tables = source.get("tables")
-            if isinstance(tables, list):
-                for item in tables:
-                    if isinstance(item, str):
-                        _push(None, item)
-                    elif isinstance(item, dict):
-                        _push(item.get("schema"), item.get("name") or item.get("table"), item.get("columns"))
-
-            schemas = source.get("schemas")
-            if isinstance(schemas, list):
-                for schema_obj in schemas:
-                    if not isinstance(schema_obj, dict):
-                        continue
-                    schema_name = schema_obj.get("schema") or schema_obj.get("name")
-                    schema_tables = schema_obj.get("tables")
-                    if isinstance(schema_tables, list):
-                        for item in schema_tables:
-                            if isinstance(item, str):
-                                _push(schema_name, item)
-                            elif isinstance(item, dict):
-                                _push(schema_name, item.get("name") or item.get("table"), item.get("columns"))
-
-            if isinstance(schemas, dict):
-                for schema_name, schema_tables in schemas.items():
-                    if isinstance(schema_tables, list):
-                        for item in schema_tables:
-                            if isinstance(item, str):
-                                _push(schema_name, item)
-                            elif isinstance(item, dict):
-                                _push(schema_name, item.get("name") or item.get("table"), item.get("columns"))
-
-        result.sort(key=lambda item: ((item.get("schema") or ""), item.get("table") or ""))
-        return result

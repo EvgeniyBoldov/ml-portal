@@ -176,9 +176,11 @@ async def test_operation_router_marks_missing_credentials_in_readiness_and_missi
         effective_permissions=effective_permissions,
     )
 
-    assert result.missing.credentials == ["sql_data"]
-    assert result.resolved_data_instances[0].readiness is not None
-    assert (
-        result.resolved_data_instances[0].readiness.status
-        == CollectionRuntimeStatus.DEGRADED_MISSING_CREDENTIALS
-    )
+    readiness = result.resolved_data_instances[0].readiness
+    assert readiness is not None
+    assert readiness.credential_status == "missing"
+    assert "missing_credentials" in readiness.missing_requirements
+    assert readiness.status == CollectionRuntimeStatus.DEGRADED_MISSING_CREDENTIALS
+    # Credential absence is operation-scoped: preflight stays available and
+    # missing.credentials is no longer populated at the router level.
+    assert result.missing.credentials == []

@@ -1,21 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { signIn } from './auth';
 import { randomUUID } from 'node:crypto';
 
 const authFile = process.env.AGENT_E2E_AUTH_FILE;
 test.skip(!authFile, 'Requires an authenticated platform admin session');
 
 test('create and version an agent, then delete a non-current archived version', async ({ page, context }) => {
-  const { refresh_token } = JSON.parse(readFileSync(authFile!, 'utf8'));
-  const baseURL = process.env.BASE_URL || 'http://localhost:5173';
-  await context.addCookies([{
-    name: 'refresh_token',
-    value: refresh_token,
-    url: baseURL,
-    httpOnly: true,
-    sameSite: 'Lax',
-  }]);
-  expect((await context.request.post('/api/v1/auth/refresh')).status()).toBe(200);
+  await signIn(context, authFile!);
 
   const slug = `agent-admin-e2e-${randomUUID()}`;
   const created = await context.request.post('/api/v1/admin/agents', {
@@ -29,8 +20,14 @@ test('create and version an agent, then delete a non-current archived version', 
     await expect(page.getByRole('heading', { name: 'Новая версия' })).toBeVisible();
     await page.getByRole('button', { name: 'Выполнение' }).click();
     await page.getByLabel('Task contracts (JSON)').fill('[{"name":"lookup","inputs":["id"]}]');
-    await page.getByRole('checkbox', { name: 'Разрешить динамические контракты' }).uncheck();
-    await page.getByRole('checkbox', { name: 'Требовать свежий поиск' }).check();
+    const dynamicContracts = page.getByRole('checkbox', { name: 'Разрешить динамические контракты' });
+    const freshRetrieval = page.getByRole('checkbox', { name: 'Требовать свежий поиск' });
+    await expect(dynamicContracts).toBeChecked();
+    await dynamicContracts.press('Space');
+    await expect(dynamicContracts).not.toBeChecked();
+    await expect(freshRetrieval).not.toBeChecked();
+    await freshRetrieval.press('Space');
+    await expect(freshRetrieval).toBeChecked();
     await page.getByRole('button', { name: 'Создать', exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/admin/agents/${agent.id}/versions/1$`));
 

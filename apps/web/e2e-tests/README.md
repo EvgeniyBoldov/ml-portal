@@ -4,11 +4,11 @@
 
 `agent-admin.e2e.ts` drives the real admin UI and API through agent version
 creation, contract editing, publish/current-version operations, and deletion of
-an archived non-current version. It requires a refresh token for a platform
+an archived non-current version. It requires the credentials of a local test platform
 admin in a JSON file available to the frontend container:
 
 ```json
-{ "refresh_token": "..." }
+{ "login": "...", "password": "..." }
 ```
 
 With the development stack running, run it from the frontend container:
@@ -26,7 +26,7 @@ The test creates its agent through the real admin endpoint and removes it in a
 
 ## Memory scopes and LongMemory E2E
 
-`memory-scopes.e2e.ts` uses an authenticated platform admin and the real API to
+`memory-scopes.e2e.ts` uses a local test platform admin and the real API to
 create, edit, inspect dependencies for, and delete an isolated memory scope. It
 also opens the LongMemory tab and verifies that its documents endpoint loads.
 The test deletes its temporary scope through the UI and has an API cleanup
@@ -50,11 +50,18 @@ failure recovery without publishing an attachment.
 
 ## Run locally
 
-Start the development stack first. Provide a local test user's refresh token as
+Each test signs in with its own browser session so refresh-token rotation
+works during reload and across tests. Keep credential files outside the repository.
+
+CI runs the Chromium smoke, administrative workflows and chat contracts with
+an isolated PostgreSQL database, Redis and MinIO. The live attachment suite
+uses the configured runtime and is run separately.
+
+Start the development stack first. Provide a local test user's credentials as
 JSON in `/tmp/chat-e2e-auth.json`:
 
 ```json
-{ "refresh_token": "..." }
+{ "login": "...", "password": "..." }
 ```
 
 The frontend development container uses Alpine; install its Chromium binary
@@ -83,7 +90,7 @@ docker compose exec -T \
   frontend npm run test:e2e:chat
 ```
 
-The live configured-LLM attachment tests use the same local token and can be
+The live configured-LLM attachment tests use the same local credentials and can be
 run separately with `CHAT_E2E_LIVE=1`, `BASE_URL=http://nginx:8080`, and the
 `chat-attachments` Playwright target. They verify real ingress, upload, and
 message binding, then stop the model run; deterministic `chat-contract` tests

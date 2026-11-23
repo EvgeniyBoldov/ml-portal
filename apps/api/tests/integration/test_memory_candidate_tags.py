@@ -70,7 +70,7 @@ async def seed(session):
         content_text='Create backup', evidence_section_ids=['s1'], resolution_status='needs_review',
         scope_candidate='unknown', visibility_tenant_id=visibility,
         unresolved_scope_references=[{'name': 'Legacy area', 'reason': 'missing_term'}])
-    scope = MemoryScope(scope_type='team', key='team.ops', name='Operations', aliases=[], is_all=False)
+    scope = MemoryScope(scope_type='project', key='ops', name='Operations', aliases=[], is_all=False)
     session.add_all([row, scope])
     await session.flush()
     session.add(MemoryCandidateScope(candidate_id=row.id, scope_id=scope.id, role='applies_to',

@@ -46,10 +46,14 @@ async def test_worker_persists_failure_classification_and_provider_cooldown(monk
     operation = NS(id=uuid4(), document_id=uuid4(), tenant_id=uuid4(), generation=1, action="add",
         status="pending", attempts=0, updated_at=now, progress={}, payload={"canonical_key": "canonical.json"})
     document = NS(id=operation.document_id, long_memory_generation=1, title="Document", filename="doc.txt")
+    source = NS(meta={"memory": {}})  # No scope_unassigned marker: assigned scopes stay in effect.
     session = AsyncMock()
     session.scalar.return_value = operation
     session.scalars.return_value = NS(all=lambda: ["company"])
-    session.get.side_effect = lambda model, _: operation if model is tasks.LongMemoryDocumentOperation else document
+    session.get.side_effect = lambda model, _: (
+        operation if model is tasks.LongMemoryDocumentOperation
+        else source if model is tasks.Source
+        else document)
     @asynccontextmanager
     async def session_factory():
         yield session

@@ -44,28 +44,36 @@ async def test_result_analyze_projects_object_paths(monkeypatch: pytest.MonkeyPa
 
 
 def test_nested_jira_comment_pagination_is_not_complete() -> None:
+    # `_source_complete` is three-valued: False = provably partial,
+    # None = completeness unknown, True = provably complete (never inferred
+    # for generic JSON payloads without explicit markers).
     issue = {"key": "NIMS-2712", "fields": {"comment": {
         "startAt": 0, "total": 3, "comments": [{"id": "1"}],
     }}}
-    assert not _source_complete(issue)
+    assert _source_complete(issue) is False
     issue["fields"]["comment"]["comments"].extend([{"id": "2"}, {"id": "3"}])
-    assert _source_complete(issue)
+    # Tri-state contract (commit 3c0bb1df): a fully fetched page is "not
+    # provably incomplete" (None). The heuristic never returns True because
+    # scalar fields (key, startAt, total, item ids) stay unknown; asserted
+    # completeness comes from explicit dataset_meta["complete"] in save().
+    assert _source_complete(issue) is None is None
     issue["fields"]["comment"]["startAt"] = 1
-    assert not _source_complete(issue)
+    assert _source_complete(issue) is False
     issue["fields"]["comment"]["startAt"] = "unexpected"
-    assert not _source_complete(issue)
+    assert _source_complete(issue) is False
 
 
 def test_netbox_count_and_pagination_mark_partial_results() -> None:
     page = {"count": 3, "next": "page-2", "previous": None, "results": [{"id": 1}]}
     assert _source_total(page) == 3
-    assert not _source_complete(page)
+    assert _source_complete(page) is False
     page["next"] = None
-    assert not _source_complete(page)
+    assert _source_complete(page) is False
     page["results"] = [{"id": 1}, {"id": 2}, {"id": 3}]
-    assert _source_complete(page)
+    # Fully fetched page: not provably incomplete (None) — see note above.
+    assert _source_complete(page) is None is None
     page["previous"] = "page-1"
-    assert not _source_complete(page)
+    assert _source_complete(page) is False
 
 
 def test_sql_result_names_and_generic_dataset_profiles() -> None:

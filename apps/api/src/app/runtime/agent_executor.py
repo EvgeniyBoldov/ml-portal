@@ -1262,12 +1262,7 @@ class AgentExecutor:
         if task.dependency_outputs:
             dependency_lines = [
                 "[Dependency outputs]",
-                "These are recorded upstream results. Use only actual values in structured_response/outputs as data. "
-                "Runtime diagnostics describe validation or execution; they are never input values and must not be copied into fields. "
-                "A missing property or null is unavailable only when the consumer contract requires a non-null value; "
-                "do not replace it with diagnostic text or an empty string. "
-                "If required data is unavailable, use completion=needs for another task, interaction for a user question, "
-                "or unfulfillable when no useful next step exists.",
+                "Recorded upstream task results and their runtime diagnostics.",
             ]
             for task_id, output in task.dependency_outputs.items():
                 if not isinstance(output, dict):

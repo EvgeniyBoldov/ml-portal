@@ -91,7 +91,10 @@ def applicable_claim(*, project_ids: Sequence[UUID], scope_keys: Sequence[str], 
     ).correlate(MemoryClaim)
     predicates = []
     for scope_type in ("project", "team"):
-        concrete = [key for key in scope_keys if key.startswith(f"{scope_type}.") and key != f"{scope_type}.all"]
+        concrete = [
+            key for key in scope_keys
+            if key != f"{scope_type}.all" and (scope_type == "project" or key.startswith("team."))
+        ]
         has_binding = exists(bindings.where(MemoryScope.scope_type == scope_type))
         match = [MemoryScope.key.in_(concrete), MemoryScope.is_all.is_(True)]
         if scope_type == "project" and project_ids:

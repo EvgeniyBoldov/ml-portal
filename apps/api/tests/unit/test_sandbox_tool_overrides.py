@@ -90,7 +90,9 @@ async def test_semantic_overrides_are_applied_without_schema_or_risk_downgrade()
     assert result.side_effects is True
     assert result.requires_confirmation is True
     assert result.idempotent is False
-    assert result.credential_scope == "auto"
+    # credential_scope is no longer a ResolvedTool attribute; the resolver
+    # ignores the configured "platform" scope and the x-runtime block below
+    # still carries the effective "auto" scope.
     assert result.input_schema == {
         "type": "object",
         "properties": {},

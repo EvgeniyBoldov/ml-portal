@@ -282,16 +282,38 @@ async def test_planner_search_retains_passages_and_failure_receipts(monkeypatch)
     assert planner._llm.invoke.await_args.kwargs["payload"]["memory_tool_results"] == [search_receipt(record) for record in records]
 
 
-def test_memory_only_synthesis_keeps_original_passages_without_silent_truncation():
-    import json
-    from app.runtime.synthesis_context import SynthesisContextBuilder
-    plan = {"goal": "goal", "scope_context": {"keys": ["company"]}, "tasks": {}, "iterations": [
+def _memory_only_plan(passages: int = 30) -> dict:
+    return {"goal": "goal", "scope_context": {"keys": ["company"]}, "tasks": {}, "iterations": [
         {"id": "i", "sequence": 1, "terminal": "synthesis", "synthesis_brief": {"purpose": "answer"}}],
         "memory_context": [{"type": "planner_memory_result", "result": {
             "backend": "hipporag", "groups": [{"scope_slug": "company", "success": True,
-            "items": [{"subject": "x", "text": "x" * 2000}]}]}} for _ in range(30)]}
+            "items": [{"subject": "x", "text": "x" * 2000}]}]}} for _ in range(passages)]}
+
+
+def test_memory_only_synthesis_withholds_over_budget_passages_explicitly():
+    """Memory-only plans are no longer exempt from the context budget: passages
+    that do not fit are withheld and enumerated, never silently truncated."""
+    from app.runtime.synthesis_context import SynthesisContextBuilder
+    plan = _memory_only_plan()
     result = SynthesisContextBuilder(max_chars=4000).build(plan=plan, iteration_id="i")
     assert "memory_context_truncated" not in result
-    assert result["memory_context"][0]["result"]["groups"][0]["items"][0]["text"] == "x" * 2000
-    assert len(json.dumps(result)) > 4000
+    withheld = [item for item in result["withheld_materials"] if item["kind"] == "memory_context"]
+    assert len(withheld) == 30
+    assert result["evidence_coverage"] == "partial"
+    assert any(item["code"] == "synthesis_context_budget_exceeded" for item in result["limitations"])
+    # Whatever passages are kept stay byte-identical: no trimmed text anywhere.
+    for item in result["memory_context"]:
+        for group in item["result"]["groups"]:
+            assert all(passage["text"] == "x" * 2000 for passage in group["items"])
+    # The builder never mutates the plan it reads from.
     assert len(plan["memory_context"]) == 30
+    assert plan["memory_context"][0]["result"]["groups"][0]["items"][0]["text"] == "x" * 2000
+
+
+def test_memory_only_synthesis_keeps_passages_verbatim_within_budget():
+    from app.runtime.synthesis_context import SynthesisContextBuilder
+    plan = _memory_only_plan(passages=1)
+    result = SynthesisContextBuilder(max_chars=4000).build(plan=plan, iteration_id="i")
+    assert result["memory_context"][0]["result"]["groups"][0]["items"][0]["text"] == "x" * 2000
+    assert "withheld_materials" not in result
+    assert result.get("evidence_coverage") != "partial"

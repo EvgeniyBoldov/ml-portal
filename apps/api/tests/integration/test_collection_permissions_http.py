@@ -17,11 +17,21 @@ from app.services.permission_service import EffectivePermissions
 @pytest.mark.parametrize("allowed", [False, True])
 async def test_effective_policy_protects_direct_data_routes(monkeypatch, method, allowed):
     tenant_id = uuid4()
-    collection = SimpleNamespace(slug="private", tenant_id=tenant_id, collection_type="table")
+    collection = SimpleNamespace(slug="private", tenant_id=tenant_id, collection_type="table",
+                                 is_active=True, lifecycle_status="active")
     service = SimpleNamespace(get_by_slug=AsyncMock(return_value=collection),
                               search=AsyncMock(return_value=[]), count=AsyncMock(return_value=0),
                               delete_rows=AsyncMock(return_value=1))
     monkeypatch.setattr(upload_shared, "CollectionService", lambda session: service)
+
+    class EditorAccessService:
+        def __init__(self, _session):
+            pass
+
+        async def can_edit_tenant(self, *_args, **_kwargs):
+            return True
+
+    monkeypatch.setattr(upload_shared, "CollectionContentAccessService", EditorAccessService)
     monkeypatch.setattr(upload_shared, "_resolve_requested_tenant_id", AsyncMock(return_value=tenant_id))
     monkeypatch.setattr(crud, "_resolve_collection_permissions", AsyncMock(return_value=EffectivePermissions(
         collection_permissions={"private": allowed}, default_collection_allow=not allowed)))

@@ -249,3 +249,33 @@ def test_reused_direct_overflow_returns_a_reference_instead_of_null():
         "result_id": "saved-result", "revision": 2, "offset": 0, "limit": 5,
     }
     assert "value" not in output
+
+
+@pytest.mark.parametrize("failure", [None, {"code": "timeout", "message": "Upstream timed out"}])
+@pytest.mark.parametrize("budget", [0, 1000])
+def test_tool_error_context_preserves_runtime_retry_decision(failure, budget):
+    result = ToolResult.fail(
+        "Timed out", error_code="tool_outcome_unknown", outcome_unknown=True,
+        retryable=False, mcp_failure=failure,
+    )
+    receipt = json.loads(OperationExecutionFacade.format_result_for_context(result, context_budget_tokens=budget))
+    assert receipt["success"] is False
+    assert receipt["error_code"] == "tool_outcome_unknown"
+    assert receipt["outcome_unknown"] is True
+    assert receipt["retryable"] is False
+
+
+@pytest.mark.parametrize("delivery", ["direct", "stored"])
+def test_collection_info_field_page_reports_coverage(delivery):
+    payload = {"collection": {"slug": "catalog"}, "schema": {
+        "fields": [{"name": f"field_{i}", "data_type": "string"} for i in range(30)]
+    }}
+    def project(offset):
+        result = ToolResult.ok({**payload, "field_offset": offset}, delivery=delivery)
+        return json.loads(OperationExecutionFacade.format_result_for_context(result, operation_slug="collection.info"))
+
+    first = project(0)
+    assert first["coverage"]["fields"] == {"offset": 0, "shown": 24, "total": 30, "next_offset": 24}
+    second = project(first["coverage"]["fields"]["next_offset"])
+    assert second["fields"][0]["name"] == "field_24"
+    assert second["coverage"]["fields"] == {"offset": 24, "shown": 6, "total": 30}

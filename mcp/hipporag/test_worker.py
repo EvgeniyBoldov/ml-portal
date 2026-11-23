@@ -92,7 +92,10 @@ class WorkerTests(unittest.TestCase):
                 headers = {'mcp-session-id': init.headers['mcp-session-id']}
                 tools = client.post('/mcp', json={'id': 2, 'method': 'tools/list'}, headers=headers).json()['result']['tools']
                 self.assertEqual(len(tools), 4)
-                self.assertEqual(tools[0]['inputSchema'], server.IndexRequest.model_json_schema())
+                self.assertEqual(tools[0]['inputSchema'], {
+                    **server.IndexRequest.model_json_schema(),
+                    'x-runtime': {'risk_level': 'risky'},
+                })
                 failed = client.post('/mcp', json={'id': 3, 'method': 'tools/call', 'params': {'name': 'hipporag_search', 'arguments': {'index': 'test', 'query': 'x'}}}, headers=headers).json()
                 self.assertTrue(failed['result']['isError'])
                 self.assertEqual(client.post('/mcp', json={'id': 4, 'method': 'tools/list'}).json()['error']['code'], -32002)

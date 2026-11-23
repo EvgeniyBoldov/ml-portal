@@ -1,11 +1,16 @@
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from app.agents.builtins.collection_catalog import CollectionInfoTool
-from app.agents.context import RuntimeDependencies
+from app.agents.context import RuntimeDependencies, ToolResult
 from app.agents.contracts import ResolvedOperation
-from app.services.collection_info_service import build_default_collection_info_response_builder
+from app.agents.runtime.tools import OperationExecutionFacade
+from app.services.collection_info_service import (
+    _extract_remote_sql_tables,
+    build_default_collection_info_response_builder,
+)
 
 
 def test_extract_remote_tables_from_mixed_schema_shapes():
@@ -24,12 +29,12 @@ def test_extract_remote_tables_from_mixed_schema_shapes():
         ]
     }
 
-    tables = CollectionInfoTool._extract_remote_tables(table_schema, source_contract)
+    tables = _extract_remote_sql_tables(table_schema, source_contract)
 
-    assert {"schema": "public", "table": "vendors", "columns_count": 2} in tables
-    assert {"schema": None, "table": "tickets", "columns_count": None} in tables
-    assert {"schema": "netbox", "table": "devices", "columns_count": None} in tables
-    assert {"schema": "public", "table": "contracts", "columns_count": None} in tables
+    assert {"schema_name": "public", "table_name": "vendors", "columns_count": 2} in tables
+    assert {"schema_name": "public", "table_name": "tickets", "columns_count": None} in tables
+    assert {"schema_name": "netbox", "table_name": "devices", "columns_count": None} in tables
+    assert {"schema_name": "public", "table_name": "contracts", "columns_count": None} in tables
 
 
 def test_resolve_allowed_dimensions_skips_file_and_json():
@@ -43,40 +48,6 @@ def test_resolve_allowed_dimensions_skips_file_and_json():
     )
     allowed = CollectionInfoTool._resolve_allowed_dimensions(collection)
     assert allowed == {"vendor", "priority"}
-
-
-def test_resolve_dimensions_to_inspect_defaults_to_filterable_fields_for_document_collections():
-    collection = SimpleNamespace(
-        collection_type="document",
-        get_filterable_fields=lambda: [
-            {"name": "vendor", "filterable": True},
-            {"name": "severity", "filterable": True},
-            {"name": "blob", "filterable": True},
-        ],
-    )
-
-    dimensions = CollectionInfoTool._resolve_dimensions_to_inspect(
-        collection=collection,
-        requested_dimensions=[],
-        allowed_dimensions={"vendor", "severity"},
-    )
-
-    assert dimensions == ["severity", "vendor"]
-
-
-def test_resolve_dimensions_to_inspect_respects_requested_dimensions_subset():
-    collection = SimpleNamespace(
-        collection_type="document",
-        get_filterable_fields=lambda: [{"name": "vendor", "filterable": True}],
-    )
-
-    dimensions = CollectionInfoTool._resolve_dimensions_to_inspect(
-        collection=collection,
-        requested_dimensions=["vendor", "missing"],
-        allowed_dimensions={"vendor"},
-    )
-
-    assert dimensions == ["vendor"]
 
 
 def test_build_filter_hint_note_is_explicit_about_non_guessing():
@@ -162,6 +133,8 @@ async def test_collection_info_builder_uses_runtime_resolved_operations():
             usage_rules="Find template, inspect schema, then fill.",
         ),
         is_local=True,
+        is_remote=False,
+        total_rows=0,
         entity_type=None,
         vector_fields=["body_vector"],
         get_business_fields=lambda: [
@@ -247,6 +220,9 @@ async def test_collection_info_builder_builds_remote_api_metadata_enrichment():
             usage_rules="Use remote objects carefully.",
         ),
         is_local=False,
+        is_remote=True,
+        data_instance_id="inst-2",
+        fields=[],
         entity_type=None,
         vector_fields=[],
         table_schema={
@@ -277,3 +253,10 @@ async def test_collection_info_builder_builds_remote_api_metadata_enrichment():
     assert payload["runtime_enrichment"]["data"]["observed_values_available"] is False
     assert payload["runtime_enrichment"]["data"]["freshness"]["last_sync_at"] == "2026-06-30T10:00:00+00:00"
     assert "stored remote API discovery metadata" in payload["runtime_enrichment"]["message"]
+
+    projected = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(payload, delivery="direct"), operation_slug="collection.info",
+    ))
+    assert projected["runtime_enrichment"]["status"] == "ready"
+    assert projected["runtime_enrichment"]["mode"] == "metadata_only"
+    assert projected["runtime_enrichment"]["data"]["observed_values_available"] is False

@@ -140,6 +140,7 @@ test-integration:
 test-runtime-core:
 	$(COMPOSE_DEV) exec api pytest tests/unit/ -q --tb=short --maxfail=5 \
 		--cov=app.runtime \
+		--cov=app.agents.runtime \
 		--cov=app.agents.contracts \
 		--cov=app.agents.credential_resolver \
 		--cov=app.agents.execution_preflight \
@@ -147,6 +148,7 @@ test-runtime-core:
 		--cov=app.agents.runtime_rbac_resolver \
 		--cov-report=term-missing \
 		--cov-fail-under=70
+	$(COMPOSE_DEV) exec api python -m coverage report --include='*/runtime/pipeline.py' --fail-under=70
 
 test-runtime-integration:
 	$(COMPOSE_DEV) exec api pytest tests/integration/ -q --tb=short --maxfail=5 -k "runtime or mcp or credential or collection or confirmation"

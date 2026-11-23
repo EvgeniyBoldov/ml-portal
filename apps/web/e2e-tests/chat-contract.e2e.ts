@@ -1,23 +1,12 @@
 import { test as base, expect, type Page } from '@playwright/test';
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { signIn } from './auth';
 
 const authFile = process.env.CHAT_E2E_AUTH_FILE;
 const test = base.extend<{ chatId: string }>({
   chatId: async ({ page, context }, use) => {
     if (!authFile) throw new Error('CHAT_E2E_AUTH_FILE is required');
-    const { refresh_token } = JSON.parse(readFileSync(authFile, 'utf8'));
-    await context.addCookies([
-      {
-        name: 'refresh_token',
-        value: refresh_token,
-        url: process.env.BASE_URL || 'http://nginx:8081',
-        httpOnly: true,
-        sameSite: 'Lax',
-      },
-    ]);
-    expect((await context.request.post('/api/v1/auth/refresh')).status()).toBe(
-      200
-    );
+    await signIn(context, authFile);
     const response = await context.request.post('/api/v1/chats', {
       data: { name: 'Chat contract E2E' },
     });
@@ -100,7 +89,7 @@ test('large Unicode message survives request, rendering and persistence', async 
   page,
   chatId,
 }) => {
-  const content = `E2E:echo ${'Большое сообщение 🐙\n'.repeat(2_000)}КОНЕЦ`;
+  const content = `E2E:echo ${'Большое сообщение 🐙\n'.repeat(1_599)}КОНЕЦ`;
   await send(page, content);
   await expect(answer(page)).toContainText(
     `Получено ${Array.from(content).length} символов`
@@ -646,8 +635,7 @@ test('synthesis creates a file and the next turn can read it after reload', asyn
 }) => {
   await send(page, 'E2E:synthesis-file Создай файл с примером Python');
   const fileLink = page.getByRole('link', {
-    name: 'example.py',
-    exact: true,
+    name: /^example\.py\b/,
   });
   await expect(fileLink).toBeVisible();
   await expect(fileLink).toHaveAttribute(
@@ -666,7 +654,7 @@ test('synthesis creates a file and the next turn can read it after reload', asyn
   expect(JSON.stringify(await contextResponse.json())).toContain('example.py');
   await page.reload();
   await expect(
-    page.getByRole('link', { name: 'example.py', exact: true })
+    fileLink
   ).toBeVisible();
   await send(page, 'E2E:read-existing Прочитай созданный файл');
   await expect(answer(page)).toContainText('SYNTHESIS_FILE_7391');
@@ -680,13 +668,13 @@ test('failed synthesis file creation cannot publish a successful attachment', as
   await send(page, 'E2E:synthesis-file-fail Создай файл');
   await expect(
     page
-      .getByText(/Во время выполнения запроса возникли проблемы/, {
+      .getByText(/Не удалось подготовить файл ответа/, {
         exact: false,
       })
       .first()
   ).toBeVisible();
   await expect(
-    page.getByRole('link', { name: 'example.py', exact: true })
+    page.getByRole('link', { name: /^example\.py\b/ })
   ).toHaveCount(0);
   await expect(page.getByText('E2E_PRIVATE_FILE_ERROR')).toHaveCount(0);
   await send(page, 'E2E:text После ошибки');

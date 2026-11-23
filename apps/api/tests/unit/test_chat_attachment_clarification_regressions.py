@@ -33,7 +33,7 @@ async def test_preflight_never_echoes_original_request_as_clarification():
     preflight = TurnPreflight(session=AsyncMock(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(value=TurnPreflightDecision(
         route="clarify", clarification={"question": "Что скажешь о вложении?",
-            "direct_answer_reason": "The user can provide the missing choice"})))
+            "routing_reason": "The user can provide the missing choice"})))
     decision = await preflight.decide(user_request="что скажешь о вложении?", mechanical_lookup={})
     assert decision.route == "planner"
 
@@ -42,7 +42,7 @@ async def test_preflight_never_echoes_original_request_as_clarification():
 async def test_preflight_receives_current_file_and_routes_file_reading_to_planner():
     preflight = TurnPreflight(session=AsyncMock(), llm_client=AsyncMock())
     preflight._llm.invoke = AsyncMock(return_value=SimpleNamespace(value=TurnPreflightDecision(
-        route="clarify", clarification={"question": "Прикрепите файл", "direct_answer_reason": "Need the file"})))
+        route="clarify", clarification={"question": "Прикрепите файл", "routing_reason": "Need the file"})))
     attachment = AttachmentContext(ref=AttachmentRef(artifact_id=str(uuid4()), file_name="report.txt"),
         snippet="Annual report, revenue increased", snippet_status="ready", readable=True)
     decision = await preflight.decide(user_request="что скажешь о вложении?", mechanical_lookup={}, attachments=[attachment])

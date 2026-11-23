@@ -26,7 +26,7 @@ def _remote_instance() -> ToolInstance:
 
 
 @pytest.mark.asyncio
-async def test_destructive_auto_with_only_platform_credentials_raises_unavailable():
+async def test_risky_operation_without_credentials_raises_unavailable():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(return_value=None),
         resolve_credential_reference=AsyncMock(return_value=None),
@@ -40,14 +40,12 @@ async def test_destructive_auto_with_only_platform_credentials_raises_unavailabl
             tenant_id=uuid4(),
             tool_slug="instance.netbox-data.netbox.delete",
             operation="netbox.delete",
-            credential_scope="auto",
-            risk_level="destructive",
-            side_effects=True,
+            is_risky=True,
         )
 
 
 @pytest.mark.asyncio
-async def test_safe_auto_uses_platform_first_and_succeeds_with_platform_credentials():
+async def test_safe_operation_uses_user_first_cascade_and_succeeds_with_platform_credentials():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(
             return_value=SimpleNamespace(
@@ -67,17 +65,18 @@ async def test_safe_auto_uses_platform_first_and_succeeds_with_platform_credenti
         tenant_id=uuid4(),
         tool_slug="instance.netbox-data.netbox.get",
         operation="netbox.get",
-        credential_scope="auto",
-        risk_level="safe",
-        side_effects=False,
+        is_risky=False,
     )
     assert context is not None
+    assert context.owner_type == "platform"
     call = service.resolve_credentials.await_args
-    assert call.kwargs["strategy"] == "PLATFORM_FIRST"
+    # Safe operations resolve User > Tenant > Platform; a platform-owned
+    # credential satisfies the end of the USER_FIRST cascade.
+    assert call.kwargs["strategy"] == "USER_FIRST"
 
 
 @pytest.mark.asyncio
-async def test_write_auto_requires_user_credentials_and_does_not_use_platform_strategy():
+async def test_risky_operation_requires_user_credentials_and_does_not_use_platform_strategy():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(
             return_value=SimpleNamespace(
@@ -97,9 +96,7 @@ async def test_write_auto_requires_user_credentials_and_does_not_use_platform_st
         tenant_id=uuid4(),
         tool_slug="instance.netbox-data.netbox.update",
         operation="netbox.update",
-        credential_scope="auto",
-        risk_level="write",
-        side_effects=True,
+        is_risky=True,
     )
     assert context is not None
     call = service.resolve_credentials.await_args

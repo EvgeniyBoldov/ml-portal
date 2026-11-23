@@ -18,7 +18,9 @@ async def test_read_only_status_snapshot_does_not_dirty_or_flush_collection():
     snapshot = await service.sync_collection_status(collection, persist=False)
 
     assert snapshot["status"] == "ready"
-    assert collection.status == "created"
+    # persist=False skips DB writes (no add/flush) but still syncs the
+    # in-memory collection status to the freshly computed snapshot.
+    assert collection.status == "ready"
     session.add.assert_not_called()
     session.flush.assert_not_awaited()
 

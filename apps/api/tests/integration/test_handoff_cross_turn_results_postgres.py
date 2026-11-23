@@ -16,6 +16,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import __file__ as app_package_file
 from app.core.config import get_settings
 from app.services.result_workspace import ResultWorkspace
 from app.services.tool_result_store import ResultSnapshotUnavailable, ToolResultStore
@@ -37,7 +38,7 @@ async def isolated_results():
         with Operations.context(MigrationContext.configure(connection)):
             for number, filename in enumerate(("tool_payloads.py", "sql_result_rows.py",
                     "result_datasets.py", "virtual_table_rows.py", "nullable_source_complete.py"), 1):
-                path = Path("app/tool_results_migrations/versions") / f"{number:04d}_{filename}"
+                path = Path(app_package_file).parent / "tool_results_migrations" / "versions" / f"{number:04d}_{filename}"
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 assert spec and spec.loader
                 module = importlib.util.module_from_spec(spec)

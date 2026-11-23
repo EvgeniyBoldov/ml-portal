@@ -110,8 +110,8 @@ it('shows template fields as a structured review instead of leaking raw schema J
   );
 
   expect(await screen.findByText('Итого')).toBeTruthy();
-  expect(screen.getByText('Обязательное')).toBeTruthy();
-  expect(screen.getByText('Технические атрибуты')).toBeTruthy();
+  expect(screen.getByTitle('Обязательное поле')).toBeTruthy();
+  expect(screen.getByText('Число')).toBeTruthy();
   expect(container.querySelector('pre')).toBeNull();
   expect(container.textContent).not.toContain('"fields"');
   queryClient.clear();

@@ -15,6 +15,12 @@ def memory_cleanup(monkeypatch):
     cleanup = AsyncMock()
     monkeypatch.setattr(documents_router, "_cleanup_document_vectors", AsyncMock())
     monkeypatch.setattr(documents_router.LongMemoryDocumentService, "enqueue", cleanup)
+    # These unit tests target stop/delete mechanics; the production routes now
+    # apply ACL guards (_require_collection_editor from upload_shared and the
+    # rag content-access dependency), which are covered by dedicated ACL tests.
+    monkeypatch.setattr(documents_router, "_require_collection_editor", AsyncMock())
+    monkeypatch.setattr(documents_router, "require_document_content_access", AsyncMock())
+    monkeypatch.setattr(lifecycle_router, "require_linked_document_content_access", AsyncMock())
     return cleanup
 
 

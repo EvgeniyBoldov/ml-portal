@@ -13,6 +13,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import __file__ as app_package_file
 from app.core.config import get_settings
 from app.services.result_workspace import ResultWorkspace
 from app.services.tool_result_store import ToolResultStore, ToolResultStoreError
@@ -32,7 +33,7 @@ async def workspace_pg(monkeypatch):
     def migrate(connection):
         with Operations.context(MigrationContext.configure(connection)):
             for filename in ("0001_tool_payloads.py", "0002_sql_result_rows.py", "0003_result_datasets.py", "0004_virtual_table_rows.py", "0005_nullable_source_complete.py"):
-                path = Path("app/tool_results_migrations/versions") / filename
+                path = Path(app_package_file).parent / "tool_results_migrations" / "versions" / filename
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 module = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(module)
@@ -137,7 +138,7 @@ async def test_datastore_inventory_uses_real_catalog_provenance_and_scope(worksp
 @pytest.mark.asyncio
 async def test_datastore_prompt_migration_preserves_custom_rules_and_other_roles(workspace_pg):
     _, _, engine = workspace_pg
-    path = Path("app/migrations/versions/0196_datastore_prompt_inventory.py")
+    path = Path(app_package_file).parent / "migrations" / "versions" / "0196_datastore_prompt_inventory.py"
     spec = importlib.util.spec_from_file_location("datastore_prompt_migration", path)
     migration = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(migration)
@@ -659,3 +660,122 @@ async def test_find_escapes_and_mixed_root_rows_preserve_source_values(workspace
         call_id="mixed-root-query", task_id="task", agent_execution_id="agent", **scope)
     assert queried["rows"] == [{"value": Decimal("1"), "name": None},
                                 {"value": {"name": "object"}, "name": "object"}]
+
+
+@pytest.mark.asyncio
+async def test_collection_info_pages_profile_only_selected_fields_and_preserve_coverage(workspace_pg, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from app.agents.builtins.collection_catalog import CollectionInfoTool
+    from app.agents.context import ToolContext, ToolResult
+    from app.agents.runtime.tools import OperationExecutionFacade
+    from app.services.collection_info_service import LocalCollectionInfoEnricher
+
+    workspace, scope, engine = workspace_pg
+    fields = [
+        {"name": f"field_{i}", "data_type": "integer", "category": "user", "filterable": True}
+        for i in range(27)
+    ]
+    names = [field["name"] for field in fields]
+    async with engine.begin() as connection:
+        columns = ", ".join(f"{name} integer" for name in names)
+        await connection.execute(text(f"CREATE TABLE catalog_rows (_created_at date, _updated_at date, {columns})"))
+        await connection.execute(text(
+            "INSERT INTO catalog_rows (_created_at, _updated_at, field_24, field_25) "
+            "VALUES ('2026-01-01', '2026-02-01', 0, 5), ('2026-01-02', '2026-02-02', 7, NULL)"
+        ))
+
+    collection = SimpleNamespace(
+        id=uuid4(), slug="catalog", name="Catalog", collection_type="template",
+        status="created", schema_status="fresh", current_version=None, table_name="catalog_rows",
+        is_remote=False, is_local=True, total_rows=0, entity_type=None, vector_fields=[], last_sync_at=None,
+        get_business_fields=lambda: fields, get_user_fields=lambda: fields, get_specific_fields=lambda: [],
+        get_system_fields=lambda: [], get_filterable_fields=lambda: fields, get_sortable_fields=lambda: [],
+        get_prompt_context_fields=lambda: [],
+    )
+    monkeypatch.setattr("app.core.db.get_session_factory", lambda: async_sessionmaker(engine))
+    monkeypatch.setattr("app.services.collection_service.CollectionService.get_by_slug", AsyncMock(return_value=collection))
+    build_profile = LocalCollectionInfoEnricher._build_field_profile
+    profiled_names = []
+
+    async def observe_profile(self, **kwargs):
+        profiled_names.append(kwargs["field"]["name"])
+        return await build_profile(self, **kwargs)
+
+    monkeypatch.setattr(LocalCollectionInfoEnricher, "_build_field_profile", observe_profile)
+    tool = CollectionInfoTool()
+    ctx = ToolContext(tenant_id=scope["tenant_id"], user_id=scope["user_id"])
+
+    async def inspect(**arguments):
+        result = await tool.execute(ctx, {"collection_slug": "catalog", **arguments})
+        assert result.success, result.error
+        rendered = OperationExecutionFacade.format_result_for_context(
+            ToolResult.ok(result.data, delivery="direct"), operation_slug="collection.info",
+        )
+        return result.data, json.loads(rendered)
+
+    first_payload, first = await inspect()
+    first_page = {"offset": 0, "total": 27, "shown": 24, "next_offset": 24}
+    assert profiled_names == names[:24]
+    assert first_payload["schema"]["field_page"] == first["coverage"]["fields"] == first_page
+
+    bounded = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(first_payload, delivery="direct"), operation_slug="collection.info",
+        context_budget_tokens=500, context_model="gpt-4o-mini",
+    ))
+    bounded_page = bounded["coverage"]["fields"]
+    shown = bounded_page["shown"]
+    assert 0 < shown < 24
+    assert bounded_page == {"offset": 0, "total": 27, "shown": shown, "next_offset": shown}
+    assert [field["name"] for field in bounded["fields"]] == names[:shown]
+    assert {item["field"] for item in bounded["field_profiles"]} <= set(names[:shown])
+
+    profiled_names.clear()
+    second_payload, second = await inspect(field_offset=first["coverage"]["fields"]["next_offset"])
+    second_page = {"offset": 24, "total": 27, "shown": 3}
+    assert profiled_names == names[24:]
+    assert second_payload["schema"]["field_page"] == second["coverage"]["fields"] == second_page
+    assert [field["name"] for field in second["fields"]] == names[24:]
+    assert list(second_payload["filter_hints"]["fields"]) == names[24:]
+    assert second["runtime_enrichment"]["status"] == "ready"
+    assert second["runtime_enrichment"]["data"]["row_count"] == 2
+    assert second["runtime_enrichment"]["data"]["temporal_bounds"]["last_updated_at"] == "2026-02-02"
+    assert second["field_profiles"][0]["min"] == 0
+    assert second["field_profiles"][0]["max"] == 7
+    assert second["field_profiles"][1]["null_count"] == 1
+    assert second["field_profiles"][1]["distinct_count"] == 1
+    assert second["field_profiles"][2]["distinct_count"] == 0
+
+    stored = await ToolResultStore().save(
+        payload=second_payload, operation="collection.info", call_id="catalog-page",
+        task_id="catalog", agent_execution_id="inspect", **scope,
+    )
+    stored_context = json.loads(OperationExecutionFacade.format_result_for_context(
+        ToolResult.ok(second_payload, delivery="stored"),
+        operation_slug="collection.info", stored_result=stored,
+    ))
+    assert stored_context["result_id"] == stored["result_id"]
+    assert stored_context["coverage"]["fields"] == second_page
+    page = await workspace.read(result_id=stored["result_id"], path="/schema/field_page", limit=1, **scope)
+    assert page["value"] == [second_page]
+    saved_fields = await workspace.read(result_id=stored["result_id"], path="/schema/fields", limit=1, **scope)
+    assert [field["name"] for field in saved_fields["value"][0]] == names[24:]
+
+    profiled_names.clear()
+    field_payload, field = await inspect(field="field_25", field_offset=24)
+    assert profiled_names == ["field_25"]
+    assert field["requested_field"] == "field_25"
+    assert field["coverage"]["fields"] == {"offset": 0, "total": 1, "shown": 1}
+    assert field_payload["schema"]["filterable_fields"] == ["field_25"]
+    assert field["filter_hints"][0]["choices"] == [5]
+
+    profiled_names.clear()
+    missing_payload, missing = await inspect(field="missing")
+    assert profiled_names == []
+    assert missing["fields"] == []
+    assert missing_payload["schema"]["field_page"] == missing["coverage"]["fields"] == {
+        "offset": 0, "total": 0, "shown": 0,
+    }

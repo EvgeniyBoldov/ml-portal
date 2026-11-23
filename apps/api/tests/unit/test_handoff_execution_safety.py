@@ -523,7 +523,15 @@ async def test_real_agent_tool_facade_preserves_overflow_direct_write_and_reuses
 
 
 @pytest.mark.asyncio
-async def test_native_confirmation_pause_preserves_overflow_result_and_remaining_batch(monkeypatch) -> None:
+@pytest.mark.parametrize(("overflow", "with_file", "store_failures", "tight_budget"), [
+    (False, False, 0, None), (True, False, 0, None), (False, True, 0, None),
+    (True, False, 1, None), (True, False, 2, None),
+    (True, False, 0, "pause"), (False, False, 0, "resume"),
+])
+async def test_native_confirmation_pause_preserves_overflow_result_and_remaining_batch(
+    monkeypatch, overflow, with_file, store_failures, tight_budget,
+) -> None:
+    from app.adapters.impl.llm_context import estimate_request_tokens
     from app.agents.context import RuntimeDependencies, ToolContext, ToolResult
     from app.agents.contracts import ProviderExecutionTarget, ResolvedOperation
     from app.agents.runtime.agent import AgentToolRuntime
@@ -541,9 +549,16 @@ async def test_native_confirmation_pause_preserves_overflow_result_and_remaining
         return {"choices": [{"message": message}]}
 
     runtime = AgentToolRuntime(Mock())
+    runtime.llm.raw_client._connection_resolver = None
     done = json.dumps({"completion": "fulfilled", "answer": "done"})
+    file_tool_name = "instance.local-files.file.read"
+    completed_calls = [("read-1", "remote.read"), ("small-1", "remote.small")]
+    if with_file:
+        completed_calls.append(("file-1", file_tool_name))
+    pending_calls = [("write-1", "remote.write"), ("third-1", "remote.third")]
     runtime.llm.call_raw = AsyncMock(side_effect=[
-        native_response([("read-1", "remote.read"), ("write-1", "remote.write"), ("third-1", "remote.third")]),
+        native_response([("prior-1", "remote.previous")]),
+        native_response(completed_calls + pending_calls),
         native_response([("write-2", "remote.write"), ("third-2", "remote.third")]),
         native_response(content=done),
     ])
@@ -555,27 +570,45 @@ async def test_native_confirmation_pause_preserves_overflow_result_and_remaining
     runtime.prompt_assembler.assemble = Mock(return_value=SimpleNamespace(system_prompt="Test"))
     runtime._create_run_session = Mock(side_effect=lambda **kwargs: SimpleNamespace(
         run_id=uuid4(), start=AsyncMock(), record_event=AsyncMock(), finish=AsyncMock()))
-    runtime._tool_results_context_budget = AsyncMock(return_value=BatchContextBudget(
-        model="gpt-4o-mini", context_window_tokens=8192, result_tokens=1200))
+    normal_budget = BatchContextBudget(model="gpt-4o-mini", context_window_tokens=8192, result_tokens=1200)
+    runtime._tool_results_context_budget = AsyncMock(side_effect=[
+        normal_budget,
+        BatchContextBudget(model="gpt-4o-mini", context_window_tokens=128, result_tokens=1200)
+        if tight_budget == "pause" else normal_budget,
+        normal_budget,
+    ])
     monkeypatch.setattr("app.runtime.datastore_context.load_result_catalog", AsyncMock(return_value=([], "available")))
     monkeypatch.setattr("app.agents.runtime.result_workspace_tools.with_workspace_operations", lambda ops, **_: ops)
-    saved = AsyncMock(return_value={"result_id": "paused-direct-1", "revision": 1,
-        "source_complete": None, "row_count": 1, "payload_type": "json"})
+    stored = {"result_id": "paused-direct-1", "revision": 1,
+        "source_complete": None, "row_count": 1, "payload_type": "json"}
+    saved = AsyncMock(side_effect=[OSError("Result Store unavailable")] * store_failures + [stored])
     monkeypatch.setattr(ToolResultStore, "save", saved)
     calls: list[str] = []
 
     async def execute(call, ctx):
         calls.append(call.tool_name)
+        if call.tool_name == "remote.previous":
+            return ToolResult.ok({"text": "[Document memory for this task] PRIOR_RECEIPT_BODY"}, delivery="direct")
         if call.tool_name == "remote.read":
-            return ToolResult.ok({"text": "completed direct body " + ("large " * 3000)}, delivery="direct")
+            return ToolResult.ok(
+                {"text": "completed direct body " + ("large " * (3000 if overflow else 720))},
+                delivery="direct", mcp_content={"items": [], "warning_summaries": ["Upstream warning"]},
+            )
+        if call.tool_name == "remote.small":
+            return ToolResult.ok({"text": "SMALL_RESULT_BODY"}, delivery="direct")
+        if call.tool_name == file_tool_name:
+            return ToolResult.ok({"text": "FILE_BODY_MUST_NOT_ENTER_CHECKPOINT"}, delivery="direct")
         return ToolResult.ok({"status": "done", "operation": call.tool_name}, delivery="direct")
 
     provider = SimpleNamespace(execute=execute)
     operations = []
-    for name, confirm in (("remote.read", False), ("remote.write", True), ("remote.third", False)):
+    completed_names = [name for _, name in completed_calls]
+    operation_flags = [(name, False) for name in ["remote.previous", *completed_names]]
+    for name, confirm in [*operation_flags, ("remote.write", True), ("remote.third", False)]:
         operations.append(ResolvedOperation(operation_slug=name, operation=name, name=name,
             source="local", scope="system", data_instance_id="system", data_instance_slug="system",
-            side_effects=confirm, idempotent=not confirm, requires_confirmation=confirm,
+            side_effects=confirm or (store_failures > 0 and name == "remote.read"),
+            idempotent=not confirm, requires_confirmation=confirm,
             result_delivery="direct",
             target=ProviderExecutionTarget(operation_slug=name, provider_type="local", handler_slug=name,
                 data_instance_id="system", data_instance_slug="system")))
@@ -588,23 +621,79 @@ async def test_native_confirmation_pause_preserves_overflow_result_and_remaining
         resolved_operations=operations, resolved_data_instances=[], rbac_audit={},
         partial_mode_warning=None, run_id=uuid4())
 
-    first = [event async for event in runtime.execute(request, [{"role": "user", "content": "Do the work"}], ctx)]
+    task_text = "[Document memory for this task]\nReview the document with this heading."
+    first = [event async for event in runtime.execute(request, [{"role": "user", "content": task_text}], ctx)]
+    if tight_budget == "pause":
+        assert not any(event.type == RuntimeEventType.CONFIRMATION_REQUIRED for event in first)
+        assert any(event.type == RuntimeEventType.ERROR and
+                   event.data["error_code"] == "llm_context_window_exceeded" for event in first)
+        assert calls == ["remote.previous", *completed_names]
+        return
     pause = next(event for event in first if event.type == RuntimeEventType.CONFIRMATION_REQUIRED)
     checkpoint = pause.data["checkpoint"]
     checkpoint_json = json.dumps(checkpoint)
-    assert "completed direct body" not in checkpoint_json
-    assert "paused-direct-1" in checkpoint_json
+    assert ("completed direct body" in json.dumps(checkpoint["messages"])) is not overflow
+    assert ("paused-direct-1" in checkpoint_json) == (overflow and store_failures < 2)
+    assert "SMALL_RESULT_BODY" in checkpoint_json
+    assert "Upstream warning" in checkpoint_json
+    assert "FILE_BODY_MUST_NOT_ENTER_CHECKPOINT" not in checkpoint_json
     assert [item["tool"] for item in checkpoint["pending_operations"]] == ["remote.write", "remote.third"]
-    assert not any(message.get("role") == "assistant" and message.get("tool_calls")
-                   for message in checkpoint["messages"])
+    assert json.dumps(checkpoint["messages"]).count("PRIOR_RECEIPT_BODY") == 1
+    confirmation_message = json.loads(checkpoint["messages"][-1]["content"])
+    completed_operations = confirmation_message["completed_operations"]
+    assert [item["call_id"] for item in completed_operations] == [call_id for call_id, _ in completed_calls]
+    receipts = [json.loads(item["receipt"]) for item in completed_operations]
+    assert ("text" in receipts[0]) is not overflow
+    if store_failures == 2:
+        assert receipts[0]["reason"] == "result_store_failed"
+        assert receipts[0]["operation_executed"] is True
+        assert completed_operations[0]["success"] is True
+    elif overflow:
+        assert receipts[0]["next_action"]["arguments"]["result_id"] == "paused-direct-1"
+    else:
+        token_count = estimate_request_tokens({"model": "gpt-4o-mini", "messages": [
+            {"role": "tool", "content": completed_operations[0]["receipt"]},
+        ]})
+        assert 600 < token_count < 1200
+    assert receipts[0]["mcp_content"]["warning_summaries"] == ["Upstream warning"]
+    assert receipts[1]["text"] == "SMALL_RESULT_BODY"
+    if with_file:
+        assert receipts[2]["recoverability"] == "reauthorize_and_read_again"
+    assert "pending_operation" not in confirmation_message
 
     ctx.extra.update(interaction_resume_checkpoint=checkpoint, confirmation_tokens=["approved"],
                      interaction_answers=[{"response": True}])
+    if tight_budget == "resume":
+        monkeypatch.setattr("app.adapters.impl.llm_context.DEFAULT_CONTEXT_WINDOW", 8192)
+        ctx.extra["interaction_answers"].append({"response": " extra" * 9000})
+    if with_file:
+        # Older checkpoints included both generated context messages at the front.
+        checkpoint.pop("messages_include_runtime_context")
+        checkpoint["messages"][:0] = [
+            {"role": "user", "content": "[Document memory for this task]\nStale memory"},
+            {"role": "user", "content": "[Datastore — available file and result metadata]\nStale inventory"},
+        ]
     second = [event async for event in runtime.execute(request, [{"role": "user", "content": "ignored"}], ctx)]
 
-    assert calls == ["remote.read", "remote.write", "remote.third"], json.dumps(
+    if tight_budget == "resume":
+        assert any(event.type == RuntimeEventType.ERROR and
+                   event.data["error_code"] == "llm_context_window_exceeded" for event in second)
+        assert calls == ["remote.previous", *completed_names]
+        assert runtime.llm.call_raw.await_count == 2
+        return
+    assert calls == ["remote.previous", *completed_names, "remote.write", "remote.third"], json.dumps(
         [{"type": event.type.value, "data": event.data} for event in second], default=str)
-    assert saved.await_count == 1
+    resumed_messages = runtime.llm.call_raw.await_args_list[2].kwargs["messages"]
+    prior_result = next(message for message in resumed_messages if message.get("tool_call_id") == "prior-1")
+    assert "PRIOR_RECEIPT_BODY" in prior_result["content"]
+    assert {"role": "user", "content": task_text} in resumed_messages
+    assert "Stale memory" not in json.dumps(resumed_messages)
+    assert "Stale inventory" not in json.dumps(resumed_messages)
+    if store_failures == 2:
+        assert "result_store_failed" in json.dumps(resumed_messages)
+    assert saved.await_count == min(store_failures + int(overflow), 2)
+    if store_failures:
+        assert [call.kwargs["call_id"] for call in saved.await_args_list] == ["read-1", "read-1"]
     assert any(event.type == RuntimeEventType.FINAL for event in second)
 
 

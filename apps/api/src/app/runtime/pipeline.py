@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Awaitable, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents.context import ToolContext
@@ -38,6 +39,7 @@ from app.runtime.entity_ids import (
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
 from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
 from app.runtime.memory.transport import TurnMemory
+from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.platform_config import PlatformConfigLoader
 from app.runtime.stages.graph_planning_stage import GraphPlanningOutcomeKind
 from app.runtime.turn_state import RuntimeTurnState
@@ -525,7 +527,7 @@ class RuntimePipeline:
                         parent_entity_type="run", parent_entity_id=run_id_str,
                     ), phase=OrchestrationPhase.PIPELINE)
                     await finish_run("failed")
-                    yield RuntimeEvent.stop(PipelineStopReason.BUDGET_EXCEEDED.value)
+                    yield RuntimeEvent.stop(PipelineStopReason.BUDGET_EXCEEDED.value, run_id=run_id_str)
                     break
                 if event.type == RuntimeEventType.RUN_END:
                     run_terminal = True
@@ -1149,7 +1151,7 @@ class RuntimePipeline:
                     budget_resolver=budget_resolver,
                 ):
                     if event.type == RuntimeEventType.SYNTHESIS_START:
-                        synthesis_id = str(event.data.get("synthesis_id") or "") or None
+                        synthesis_id = str(event.data.get("entity_id") or "") or None
                     yield await emitter.emit(event, phase=OrchestrationPhase.SYNTHESIS)
             except TimeoutError:
                 runtime_state.final_answer = None
@@ -1380,17 +1382,16 @@ class RuntimePipeline:
                         ),
                         phase=OrchestrationPhase.PIPELINE,
                     )
-            if await_background_tail or planning_outcome.kind == GraphPlanningOutcomeKind.FAILED:
-                yield await emitter.emit(
-                    RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
-                    phase=OrchestrationPhase.PIPELINE,
-                )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
                 terminal_state=("waiting_confirmation" if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value else "waiting_input" if terminal_status == PipelineStopReason.WAITING_INPUT.value else "failed"),
                 project_context=turn_mem.project_context,
                 clarification={"question": planning_outcome.pause_question, "message": planning_outcome.pause_message} if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED else None,
                 term_bindings=lookup.get("glossary") or [],
+            )
+            yield await emitter.emit(
+                RuntimeEvent.run_end(run_id=run_id_str, status=terminal_status),
+                phase=OrchestrationPhase.PIPELINE,
             )
             return
 
@@ -1710,6 +1711,9 @@ class RuntimePipeline:
                         emitter=emitter,
                         budget_resolver=BudgetResolver(tail_session),
                         logging_level=logging_level,
+                        session_factory=session_factory,
+                        start_event=start_event,
+                        terminal_orchestrator_id=terminal_orchestrator_id,
                     ):
                         pass
                 except Exception as exc:  # Defensive: _finalize_memory is best effort itself.
@@ -1760,6 +1764,9 @@ class RuntimePipeline:
         emitter: RuntimeEventLogger,
         budget_resolver: Optional[BudgetResolver] = None,
         logging_level: Optional[str] = None,
+        session_factory: Any | None = None,
+        start_event: asyncio.Event | None = None,
+        terminal_orchestrator_id: str | None = None,
     ) -> AsyncGenerator[RuntimeEvent, None]:
         """Persist the turn's memory effects via MemoryWriter.
 
@@ -2082,6 +2089,9 @@ class RuntimePipeline:
                 ),
             )
             from app.models.memory import MemoryFinalizeOutbox
+            if session_factory is None:
+                from app.core.db import get_session_factory
+                session_factory = get_session_factory()
             outbox_payload = payload.model_dump(mode="json")
             async with session_factory() as outbox_session:
                 existing = (await outbox_session.execute(

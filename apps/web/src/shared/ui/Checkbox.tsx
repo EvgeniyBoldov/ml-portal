@@ -8,6 +8,7 @@ interface CheckboxProps {
   description?: string;
   disabled?: boolean;
   id?: string;
+  'aria-label'?: string;
 }
 
 export default function Checkbox({
@@ -17,6 +18,7 @@ export default function Checkbox({
   description,
   disabled = false,
   id,
+  'aria-label': ariaLabel,
 }: CheckboxProps) {
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     onChange(e.target.checked);
@@ -27,6 +29,7 @@ export default function Checkbox({
       <input
         type="checkbox"
         id={id}
+        aria-label={ariaLabel}
         checked={checked}
         onChange={handleChange}
         disabled={disabled}

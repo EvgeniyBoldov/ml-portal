@@ -77,6 +77,14 @@ does not restart the earlier tool loop. An interrupted native tool batch is
 stored as completed results plus the not-yet-executed pending operation, without
 orphaned native tool-call messages.
 
+On resume the agent rebuilds the Datastore inventory from currently available
+results and files. Older checkpoints may contain a saved inventory, which the
+runtime removes before restoring the working messages.
+
+The runtime closes the current run segment with `waiting_input` or
+`waiting_confirmation` after reconciling chat context, including when chat
+uses a detached tail for completed answers.
+
 Execution receipts and write guards survive the checkpoint. File-derived raw
 request bodies are scrubbed and are not replayed as authorization: the operation
 must be freshly authorized before dispatch. A malformed persisted write-guard

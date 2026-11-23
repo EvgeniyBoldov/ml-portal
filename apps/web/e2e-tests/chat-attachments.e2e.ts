@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { signIn } from './auth';
 
 // Uses real auth, nginx, upload storage, extraction, and the configured LLM runtime.
 // Supply a local refresh-token fixture; credentials never enter reports.
@@ -39,20 +39,8 @@ for (const kind of ['large-pdf', 'small-pdf', 'txt']) {
     request,
   }) => {
     test.setTimeout(240_000);
-    const { refresh_token } = JSON.parse(readFileSync(authFile!, 'utf8'));
-    await context.addCookies([
-      {
-        name: 'refresh_token',
-        value: refresh_token,
-        url: process.env.BASE_URL || 'http://nginx:8080',
-        httpOnly: true,
-        sameSite: 'Lax',
-      },
-    ]);
-    const auth = await context.request.post('/api/v1/auth/refresh', {});
-    expect(auth.ok()).toBeTruthy();
-    const { access_token } = await auth.json();
-    const headers = { Authorization: `Bearer ${access_token}` };
+    const accessToken = await signIn(context, authFile!);
+    const headers = { Authorization: `Bearer ${accessToken}` };
     const created = await context.request.post('/api/v1/chats', {
       headers,
       data: { name: `Attachment E2E ${kind}` },

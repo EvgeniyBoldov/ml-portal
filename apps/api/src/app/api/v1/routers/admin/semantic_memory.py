@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import json
-import logging
 from datetime import datetime
 from typing import Literal, Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, model_validator
-from sqlalchemy import func, or_, select, update
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,7 +18,7 @@ from app.core.config import get_settings
 from app.core.security import UserCtx
 from app.models.rag import RAGDocument
 from app.models.document_memory_staging import (
-    DocumentMemoryExtractionAttempt, DocumentMemorySnapshot, GlossaryTerm, MemoryCandidateProjectBinding,
+    DocumentMemorySnapshot, GlossaryTerm, MemoryCandidateProjectBinding,
     MemoryCandidateScopeProposal, MemoryConflictCase, MemoryConflictMember,
     MemoryExtractionCandidate, MemoryScopeProposal,
 )
@@ -41,7 +40,6 @@ from app.services.lifecycle_admin_service import LifecycleAdminService
 from app.runtime.memory.content_contracts import content_contract_error
 from app.runtime.memory.document_sections import split_canonical_sections
 from app.storage.paths import calculate_text_checksum
-from app.workers.tasks_shadow_document_memory import study_shadow_document_sections
 
 
 router = APIRouter(prefix="/memory")
@@ -140,12 +138,6 @@ class SemanticMemoryStagingOverviewResponse(BaseModel):
     candidates: dict[str, int] = Field(default_factory=dict)
     project_bindings: dict[str, int] = Field(default_factory=dict)
 
-
-class ShadowReextractResponse(BaseModel):
-    snapshot_id: UUID
-    attempt_id: UUID
-    attempt_number: int
-    status: str
 
 
 class ShadowCandidateResponse(BaseModel):
@@ -663,96 +655,14 @@ async def update_shadow_candidate_tags(
     return await _shadow_candidate_response(db, row, (source.title, source.scope) if source else (None, None))
 
 
-@router.get("/staging/retryable-snapshots")
-async def list_retryable_shadow_snapshots(db: AsyncSession = Depends(db_session), _: UserCtx = Depends(require_admin)):
-    rejected_candidate = select(MemoryExtractionCandidate.id).where(
-        MemoryExtractionCandidate.attempt_id == DocumentMemorySnapshot.active_attempt_id,
-        MemoryExtractionCandidate.resolution_status == "rejected",
-    ).exists()
-    rejected_scope = select(MemoryScopeProposal.id).where(
-        MemoryScopeProposal.attempt_id == DocumentMemorySnapshot.active_attempt_id,
-        MemoryScopeProposal.status == "rejected",
-    ).exists()
-    rows = (await db.execute(select(DocumentMemorySnapshot, RAGDocument.title, DocumentMemoryExtractionAttempt.attempt_number).join(
-        RAGDocument, RAGDocument.id == DocumentMemorySnapshot.document_id,
-    ).outerjoin(
-        DocumentMemoryExtractionAttempt, DocumentMemoryExtractionAttempt.id == DocumentMemorySnapshot.active_attempt_id,
-    ).where(
-        DocumentMemorySnapshot.status.in_(("awaiting_review", "approved", "rejected", "failed")),
-        RAGDocument.status != "archived",
-        or_(rejected_candidate, rejected_scope, DocumentMemorySnapshot.status == "failed"),
-    ).order_by(DocumentMemorySnapshot.updated_at.desc()).limit(100))).all()
-    return [{"snapshot_id": str(row.id), "document_title": title,
-             "status": row.status, "attempt_number": number} for row, title, number in rows]
+@router.get("/staging/retryable-snapshots", deprecated=True)
+async def list_retryable_shadow_snapshots(_: UserCtx = Depends(require_admin)) -> list[dict]:
+    return []
 
 
-@router.post("/staging/snapshots/{snapshot_id}/reextract", response_model=ShadowReextractResponse, status_code=202)
-async def reextract_shadow_snapshot(snapshot_id: UUID, db: AsyncSession = Depends(db_session),
-                                    _: UserCtx = Depends(require_admin)):
-    snapshot = await db.scalar(select(DocumentMemorySnapshot).where(
-        DocumentMemorySnapshot.id == snapshot_id,
-    ).with_for_update().execution_options(populate_existing=True))
-    if snapshot is None:
-        raise HTTPException(status_code=404, detail="snapshot_not_found")
-    document = await db.get(RAGDocument, snapshot.document_id)
-    if document is None or document.status == "archived":
-        raise HTTPException(status_code=409, detail="document_source_unavailable")
-    old_attempt = await db.get(DocumentMemoryExtractionAttempt, snapshot.active_attempt_id) if snapshot.active_attempt_id else None
-    rejected = await db.scalar(select(MemoryExtractionCandidate.id).where(
-        MemoryExtractionCandidate.snapshot_id == snapshot.id,
-        MemoryExtractionCandidate.attempt_id == snapshot.active_attempt_id,
-        MemoryExtractionCandidate.resolution_status == "rejected",
-    ).limit(1))
-    rejected_scope = await db.scalar(select(MemoryScopeProposal.id).where(
-        MemoryScopeProposal.snapshot_id == snapshot.id,
-        MemoryScopeProposal.attempt_id == snapshot.active_attempt_id,
-        MemoryScopeProposal.status == "rejected",
-    ).limit(1))
-    if rejected is None and rejected_scope is None and snapshot.status != "failed":
-        raise HTTPException(status_code=409, detail="rejection_required_before_reextract")
-    if snapshot.status not in {"awaiting_review", "approved", "rejected", "failed"}:
-        raise HTTPException(status_code=409, detail="snapshot_not_retryable")
-    feedback = await ShadowDocumentStudyService(db).reextraction_feedback(snapshot.id, snapshot.active_attempt_id)
-    if not feedback and old_attempt is not None:
-        feedback = list(old_attempt.feedback or [])[:40]
-    if old_attempt is not None:
-        old_attempt.status = "superseded"
-        await db.execute(update(MemoryExtractionCandidate).where(
-            MemoryExtractionCandidate.attempt_id == old_attempt.id,
-            MemoryExtractionCandidate.resolution_status.in_(("extracted", "needs_review", "conflict")),
-        ).values(resolution_status="stale"))
-        await db.execute(update(MemoryScopeProposal).where(
-            MemoryScopeProposal.attempt_id == old_attempt.id,
-            MemoryScopeProposal.status.in_(("awaiting_term", "needs_review")),
-        ).values(status="superseded"))
-        await db.execute(update(MemoryCandidateScopeProposal).where(
-            MemoryCandidateScopeProposal.candidate_id.in_(select(MemoryExtractionCandidate.id).where(
-                MemoryExtractionCandidate.attempt_id == old_attempt.id,
-                MemoryExtractionCandidate.resolution_status == "stale")),
-            MemoryCandidateScopeProposal.status.in_(("suggested", "confirmed")),
-        ).values(status="superseded"))
-    max_number = await db.scalar(select(func.max(DocumentMemoryExtractionAttempt.attempt_number)).where(
-        DocumentMemoryExtractionAttempt.snapshot_id == snapshot.id,
-    )) or 0
-    attempt = DocumentMemoryExtractionAttempt(snapshot_id=snapshot.id, attempt_number=int(max_number) + 1,
-                                               status="queued", feedback=feedback)
-    db.add(attempt)
-    await db.flush()
-    snapshot.active_attempt_id = attempt.id
-    snapshot.status = "studying"
-    snapshot.metrics = {**dict(snapshot.metrics or {}), "next_section": 0, "reextract_attempt": int(max_number) + 1,
-                        "manual_request_id": str(uuid4())}
-    source_tenant_id = await db.scalar(select(Source.tenant_id).where(Source.source_id == snapshot.document_id))
-    if source_tenant_id is None:
-        await db.rollback()
-        raise HTTPException(status_code=409, detail="document_source_unavailable")
-    await db.commit()
-    try:
-        study_shadow_document_sections.delay(str(snapshot.id), str(source_tenant_id), str(attempt.id), 0)
-    except Exception as exc:
-        logging.getLogger(__name__).warning("Memory attempt dispatch deferred to reconciliation: %s", type(exc).__name__)
-    return ShadowReextractResponse(snapshot_id=snapshot.id, attempt_id=attempt.id,
-                                   attempt_number=attempt.attempt_number, status=attempt.status)
+@router.post("/staging/snapshots/{snapshot_id}/reextract", status_code=410, deprecated=True)
+async def reextract_shadow_snapshot(snapshot_id: UUID, _: UserCtx = Depends(require_admin)) -> None:
+    raise HTTPException(status_code=410, detail="legacy_extraction_disabled")
 
 
 @router.get("/staging/scope-proposals", response_model=list[MemoryScopeProposalResponse])

@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 
 from app.core.config import get_settings
 from app.models.memory import MemoryItem, MemoryClaim
-from app.models.document_memory_staging import MemoryScopeProposal
 from app.models.memory_scope import MemoryScope, MemoryClaimScope
 from app.runtime.memory.read_policy import applicable_claim
 from app.runtime.memory.effective_scope import memory_visible_for_scope
@@ -17,28 +16,22 @@ pytestmark = pytest.mark.skipif(os.getenv("MEMORY_WORKFLOW_PG") != "1", reason="
 
 
 @pytest.mark.asyncio
-async def test_sql_and_prompt_filters_agree_for_all_null_and_concrete_branches():
+async def test_sql_and_prompt_filters_agree_for_flat_scope_bindings():
     schema = "scope_matrix_" + uuid4().hex
     engine = create_async_engine(get_settings().ASYNC_DB_URL)
     scoped = None
     try:
         async with engine.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
-            for table in ("memory_items", "memory_claims", "memory_scopes", "memory_claim_scopes", "memory_conflict_cases", "memory_conflict_members", "memory_scope_proposals"):
+            for table in ("memory_items", "memory_claims", "memory_scopes", "memory_claim_scopes", "memory_conflict_cases", "memory_conflict_members"):
                 await conn.execute(text(f'CREATE TABLE "{schema}".{table} (LIKE public.{table} INCLUDING ALL)'))
         scoped = create_async_engine(get_settings().ASYNC_DB_URL, connect_args={"server_settings": {"search_path": f'"{schema}",public'}})
         async with AsyncSession(scoped) as session:
-            proposal = MemoryScopeProposal(snapshot_id=uuid4(), scope_type="team", proposed_key="team.document",
-                normalized_key="document", name="Document team", status="needs_review", evidence_section_ids=["section1"])
-            session.add(proposal)
-            await session.flush()
-            assert proposal.term_candidate_id is None and proposal.glossary_term_id is None
-            keys = ["team.all", "team.ops", "team.other", "project.all", "project.a", "project.b"]
-            scopes = {key: MemoryScope(scope_type=key.split('.')[0], key=key, name=key, is_all=key.endswith('.all')) for key in keys}
+            keys = ["company", "ops", "project-a", "project-b"]
+            scopes = {key: MemoryScope(scope_type="project", key=key, name=key) for key in keys}
             session.add_all(scopes.values())
             await session.flush()
-            atoms = [[], ["team.all"], ["team.ops"], ["project.all"], ["project.a"],
-                     ["team.all", "project.all"], ["team.ops", "project.a"], ["team.ops", "project.a", "project.b"]]
+            atoms = [["company"], ["ops"], ["project-a"], ["ops", "project-a"], ["project-a", "project-b"]]
             claims = []
             for ordinal, bound in enumerate(atoms):
                 item = MemoryItem(scope="company", item_type="rule", subject=str(ordinal), normalized_subject=str(ordinal),
@@ -52,8 +45,7 @@ async def test_sql_and_prompt_filters_agree_for_all_null_and_concrete_branches()
                 session.add_all([MemoryClaimScope(claim_id=claim.id, scope_id=scopes[key].id) for key in bound])
                 claims.append(claim)
             await session.flush()
-            queries = [[], ["team.ops"], ["project.a"], ["team.ops", "project.a"], ["team.other", "project.b"],
-                       ["project.all"], ["team.ops", "project.all"], ["team.ops", "project.a", "project.all"]]
+            queries = [[], ["company"], ["ops"], ["project-a"], ["ops", "project-b"], ["other"]]
             for query in queries:
                 actual = set((await session.scalars(select(MemoryClaim.id).join(MemoryItem, MemoryItem.id == MemoryClaim.memory_item_id)
                     .where(applicable_claim(project_ids=[], scope_keys=query, tenant_id=None)))).all())

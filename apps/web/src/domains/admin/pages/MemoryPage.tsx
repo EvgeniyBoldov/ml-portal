@@ -94,25 +94,12 @@ export default function MemoryPage() {
     },
     enabled: activeTab === 'scopes',
   });
-  const retryableSnapshots = useQuery({
-    queryKey: ['admin', 'memory', 'retryable-snapshots'],
-    queryFn: () => adminApi.getRetryableShadowSnapshots(),
-    enabled: activeTab === 'review',
-  });
   const scopeDecision = useMutation({
     mutationFn: ({ row, action, reason }: { row: MemoryScopeProposalAdminItem; action: 'approve' | 'reject'; reason?: string }) => action === 'approve'
       ? adminApi.approveMemoryScopeProposal(row.id, reason)
       : adminApi.rejectMemoryScopeProposal(row.id, reason ?? ''),
     onSuccess: () => { setScopeProposalEditor(null); queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] }); },
     onError: (error: Error) => showError(error.message || 'Не удалось обработать предложение скоупа'),
-  });
-  const reextract = useMutation({
-    mutationFn: (snapshotId: string) => adminApi.reextractShadowMemorySnapshot(snapshotId),
-    onSuccess: (result) => {
-      showSuccess(`Повторное извлечение запущено (попытка ${result.attempt_number}).`);
-      queryClient.invalidateQueries({ queryKey: ['admin', 'memory'] });
-    },
-    onError: (error: Error) => showError(error.message || 'Не удалось повторить извлечение'),
   });
   const deactivateMemory = useMutation({
     mutationFn: () => adminApi.deactivateSemanticMemory([...selectedMemoryIds].map(String)),
@@ -239,14 +226,6 @@ export default function MemoryPage() {
     <ConfirmDialog open={confirmGlossaryAction === 'deactivate'} title={`Деактивировать термины (${selectedGlossaryIds.size})?`} message="Термины останутся в админском списке, но перестанут попадать в глоссарий для поиска и извлечения новых документов." confirmLabel="Деактивировать" cancelLabel="Отмена" variant="warning" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
     <ConfirmDialog open={confirmGlossaryAction === 'activate'} title={`Активировать термины (${selectedGlossaryIds.size})?`} message="Термины снова станут доступны в глоссарии для поиска и извлечения документов." confirmLabel="Активировать" cancelLabel="Отмена" variant="info" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
     <ConfirmDialog open={confirmGlossaryAction === 'delete'} title={`Удалить термины (${selectedGlossaryIds.size})?`} message="Термины и связанные с ними определения будут удалены без возможности восстановления." confirmLabel="Удалить" cancelLabel="Отмена" variant="danger" confirmLoading={glossaryAction.isPending} onCancel={() => setConfirmGlossaryAction(null)} onConfirm={() => glossaryAction.mutate()} />
-    {activeTab === 'review' && retryableSnapshots.isError && <p role="alert">Не удалось загрузить документы для повторного извлечения.</p>}
-    {activeTab === 'review' && (retryableSnapshots.data?.length ?? 0) > 0 && <div style={{ display: 'grid', gap: 10, padding: 12 }}>
-      <span>Повторное извлечение учтёт причины отклонения.</span>
-      {retryableSnapshots.data?.map((row) => <div key={row.snapshot_id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <span>{row.document_title}{row.attempt_number ? ` · попытка ${row.attempt_number}` : ''}</span>
-        <Button disabled={reextract.isPending} onClick={() => reextract.mutate(row.snapshot_id)}>Повторить извлечение</Button>
-      </div>)}
-    </div>}
     {bulkReviewRejectIds && <MemoryBulkRejectDialog ids={bulkReviewRejectIds} onClose={() => setBulkReviewRejectIds(null)}
       onRejected={(ids) => {
         setSelectedReviewIds((current) => new Set([...current].filter((id) => !ids.includes(String(id)))));

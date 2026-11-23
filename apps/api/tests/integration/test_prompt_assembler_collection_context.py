@@ -108,7 +108,7 @@ async def test_prompt_assembler_renders_collection_semantics_from_current_versio
     )
 
     assert "## Доступные коллекции" in prompt
-    assert "если результат пустой" in prompt.lower()
+    assert "при пустом ответе" in prompt.lower()
     assert "### `netbox_devices`" in prompt
     assert "- название: Netbox devices" in prompt
     assert "- данные: Netbox devices inventory" in prompt

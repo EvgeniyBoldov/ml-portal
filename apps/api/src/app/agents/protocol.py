@@ -19,6 +19,9 @@ import re
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from urllib.parse import quote, urldefrag, urljoin
+
+from referencing.jsonschema import DRAFT202012
 
 from app.agents.context import ToolCall
 from app.agents.json_utils import extract_balanced_json
@@ -174,7 +177,6 @@ def build_tools_prompt(
     *,
     mandatory_rules_text: Optional[str] = None,
     prompt_labels: Optional[Dict[str, Any]] = None,
-    prompt_budgets: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Build the model-facing tool contract block."""
 
@@ -183,7 +185,6 @@ def build_tools_prompt(
 
     tools_json = json.dumps(tool_schemas, ensure_ascii=False, separators=(",", ":"))
     labels = prompt_labels if isinstance(prompt_labels, dict) else {}
-    budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
     heading = _prompt_label(labels, "operations_heading", "Доступные инструменты")
     rules_heading = _prompt_label(labels, "mandatory_rules_heading", "ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА")
     call_heading = _prompt_label(
@@ -204,11 +205,7 @@ def build_tools_prompt(
 
 {rules_block}
 
-    Правила выбора инструментов:
-- Сопоставь задачу с назначением коллекций выше и сразу используй подходящую доступную операцию.
-- Если результат пустой или структура источника неясна, вызови доступный для неё `collection.info` и уточни запрос.
-- Для операций коллекции передавай `collection_slug` из списка коллекций. Не передавай `collection_id`: он разрешается и проверяется внутри runtime.
-- В поле `tool` используй имя инструмента ровно в том виде, как оно указано в списке ниже.
+Для операций коллекции выбирай `collection_slug` из допустимых значений в схеме инструмента.
 
 {call_heading}
 
@@ -242,57 +239,91 @@ def build_tool_results_message(results: List[Tuple[ToolCall, str]]) -> str:
     return "\n\n".join(parts)
 
 
-_UNSUPPORTED_SCHEMA_KEYS = frozenset(
-    {"$ref", "$defs", "definitions", "allOf", "anyOf", "oneOf", "$schema", "$id"},
-)
+def _isolate_binding_schema(schema: dict[str, Any], resource_id: str) -> None:
+    """Keep each binding's embedded resources independent inside the shared declaration."""
+    resources: dict[str, str] = {}
+    locations: list[tuple[dict[str, Any], str]] = []
+    pending: list[tuple[dict[str, Any] | bool, str]] = [(schema, "")]
+    while pending:
+        node, base = pending.pop()
+        if not isinstance(node, dict):
+            continue
+        if node is schema or "$id" in node:
+            base = urljoin(base, node.get("$id", ""))
+            isolated_id = resource_id if node is schema else f"{resource_id}/{len(resources)}"
+            node["$id"] = resources.setdefault(base, isolated_id)
+        locations.append((node, base))
+        pending.extend((child, base) for child in DRAFT202012.subresources_of(node))
 
-
-def _sanitize_tool_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
-    return {k: v for k, v in schema.items() if k not in _UNSUPPORTED_SCHEMA_KEYS and k != "x-runtime"}
+    for node, base in locations:
+        for key in ("$ref", "$dynamicRef"):
+            ref = node.get(key)
+            if not isinstance(ref, str) or ref.startswith("#"):
+                continue
+            resolved_ref = urljoin(base, ref)
+            uri, fragment = urldefrag(resolved_ref)
+            if uri in resources:
+                node[key] = resources[uri] + (f"#{fragment}" if fragment else "")
+            else:
+                node[key] = resolved_ref
 
 
 def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str, Any]]:
-    """Convert resolved executable tools to OpenAI-compatible tool declarations."""
-
-    tools: List[Dict[str, Any]] = []
-    seen_names: set[str] = set()
+    """Publish one canonical function per operation in either calling mode."""
+    groups: dict[str, list[ResolvedOperation]] = defaultdict(list)
     for op in operations:
-        if getattr(op, "scope", None) == "collection" and not getattr(op, "collection_slug", None):
+        if op.scope == "collection" and not getattr(op, "collection_slug", None):
             continue
-        name = str(getattr(op, "operation", "") or op.operation_slug).strip()
-        if not name or name in seen_names:
-            continue
-        seen_names.add(name)
-        raw = build_prompt_input_schema(op)
-        schema = _sanitize_tool_schema(raw)
-        schema.setdefault("type", "object")
-        schema.setdefault("properties", {})
-        if getattr(op, "scope", None) == "collection":
-            targets = sorted({
-                str(getattr(candidate, "collection_slug", "") or "").strip()
-                for candidate in operations
-                if getattr(candidate, "scope", None) == "collection"
-                and str(getattr(candidate, "operation", "") or candidate.operation_slug).strip() == name
-                and getattr(candidate, "collection_slug", None)
-            })
-            if not targets:
-                continue
-            schema["properties"]["collection_slug"] = {
-                **schema["properties"].get("collection_slug", {}), "type": "string", "enum": targets,
-            }
-        tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": name,
-                    "description": build_prompt_operation_description(
-                        op,
-                        summary=getattr(op, "published", None),
-                    ),
-                    "parameters": schema,
-                },
-            }
-        )
+        name = str(op.operation or op.operation_slug).strip()
+        if name:
+            groups[name].append(op)
+
+    tools = []
+    for name, bindings in groups.items():
+        variants = []
+        for op in bindings:
+            schema = build_prompt_input_schema(op)
+            schema.pop("x-runtime", None)
+            description = build_prompt_operation_description(op, summary=getattr(op, "published", None))
+            variants.append((getattr(op, "collection_slug", None), schema, description))
+        _, parameters, description = variants[0]
+        targets = sorted({slug for slug, _, _ in variants if slug and bindings[0].scope == "collection"})
+        if targets:
+            groups_by_schema: dict[str, tuple[dict[str, Any], set[str]]] = {}
+            targets_by_description: dict[str, set[str]] = defaultdict(set)
+            for slug, schema, notes in variants:
+                if not slug or slug not in targets:
+                    continue
+                signature = json.dumps(schema, sort_keys=True, ensure_ascii=False)
+                _, slugs = groups_by_schema.setdefault(signature, (schema, set()))
+                slugs.add(slug)
+                targets_by_description[notes].add(slug)
+            if len(targets_by_description) > 1:
+                description = "\n".join(
+                    f"{', '.join(sorted(slugs))}: {notes}"
+                    for notes, slugs in targets_by_description.items()
+                )
+            target_property = {"type": "string", "enum": targets}
+            if len(groups_by_schema) == 1:
+                parameters["properties"]["collection_slug"] = target_property
+            else:
+                definitions = {}
+                for index, (schema, slugs) in enumerate(groups_by_schema.values()):
+                    key = f"binding_{index}"
+                    resource_id = f"https://ml-portal.invalid/tool-schema/{quote(name, safe='')}/{key}"
+                    _isolate_binding_schema(schema, resource_id)
+                    schema["properties"]["collection_slug"] = {"type": "string", "enum": sorted(slugs)}
+                    definitions[key] = schema
+                parameters = {
+                    "type": "object",
+                    "properties": {"collection_slug": target_property},
+                    "required": ["collection_slug"],
+                    "$defs": definitions,
+                    "anyOf": [{"$ref": f"#/$defs/{key}"} for key in definitions],
+                }
+        tools.append({"type": "function", "function": {
+            "name": name, "description": description, "parameters": parameters,
+        }})
     return tools
 
 

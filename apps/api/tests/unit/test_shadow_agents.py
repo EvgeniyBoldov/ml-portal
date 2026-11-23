@@ -43,7 +43,8 @@ def test_agent_type_defaults_and_validation():
 @pytest.fixture
 def invocation(monkeypatch):
     agent = SimpleNamespace(slug="shadow-a", agent_type="shadow", logging_level="full")
-    version = SimpleNamespace(id=uuid4(), version=3, status="published", requires_fresh_retrieval=False)
+    version = SimpleNamespace(id=uuid4(), version=3, status="published", requires_fresh_retrieval=False,
+                              mission="Summarize the supplied text.")
     agents = SimpleNamespace(get_agent_by_slug=AsyncMock(return_value=agent),
                              resolve_published_version=AsyncMock(return_value=version))
     permissions = SimpleNamespace(resolve_permissions=AsyncMock(

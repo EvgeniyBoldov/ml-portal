@@ -27,8 +27,8 @@ describe('ProfileMemoryScopes', () => {
     const pickers = await screen.findAllByRole('combobox', { name: 'Скоупы памяти чатов' });
     expect(pickers).toHaveLength(1);
     expect(pickers[0]).toBeDisabled();
-    expect(screen.getByText('Мои скоупы')).toBeInTheDocument();
-    expect(screen.getByText('Скоупы тенанта')).toBeInTheDocument();
+    expect(screen.getByText('Личные проекты')).toBeInTheDocument();
+    expect(screen.getByText('Проекты рабочей группы')).toBeInTheDocument();
   });
 
   it('reports personal scope edits while tenant scopes stay read-only', async () => {

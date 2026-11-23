@@ -591,6 +591,7 @@ def _compact_text_tool_results(content: str) -> str:
 
 def bound_document_memory_request(
     request: dict[str, Any], *, context_window_tokens: int, reserve_output_tokens: int = 1024,
+    message_index: int | None = None,
 ) -> dict[str, Any]:
     """Trim passage projection until the exact next request fits its input budget.
 
@@ -601,7 +602,8 @@ def bound_document_memory_request(
 
     projected = deepcopy(request)
     messages = projected.get("messages") or []
-    target = next((message for message in messages if isinstance(message.get("content"), str)
+    candidates = messages if message_index is None else messages[message_index:message_index + 1]
+    target = next((message for message in candidates if isinstance(message.get("content"), str)
                    and message["content"].startswith("[Document memory for this task]")), None)
     if target is None:
         return projected

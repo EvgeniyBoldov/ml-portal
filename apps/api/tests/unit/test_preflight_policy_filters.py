@@ -55,7 +55,6 @@ def _execution_graph(operations: list[ResolvedOperation]) -> RuntimeExecutionGra
                 provider_instance_id=operation.provider_instance_id or operation.data_instance_id,
                 provider_instance_slug=operation.provider_instance_slug or operation.data_instance_slug,
                 has_credentials=False,
-                credential_scope=operation.credential_scope,
                 config={},
                 provider_config={},
                 domain="collection.document",

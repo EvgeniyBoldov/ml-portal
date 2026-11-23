@@ -21,10 +21,10 @@ from app.runtime.memory.fact_store import FactStore
 pytestmark = pytest.mark.skipif(os.getenv('MEMORY_WORKFLOW_PG') != '1', reason='requires opt-in PostgreSQL')
 
 
-async def publish(session, *, scope_type='project', term_only=False):
+async def publish(session, *, term_only=False):
     candidate_id, scope_id, term_id, _ = await seed(session)
     scope = await session.get(MemoryScope, scope_id)
-    scope.scope_type, scope.key, scope.name = scope_type, f'{scope_type}.new', 'New scope'
+    scope.key, scope.name = 'new', 'New scope'
     candidate = await session.get(MemoryExtractionCandidate, candidate_id)
     candidate.visibility_tenant_id = None
     candidate.subject, candidate.normalized_subject = 'Backup', 'backup'
@@ -126,7 +126,7 @@ async def test_hipporag_corpus_is_filtered_before_native_graph_work(tag_pg, monk
         items = graph_search.await_args.kwargs['items']
         assert [item['selected_claim_id'] for item in items] == [str(claim.id)]
         graph_search.reset_mock()
-        args['context_scope_keys'] = ['project.other']
+        args['context_scope_keys'] = ['other']
         eligible = await recall.eligible_item_ids(**args)
         await retrieval.retrieve_memory_ids(recall, 'backup', eligible_ids=eligible, read_args=args)
         graph_search.assert_not_awaited()

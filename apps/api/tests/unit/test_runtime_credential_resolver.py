@@ -41,7 +41,7 @@ def _local_instance() -> ToolInstance:
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_broker():
+async def test_runtime_credential_resolver_uses_risk_strategy_without_broker():
     service = SimpleNamespace(
         resolve_credentials=AsyncMock(
             return_value=SimpleNamespace(
@@ -58,7 +58,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="user",
+        is_risky=True,
     )
 
     assert context is not None
@@ -68,7 +68,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_strategy_without_
 
 
 @pytest.mark.asyncio
-async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
+async def test_runtime_credential_resolver_uses_risk_strategy_with_broker():
     cred_id = uuid4()
     service = SimpleNamespace(
         resolve_credential_reference=AsyncMock(
@@ -88,7 +88,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
         _remote_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="platform",
+        is_risky=False,
     )
 
     assert context is not None
@@ -97,7 +97,7 @@ async def test_runtime_credential_resolver_uses_explicit_scope_with_broker():
     service.resolve_credential_reference.assert_awaited_once()
     service.get_decrypted_credentials.assert_not_awaited()
     call = service.resolve_credential_reference.await_args
-    assert call.kwargs["strategy"] == "PLATFORM_ONLY"
+    assert call.kwargs["strategy"] == "USER_FIRST"
 
 
 @pytest.mark.asyncio
@@ -112,7 +112,6 @@ async def test_runtime_credential_resolver_skips_local_instance():
         _local_instance(),
         user_id=uuid4(),
         tenant_id=uuid4(),
-        credential_scope="auto",
     )
 
     assert context is None
@@ -134,7 +133,5 @@ async def test_runtime_credential_resolver_raises_for_strict_missing_credentials
             tenant_id=uuid4(),
             tool_slug="instance.netbox.delete",
             operation="netbox.delete",
-            credential_scope="user",
-            risk_level="destructive",
-            side_effects=True,
+            is_risky=True,
         )

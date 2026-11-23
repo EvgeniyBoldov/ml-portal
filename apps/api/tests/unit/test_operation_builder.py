@@ -154,5 +154,10 @@ async def test_mcp_operation_never_selects_provider_credentials(strict: bool) ->
     )
     credentials.assert_awaited_once()
     assert credentials.await_args.args[0] is data
-    if strict:
-        assert built is None
+    assert built is not None
+    operation, target_credentials = built
+    # Credentials are resolved for the data instance only; missing strict
+    # credentials no longer drop the operation — it is built without
+    # credentials and surfaces via readiness as degraded_missing_credentials.
+    assert target_credentials is None
+    assert operation.target.has_credentials is False

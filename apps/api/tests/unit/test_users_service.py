@@ -44,6 +44,7 @@ class TestAsyncUsersService:
         user.role = "reader"
         user.is_active = True
         user.lifecycle_status = "active"
+        user.auth_provider = "local"
         user.password_hash = hash_password("correct_password")
         user.created_at = MagicMock()
         user.updated_at = MagicMock()

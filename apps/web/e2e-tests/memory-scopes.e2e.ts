@@ -1,17 +1,12 @@
 import { expect, test } from '@playwright/test';
-import { readFileSync } from 'node:fs';
+import { signIn } from './auth';
 import { randomUUID } from 'node:crypto';
 
 const authFile = process.env.MEMORY_SCOPE_E2E_AUTH_FILE;
 test.skip(!authFile, 'Requires an authenticated platform admin session');
 
 test('admin can create, edit, inspect dependencies, and delete a memory scope', async ({ page, context }) => {
-  const { refresh_token } = JSON.parse(readFileSync(authFile!, 'utf8'));
-  const baseURL = process.env.BASE_URL || 'http://localhost:5173';
-  await context.addCookies([{
-    name: 'refresh_token', value: refresh_token, url: baseURL, httpOnly: true, sameSite: 'Lax',
-  }]);
-  expect((await context.request.post('/api/v1/auth/refresh')).status()).toBe(200);
+  await signIn(context, authFile!);
 
   const key = `scope-e2e-${randomUUID().replaceAll('-', '')}`;
   const initialName = `Scope test ${key.slice(-8)}`;
@@ -25,14 +20,19 @@ test('admin can create, edit, inspect dependencies, and delete a memory scope', 
   let deleted = false;
   try {
     await page.goto('/admin/memory?tab=scopes');
+    await page.getByRole('button', { name: 'Фильтр: НАЗВАНИЕ', exact: true }).click();
     await page.getByPlaceholder('Название').fill(initialName);
+    await page.getByPlaceholder('Название').press('Escape');
     await expect(page.getByText(initialName, { exact: true })).toBeVisible();
 
     await page.getByRole('button', { name: `Действия со скоупом ${initialName}` }).click();
     await page.getByRole('menuitem', { name: 'Изменить' }).click();
-    await page.getByLabel('Название').fill(editedName);
+    await page.getByLabel('Название', { exact: true }).fill(editedName);
     await page.getByLabel('Тип проекта').fill('e2e-updated');
     await page.getByRole('button', { name: 'Сохранить' }).click();
+    await page.getByRole('button', { name: 'Фильтр: НАЗВАНИЕ', exact: true }).click();
+    await page.getByPlaceholder('Название').fill(editedName);
+    await page.getByPlaceholder('Название').press('Escape');
     await expect(page.getByText(editedName, { exact: true })).toBeVisible();
 
     const dependenciesResponse = page.waitForResponse(response =>
@@ -53,7 +53,7 @@ test('admin can create, edit, inspect dependencies, and delete a memory scope', 
       response.url().includes('/api/v1/admin/memory/long-memory/documents'),
     );
     await page.getByText('LongMemory', { exact: true }).click();
-    expect(longMemoryResponse.status()).toBe(200);
+    expect((await longMemoryResponse).status()).toBe(200);
     await expect(page.getByRole('table')).toBeVisible();
   } finally {
     if (!deleted) {

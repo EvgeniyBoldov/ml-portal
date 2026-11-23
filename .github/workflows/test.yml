@@ -29,6 +29,10 @@ jobs:
 
   backend-tests:
     runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}/apps/api/src
+      ENV: test
+      JWT_SECRET: ci-only-jwt-signing-secret-for-disposable-tests
     
     services:
       postgres:
@@ -53,6 +57,11 @@ jobs:
           --health-retries 5
         ports:
           - 6379:6379
+
+      qdrant:
+        image: qdrant/qdrant:v1.17.1
+        ports:
+          - 6333:6333
 
     steps:
     - uses: actions/checkout@v4
@@ -89,6 +98,7 @@ jobs:
         cd apps/api
         pytest tests/unit -q --tb=short --maxfail=10 \
           --cov=app.runtime \
+          --cov=app.agents.runtime \
           --cov=app.agents.contracts \
           --cov=app.agents.credential_resolver \
           --cov=app.agents.execution_preflight \
@@ -98,6 +108,7 @@ jobs:
           --cov-report=term-missing \
           --cov-report=xml:coverage-runtime.xml \
           --junitxml=api-unit-results.xml
+        python -m coverage report --include='*/runtime/pipeline.py' --fail-under=70
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
@@ -124,26 +135,36 @@ jobs:
         REDIS_URL: redis://localhost:6379/0
         ENV: test
 
-    - name: Run backend runtime integration tests
+    - name: Run backend integration tests
       run: |
+        curl --fail --silent --show-error --retry 20 --retry-connrefused http://127.0.0.1:6333/readyz
+        docker exec "${{ job.services.postgres.id }}" createdb -U postgres test_tool_results
         cd apps/api
-        pytest tests/integration -q --tb=short --maxfail=5 -k "runtime or mcp or credential or collection or confirmation"
+        pytest tests/integration tests/migrations -q --tb=short
       env:
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
         ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
         REDIS_URL: redis://localhost:6379/0
         ENV: test
+        DASHBOARD_PG: "1"
+        SHADOW_WORKFLOW_PG: "1"
+        PROMPT_POLICY_MIGRATION_PG: "1"
+        PERIODIC_TASKS_PG: "1"
+        MEMORY_WORKFLOW_PG: "1"
+        RUNTIME_PROTOCOL_PG: "1"
+        AGENT_ADMIN_PG: "1"
+        TURN_FILE_CONTEXT_PG: "1"
+        SANDBOX_LIFECYCLE_PG: "1"
+        TOOL_WORKSPACE_PG: "1"
+        FILE_DATA_QDRANT: "1"
+        VECTOR_MODEL_WORKFLOW: "1"
+        QDRANT_URL: http://127.0.0.1:6333
+        TOOL_RESULTS_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_tool_results
+        TASK_MEMORY_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        MEMORY_OPERATIONS_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        SCOPE_MIGRATION_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        RUNTIME_INTERACTION_TEST_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
 
-    - name: Run backend runtime eval tests
-      run: |
-        cd apps/api
-        pytest tests/eval -q --tb=short
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
-        REDIS_URL: redis://localhost:6379/0
-        ENV: test
-    
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
@@ -152,7 +173,7 @@ jobs:
         name: backend-runtime-coverage
     
     - name: Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: backend-test-results
@@ -178,11 +199,6 @@ jobs:
         cd apps/web
         npm ci
     
-    - name: Run linting
-      run: |
-        cd apps/web
-        npm run lint
-    
     - name: Run type checking
       run: |
         cd apps/web
@@ -191,7 +207,7 @@ jobs:
     - name: Run unit tests
       run: |
         cd apps/web
-        npm run test:coverage
+        npm run test:coverage -- --run
     
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
@@ -200,8 +216,13 @@ jobs:
         flags: frontend
         name: frontend-coverage
     
+    - name: Run linting
+      run: |
+        cd apps/web
+        npm run lint
+
     - name: Upload test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always()
       with:
         name: frontend-test-results
@@ -262,46 +283,68 @@ jobs:
         cd apps/web
         npm ci
     
-    - name: Run migrations
+    - name: Start object storage
       run: |
+        docker run --rm -d -p 127.0.0.1:9000:9000 \
+          -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin123 \
+          minio/minio:latest server /data
+        curl --fail --silent --show-error --retry 20 --retry-connrefused \
+          http://127.0.0.1:9000/minio/health/live
+
+    - name: Migrate and start the E2E API
+      run: |
+        docker exec "${{ job.services.postgres.id }}" createdb -U postgres test_tool_results
         cd apps/api
-        python -m alembic upgrade head
+        python -m alembic upgrade heads
+        python -m alembic -c tool_results_alembic.ini upgrade head
+        python -m uvicorn tests.e2e.chat_contract_app:app --host 127.0.0.1 --port 8000 \
+          > "$RUNNER_TEMP/portal-e2e-api.log" 2>&1 &
+        curl --fail --silent --show-error --retry 20 --retry-connrefused \
+          http://127.0.0.1:8000/api/v1/healthz
       env:
+        PYTHONPATH: src
         DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
+        ASYNC_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        TOOL_RESULTS_DB_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_tool_results
         REDIS_URL: redis://localhost:6379/0
-    
-    - name: Start backend server
+        S3_ENDPOINT: http://127.0.0.1:9000
+        DOCLING_URL: http://127.0.0.1:1
+        ENV: local
+        CHAT_CONTRACT_E2E: "1"
+
+    - name: Build frontend and install Chromium
+      working-directory: apps/web
       run: |
-        cd apps/api
-        PYTHONPATH=src python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 &
-      env:
-        DATABASE_URL: postgresql://postgres:postgres@localhost:5432/test_db
-        REDIS_URL: redis://localhost:6379/0
-        ENV: test
-    
-    - name: Build frontend
-      run: |
-        cd apps/web
         npm run build
-    
-    - name: Install Playwright browsers
+        npx playwright install --with-deps chromium
+
+    - name: Run browser contracts
+      working-directory: apps/web
       run: |
-        cd apps/web
-        npx playwright install --with-deps
-    
-    - name: Run Runtime E2E Gates
-      run: |
-        cd apps/web
-        npx playwright test e2e-tests/runtime-smoke.spec.ts e2e-tests/runtime-confirmation.spec.ts --project=chromium --reporter=line
+        umask 077
+        auth_file="$RUNNER_TEMP/portal-e2e-auth.json"
+        printf '%s\n' '{"login":"admin","password":"admin123"}' > "$auth_file"
+        AGENT_E2E_AUTH_FILE="$auth_file" MEMORY_SCOPE_E2E_AUTH_FILE="$auth_file" \
+          npx playwright test e2e-tests/smoke.e2e.ts e2e-tests/agent-admin.e2e.ts \
+          e2e-tests/memory-scopes.e2e.ts --project=chromium --reporter=line
+        npm run dev -- --strictPort > "$RUNNER_TEMP/portal-e2e-vite.log" 2>&1 &
+        vite_pid=$!
+        trap 'kill "$vite_pid" 2>/dev/null || true' EXIT
+        curl --fail --silent --show-error --retry 20 --retry-connrefused http://localhost:5173/
+        CHAT_E2E_AUTH_FILE="$auth_file" npm run test:e2e:chat
       env:
-        API_BASE_URL: http://localhost:8000/api
-    
+        BASE_URL: http://localhost:5173
+        VITE_API_PROXY_TARGET: http://127.0.0.1:8000
+
     - name: Upload E2E test results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: failure()
       with:
         name: playwright-report
-        path: apps/web/playwright-report/
+        path: |
+          apps/web/test-results/
+          /tmp/chat-contract-e2e-results/
+          ${{ runner.temp }}/portal-e2e-api.log
 
   security-tests:
     runs-on: ubuntu-latest

@@ -378,6 +378,7 @@ function FieldEditor({ field, value, editable, onChange }: FieldEditorProps) {
     case 'boolean':
       return (
         <Checkbox
+          aria-label={field.label}
           checked={!!value}
           onChange={(checked) => onChange(checked)}
           disabled={isDisabled}

@@ -460,7 +460,7 @@ def _claim_scopes_apply(
 
     for scope_type in types:
         bound = [scope for scope in active if scope.scope_type == scope_type]
-        selected = {key for key in keys if key.partition(".")[0] == scope_type}
+        selected = set(keys) if scope_type == "project" else {key for key in keys if key.startswith("team.")}
         if scope_type == "project" and selected_project_ids:
             selected.add("project._legacy_selected")
         if any(scope.is_all for scope in bound):

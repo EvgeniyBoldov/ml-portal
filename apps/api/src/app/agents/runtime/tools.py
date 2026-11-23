@@ -45,6 +45,7 @@ from app.runtime.operation_errors import (
     OperationValidationError,
     RuntimeErrorCode,
 )
+from app.services.collection_info_service import COLLECTION_INFO_FIELD_PAGE_SIZE
 from app.services.runtime_execution_guard_service import RuntimeExecutionGuardError
 
 logger = get_logger(__name__)
@@ -928,16 +929,49 @@ class OperationExecutionFacade:
             return _json_dumps_exact(limitation, ensure_ascii=False)
 
         def render_collection_info(output: Dict[str, Any]) -> str:
-            rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
-            # Trim diagnostics before removing the collection identity.
-            sections = [output[key] for key in ("field_profiles", "filter_hints", "fields", "remote_objects")]
+            sections = output["coverage"]
+
+            def render() -> str:
+                for key, coverage in sections.items():
+                    coverage["shown"] = len(output[key])
+                fields = sections["fields"]
+                next_offset = fields["offset"] + fields["shown"]
+                if fields["shown"] and next_offset < fields["total"]:
+                    fields["next_offset"] = next_offset
+                else:
+                    fields.pop("next_offset", None)
+                return _json_dumps_exact(output, ensure_ascii=False, default=str)
+
+            rendered = render()
             while not fits_budget(rendered):
-                populated = [section for section in sections if section]
+                if output.get("requested_field"):
+                    samples = [
+                        (entry, key) for section, keys in (
+                            ("filter_hints", ("choices", "top_values")), ("field_profiles", ("values",)),
+                        ) for entry in output[section] for key in keys if entry[key]
+                    ]
+                    if samples:
+                        entry, key = max(samples, key=lambda sample: len(sample[0][sample[1]]))
+                        entry[key].pop()
+                        if key == "values":
+                            entry.update(complete=False, truncated=True)
+                        elif key == "choices" and entry["coverage"] == "complete":
+                            entry["coverage"] = "preview"
+                        rendered = render()
+                        continue
+                populated = [
+                    output[key] for key in sections
+                    if len(output[key]) > (1 if key == "fields" else 0)
+                ]
                 if not populated:
                     output["collection"].pop("usage_rules", None)
                     return _json_dumps_exact(output, ensure_ascii=False, default=str)
-                max(populated, key=len).pop()
-                rendered = _json_dumps_exact(output, ensure_ascii=False, default=str)
+                longest = max(populated, key=len)
+                omitted = longest.pop()
+                if longest is output["fields"]:
+                    for key in ("filter_hints", "field_profiles"):
+                        output[key] = [entry for entry in output[key] if entry["field"] != omitted["name"]]
+                rendered = render()
             return rendered
 
         if result.success:
@@ -956,10 +990,8 @@ class OperationExecutionFacade:
                 elif canonical_operation == "collection.template.get_schema":
                     output = OperationExecutionFacade._compact_template_schema_for_context(output)
                 elif canonical_operation == "collection.info":
-                    collection = output.get("collection")
-                    if isinstance(collection, dict) and collection.get("type") == "template":
-                        output = OperationExecutionFacade._compact_collection_info_for_context(output)
-                        compact_info = True
+                    output = OperationExecutionFacade._compact_collection_info_for_context(output)
+                    compact_info = True
                 if evidence_call_id:
                     output["evidence_call_id"] = evidence_call_id
                 rendered = (render_collection_info(output) if compact_info
@@ -1092,6 +1124,15 @@ class OperationExecutionFacade:
             if stored_result:
                 records = None
                 payload = result.data
+                if (canonical_operation == "collection.info" and isinstance(payload, dict)
+                        and not result.metadata.get("reused")):
+                    reference = limited_result()
+                    output = OperationExecutionFacade._compact_collection_info_for_context(payload)
+                    output.update(json.loads(reference))
+                    if evidence_call_id:
+                        output["evidence_call_id"] = evidence_call_id
+                    rendered = render_collection_info(output)
+                    return rendered if fits_budget(rendered) else reference
                 if operation_slug == "result.import":
                     records = None
                 elif not result.metadata.get("reused") and isinstance(payload, dict):
@@ -1186,9 +1227,18 @@ class OperationExecutionFacade:
             except Exception:
                 rendered = str(raw_output)
                 return rendered if fits_budget(rendered) else limited_result()
+        error = {
+            "success": False,
+            "error_code": result.metadata.get("error_code") or "operation_execution_failed",
+            "message": str(result.error or "Operation failed")[:500],
+            "retryable": result.metadata.get("retryable"),
+        }
+        if result.metadata.get("outcome_unknown"):
+            error["outcome_unknown"] = True
+            error["retryable"] = False
         failure = result.metadata.get("mcp_failure")
         if isinstance(failure, dict):
-            rendered = _json_dumps_exact({"success": False, "failure": failure}, ensure_ascii=False, default=str)
+            rendered = _json_dumps_exact({**error, "failure": failure}, ensure_ascii=False, default=str)
             if fits_budget(rendered):
                 return rendered
             compact_failure = {
@@ -1197,10 +1247,10 @@ class OperationExecutionFacade:
                 if failure.get(key) is not None
             }
             compact_failure["details_truncated_for_context"] = True
-            rendered = _json_dumps_exact({"success": False, "failure": compact_failure}, ensure_ascii=False, default=str)
+            rendered = _json_dumps_exact({**error, "failure": compact_failure}, ensure_ascii=False, default=str)
             if fits_budget(rendered):
                 return rendered
-            return _json_dumps_exact({"success": False, "failure": {
+            return _json_dumps_exact({**error, "failure": {
                 "version": failure.get("version", 1),
                 "kind": failure.get("kind", "unknown"),
                 "category": failure.get("category", "unknown"),
@@ -1208,7 +1258,11 @@ class OperationExecutionFacade:
                 "message": str(failure.get("message") or "MCP source failed")[:100],
                 "details_truncated_for_context": True,
             }}, ensure_ascii=False)
-        return f"Error: {result.error or 'unknown'}"
+        rendered = _json_dumps_exact(error, ensure_ascii=False)
+        if fits_budget(rendered):
+            return rendered
+        error["message"] = error["message"][:120]
+        return _json_dumps_exact(error, ensure_ascii=False)
 
     @staticmethod
     def _canonical_operation_name(operation_slug: Optional[str]) -> str:
@@ -1231,10 +1285,47 @@ class OperationExecutionFacade:
         collection = raw_output.get("collection") or {}
         readiness = raw_output.get("readiness") or {}
         schema = raw_output.get("schema") or {}
+        fields = schema.get("fields") or []
+        field_page = schema.get("field_page")
+        if isinstance(field_page, dict):
+            field_offset, field_total = field_page["offset"], field_page["total"]
+        else:
+            # Older result bodies may still contain the whole schema.
+            field_total = len(fields)
+            field_offset = min(int(raw_output.get("field_offset") or 0), field_total)
+            fields = fields[field_offset:field_offset + COLLECTION_INFO_FIELD_PAGE_SIZE]
         hints = (raw_output.get("filter_hints") or {}).get("fields") or {}
-        enrichment = (raw_output.get("runtime_enrichment") or {}).get("data") or {}
+        runtime_enrichment = raw_output.get("runtime_enrichment") or {}
+        enrichment = runtime_enrichment.get("data") or {}
+        requested_field = raw_output.get("requested_field")
 
+        def value_sample(values: list[Any] | None, *, limit: int) -> list[Any]:
+            return list(values or []) if requested_field else list(values or [])[:limit]
+
+        profiles = []
+        for name, profile in list((enrichment.get("field_profiles") or {}).items())[:12]:
+            if not isinstance(profile, dict):
+                continue
+            values = profile.get("values") or profile.get("top_values") or []
+            sample = value_sample(values, limit=5)
+            profiles.append({
+                "field": text(name, 100),
+                **{key: profile[key] for key in ("data_type", "min", "max", "distinct_count", "null_count")
+                   if key in profile},
+                "complete": bool(profile.get("complete")) and len(sample) == len(values),
+                "truncated": bool(profile.get("truncated")) or len(sample) < len(values),
+                "values": sample,
+                "values_total": len(values),
+            })
+
+        totals = {
+            "fields": field_total,
+            "filter_hints": len(hints),
+            "field_profiles": len(enrichment.get("field_profiles") or {}),
+            "remote_objects": len(enrichment.get("tables") or enrichment.get("entities") or []),
+        }
         projection = {
+            "coverage": {key: {"total": total} for key, total in totals.items()},
             "collection": {
                 key: value
                 for key, value in {
@@ -1250,6 +1341,14 @@ class OperationExecutionFacade:
                 if value
             },
             "readiness": {"status": text(readiness.get("status")), "schema_freshness": text(readiness.get("schema_freshness"))},
+            "runtime_enrichment": {
+                **{key: text(runtime_enrichment[key]) for key in ("status", "mode", "type", "message")
+                   if key in runtime_enrichment},
+                "data": {
+                    key: enrichment[key] for key in ("row_count", "temporal_bounds", "observed_values_available")
+                    if key in enrichment
+                },
+            },
             "fields": [
                 {
                     "name": text(field.get("name"), 100),
@@ -1257,27 +1356,32 @@ class OperationExecutionFacade:
                     "description": text(field.get("description"), 160),
                     "filterable": bool(field.get("filterable")),
                 }
-                for field in (schema.get("fields") or [])[:24]
+                for field in fields
                 if isinstance(field, dict)
             ],
             "filter_hints": [
                 {
                     "field": text(name, 100),
-                    "coverage": text(hint.get("coverage"), 40),
-                    "choices": list(hint.get("choices") or [])[:8],
-                    "top_values": list(hint.get("top_values") or [])[:5],
+                    "coverage": (
+                        "preview" if not requested_field and len(hint.get("choices") or []) > 8
+                        else text(hint.get("coverage"), 40)
+                    ),
+                    "operators": hint.get("operators") or [],
+                    "distinct_count": hint.get("distinct_count"),
+                    "choices": value_sample(hint.get("choices"), limit=8),
+                    "top_values": value_sample(hint.get("top_values"), limit=5),
+                    "choices_total": len(hint.get("choices") or []),
+                    "top_values_total": len(hint.get("top_values") or []),
                 }
                 for name, hint in list(hints.items())[:12]
                 if isinstance(hint, dict)
             ],
-            "field_profiles": [
-                {"field": text(name, 100), "complete": bool(profile.get("complete")),
-                 "values": list(profile.get("values") or profile.get("top_values") or [])[:5]}
-                for name, profile in list((enrichment.get("field_profiles") or {}).items())[:12]
-                if isinstance(profile, dict)
-            ],
+            "field_profiles": profiles,
             "remote_objects": list(enrichment.get("tables") or enrichment.get("entities") or [])[:12],
         }
+        projection["coverage"]["fields"]["offset"] = field_offset
+        if requested_field:
+            projection["requested_field"] = text(requested_field)
         return projection
 
     @staticmethod

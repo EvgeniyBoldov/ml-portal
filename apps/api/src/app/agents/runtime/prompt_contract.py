@@ -87,9 +87,6 @@ def build_prompt_operation_description(
     if result_kind:
         parts.append(f"result: {result_kind}")
 
-    argument_summary = _build_argument_summary(op)
-    if argument_summary:
-        parts.append(argument_summary)
     return " | ".join(part for part in parts if part)
 
 
@@ -98,7 +95,7 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
     notes: List[str] = []
 
     if canonical == "collection.info":
-        notes.append("inspect available schema metadata when fields are unclear; API sources may have no live observed values")
+        notes.append("inspect available schema metadata when fields are unclear; follow coverage.fields.next_offset with field_offset, or request an exact field; API sources may have no live observed values")
         return notes
 
     if canonical == "netbox_get_objects":
@@ -157,28 +154,6 @@ def _build_usage_notes(op: "ResolvedOperation") -> List[str]:
         notes.append("run read-only SQL only after discovering the target objects")
 
     return notes
-
-
-def _build_argument_summary(op: "ResolvedOperation") -> str:
-    schema = build_prompt_input_schema(op)
-    summary = summarize_prompt_input_schema(schema, max_items=6)
-    if not summary:
-        return "arguments: none"
-
-    required: List[str] = []
-    optional: List[str] = []
-    for item in summary:
-        if item.endswith("(required)"):
-            required.append(item[: -len(" (required)")])
-        else:
-            optional.append(item)
-
-    parts: List[str] = []
-    if required:
-        parts.append(f"required args: {', '.join(required)}")
-    if optional:
-        parts.append(f"optional args: {', '.join(optional)}")
-    return " | ".join(parts)
 
 
 def _text(value: Any) -> str:

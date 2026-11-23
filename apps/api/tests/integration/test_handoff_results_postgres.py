@@ -15,6 +15,7 @@ from alembic.operations import Operations
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from app import __file__ as app_package_file
 from app.core.config import get_settings
 from app.services.result_workspace import ResultWorkspace
 from app.services.tool_result_store import ToolResultStore
@@ -39,7 +40,7 @@ async def isolated_results():
                     1: "tool_payloads.py", 2: "sql_result_rows.py", 3: "result_datasets.py",
                     4: "virtual_table_rows.py", 5: "nullable_source_complete.py",
                 }[number]
-                path = Path("app/tool_results_migrations/versions") / filename
+                path = Path(app_package_file).parent / "tool_results_migrations" / "versions" / filename
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 assert spec and spec.loader
                 module = importlib.util.module_from_spec(spec)

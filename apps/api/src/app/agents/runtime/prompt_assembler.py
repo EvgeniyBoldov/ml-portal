@@ -4,11 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
-from app.agents.protocol import build_tools_prompt
-from app.agents.runtime.prompt_contract import build_prompt_input_schema, build_prompt_operation_description
+from app.agents.protocol import build_tools_payload, build_tools_prompt
 from app.agents.runtime.agent_prompt_renderer import AgentPromptRenderer
 from app.agents.runtime.capability_card_builder import CapabilityCardBuilder
-from app.agents.runtime.policy import PolicyLimits
 from app.services.platform_settings_defaults import PLATFORM_OPERATION_RULES_TEXT
 
 if TYPE_CHECKING:
@@ -26,50 +24,13 @@ class PromptAssembly:
     sections: List[str] = field(default_factory=list)
 
 
-class OperationPromptRenderer:
-    @staticmethod
-    def render_schema(op: "ResolvedOperation") -> Dict[str, Any]:
-        description = build_prompt_operation_description(op, summary=getattr(op, "published", None))
-        return {
-            "type": "function",
-            "function": {
-                "name": op.operation,
-                "description": description,
-                "parameters": build_prompt_input_schema(op),
-            },
-        }
-
-    @staticmethod
-    def render_public_collection_info_schema(op: "ResolvedOperation") -> Dict[str, Any]:
-        description = (
-            "Collection Info | inspect stored fields and filter hints when the structure is unclear; API sources may have no live observed values | "
-            "required args: collection_slug: string | "
-            "returns available schema and source metadata."
-        )
-        return {
-            "type": "function",
-            "function": {
-                "name": "collection.info",
-                "description": description,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "collection_slug": {"type": "string"},
-                    },
-                    "required": ["collection_slug"],
-                },
-            },
-        }
-
 class PromptAssembler:
     def __init__(
         self,
         agent_renderer: Optional[AgentPromptRenderer] = None,
-        operation_renderer: Optional[OperationPromptRenderer] = None,
         capability_card_builder: Optional[CapabilityCardBuilder] = None,
     ) -> None:
         self.agent_renderer = agent_renderer or AgentPromptRenderer()
-        self.operation_renderer = operation_renderer or OperationPromptRenderer()
         self.capability_card_builder = capability_card_builder or CapabilityCardBuilder()
 
     def assemble(
@@ -80,14 +41,9 @@ class PromptAssembler:
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         operation_schemas: Optional[List[Dict[str, Any]]] = None,
         resolved_operations: Optional[Sequence["ResolvedOperation"]] = None,
-        policy_limits: Optional[PolicyLimits] = None,
         platform_config: Optional[Dict[str, Any]] = None,
         runtime_task_completion: bool = False,
     ) -> PromptAssembly:
-        resolved_policy_limits = policy_limits or PolicyLimits.from_policy(
-            exec_request.policy_data,
-            exec_request.limit_data,
-        )
         prompt_labels = self._resolve_prompt_labels(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
         prompt_budgets = self._resolve_prompt_budgets(platform_config=platform_config, sandbox_overrides=sandbox_overrides)
         native_tool_calling = bool(isinstance(platform_config, dict) and platform_config.get("native_tool_calling", False))
@@ -118,12 +74,9 @@ class PromptAssembler:
         )
         system_operations_prompt = ""
         constraints_prompt = self.assemble_constraints_prompt(
-            exec_request=exec_request,
-            policy_limits=resolved_policy_limits,
             platform_config=platform_config,
             sandbox_overrides=sandbox_overrides,
             prompt_labels=prompt_labels,
-            prompt_budgets=prompt_budgets,
         )
         if operation_schemas is None and resolved_operations is not None:
             operation_schemas = self.assemble_operation_schemas(resolved_operations)
@@ -149,7 +102,6 @@ class PromptAssembler:
                 operation_schemas,
                 mandatory_rules_text=operations_rules_override,
                 prompt_labels=prompt_labels,
-                prompt_budgets=prompt_budgets,
             )
         sections = [
             section
@@ -195,24 +147,12 @@ class PromptAssembler:
     def assemble_constraints_prompt(
         self,
         *,
-        exec_request: "ExecutionRequest",
-        policy_limits: PolicyLimits,
         platform_config: Optional[Dict[str, Any]] = None,
         sandbox_overrides: Optional[Dict[str, Any]] = None,
         prompt_labels: Optional[Dict[str, Any]] = None,
-        prompt_budgets: Optional[Dict[str, Any]] = None,
     ) -> str:
         labels = prompt_labels if isinstance(prompt_labels, dict) else {}
-        budgets = prompt_budgets if isinstance(prompt_budgets, dict) else {}
         blocks: List[str] = []
-        runtime_lines = [
-            f"- {self._label(labels, 'max_llm_calls_label', 'Макс. LLM-вызовов')}: {policy_limits.max_llm_calls}",
-            f"- {self._label(labels, 'max_tool_calls_label', 'Макс. вызовов операций')}: {policy_limits.max_tool_calls_total}",
-            f"- {self._label(labels, 'max_wall_time_label', 'Макс. время выполнения (ms)')}: {policy_limits.max_wall_time_ms}",
-            f"- {self._label(labels, 'tool_timeout_label', 'Таймаут операции (ms)')}: {policy_limits.tool_timeout_ms}",
-            f"- {self._label(labels, 'max_retries_label', 'Макс. повторов')}: {policy_limits.max_retries}",
-        ]
-        blocks.append("\n".join(runtime_lines))
 
         platform_lines: List[str] = []
         if isinstance(platform_config, dict):
@@ -231,29 +171,13 @@ class PromptAssembler:
         if sandbox_lines:
             blocks.append(f"{self._label(labels, 'sandbox_notes_title', 'Заметки sandbox')}\n" + "\n".join(f"- {line}" for line in sandbox_lines))
 
-        return f"## {self._label(labels, 'runtime_constraints_title', 'Ограничения выполнения')}\n\n" + "\n\n".join(blocks)
+        return "\n\n".join(blocks)
 
     def assemble_operation_schemas(
         self,
         resolved_operations: Sequence["ResolvedOperation"],
     ) -> List[Dict[str, Any]]:
-        if not resolved_operations:
-            return []
-        schemas: List[Dict[str, Any]] = []
-        seen_canonical: set[str] = set()
-        for op in resolved_operations:
-            canonical_name = (
-                _text(getattr(getattr(op, "published", None), "canonical_name", None))
-                or _text(getattr(op, "operation", None))
-            )
-            if canonical_name in seen_canonical:
-                continue
-            seen_canonical.add(canonical_name)
-            if canonical_name == "collection.info":
-                schemas.append(self.operation_renderer.render_public_collection_info_schema(op))
-                continue
-            schemas.append(self.operation_renderer.render_schema(op))
-        return schemas
+        return build_tools_payload(list(resolved_operations))
 
     @staticmethod
     def _extract_sandbox_notes(sandbox_overrides: Optional[Dict[str, Any]]) -> List[str]:
@@ -321,25 +245,6 @@ class PromptAssembler:
         value = labels.get(key)
         return str(value).strip() if isinstance(value, str) and value.strip() else default
 
-    @staticmethod
-    def _budget(budgets: Dict[str, Any], key: str, default: int) -> int:
-        def _coerce(value: Any) -> Optional[int]:
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
-                return None
-            return parsed if parsed > 0 else None
-
-        direct = _coerce(budgets.get(key))
-        if direct is not None:
-            return direct
-        for section in ("prompt_assembler", "constraints", "policy"):
-            section_value = budgets.get(section)
-            if isinstance(section_value, dict):
-                nested = _coerce(section_value.get(key))
-                if nested is not None:
-                    return nested
-        return default
 
 
 def _text(value: Any) -> str:

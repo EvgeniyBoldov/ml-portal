@@ -262,6 +262,13 @@ async def test_approve_template_marks_node_and_enqueues_vectorization(monkeypatc
         "_load_template_runtime_rows",
         AsyncMock(return_value=[{"id": str(row_id), "runtime_status": "processing"}]),
     )
+    # approve_template resolves the approver's display name through
+    # AsyncUsersRepository (templates.py line 29 import); this unit test targets
+    # approval mechanics, so return an empty name map.
+    fake_users_repo = MagicMock()
+    fake_users_repo.get_by_ids = AsyncMock(return_value=[])
+    monkeypatch.setattr(templates_router, "AsyncUsersRepository", lambda _session: fake_users_repo)
+
     enqueue_mock = MagicMock(return_value="vec-task-1")
     monkeypatch.setattr(
         templates_router,

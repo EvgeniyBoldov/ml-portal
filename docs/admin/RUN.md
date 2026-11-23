@@ -291,3 +291,8 @@ make test-runtime-core
 make test-runtime-integration
 make test-backend-10-10-gate
 ```
+
+`make test-runtime-core` и CI проверяют два порога покрытия строк. По 70%
+должны проходить набор модулей runtime в целом и отдельно
+`app.runtime.pipeline`. Тесты входа запроса запускают `RuntimePipeline.execute`
+с подменой внешних границ и проверяют события, продолжение и запись результата.

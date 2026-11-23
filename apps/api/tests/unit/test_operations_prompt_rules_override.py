@@ -1,5 +1,5 @@
 from app.agents.protocol import build_tools_payload, build_tools_prompt
-from app.agents.runtime.prompt_assembler import OperationPromptRenderer, PromptAssembler
+from app.agents.runtime.prompt_assembler import PromptAssembler
 
 
 def test_build_tools_prompt_uses_default_mandatory_rules():
@@ -31,13 +31,11 @@ def test_prompt_assembler_resolves_operations_rules_override_priority():
 
 def test_build_tools_prompt_includes_collection_selection_guidance():
     prompt = build_tools_prompt([{"type": "function", "function": {"name": "x", "parameters": {}}}])
-    assert "Сопоставь задачу с назначением коллекций" in prompt
-    assert "Если результат пустой" in prompt
-    assert "имя инструмента ровно в том виде" in prompt
+    assert "выбирай `collection_slug` из допустимых значений в схеме инструмента" in prompt
 
 
 def test_operation_prompt_renderer_keeps_prompt_minimal_and_collection_aware():
-    schema = OperationPromptRenderer.render_schema(
+    schema = build_tools_payload([
         type(
             "Op",
             (),
@@ -65,7 +63,7 @@ def test_operation_prompt_renderer_keeps_prompt_minimal_and_collection_aware():
                 )(),
             },
         )()
-    )
+    ])[0]
 
     assert schema["function"]["name"] == "collection.document.search"
     assert "Document Search" in schema["function"]["description"]
@@ -80,7 +78,7 @@ def test_operation_prompt_renderer_keeps_prompt_minimal_and_collection_aware():
 
 
 def test_operation_prompt_renderer_publishes_public_collection_info_schema():
-    schema = OperationPromptRenderer.render_public_collection_info_schema(
+    schema = build_tools_payload([
         type(
             "Op",
             (),
@@ -114,16 +112,16 @@ def test_operation_prompt_renderer_publishes_public_collection_info_schema():
                 )(),
             },
         )()
-    )
+    ])[0]
 
     assert schema["function"]["name"] == "collection.info"
     assert schema["function"]["parameters"]["properties"]["collection_slug"]["type"] == "string"
     assert schema["function"]["parameters"]["required"] == ["collection_slug"]
-    assert "inspect stored fields and filter hints" in schema["function"]["description"]
+    assert "follow coverage.fields.next_offset" in schema["function"]["description"]
 
 
 def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operation():
-    schema = OperationPromptRenderer.render_schema(
+    schema = build_tools_payload([
         type(
             "Op",
             (),
@@ -159,11 +157,11 @@ def test_operation_prompt_renderer_hides_collection_id_for_bound_template_operat
                 )(),
             },
         )()
-    )
+    ])[0]
 
     assert "collection_id" not in schema["function"]["parameters"].get("properties", {})
     assert "collection_id" not in schema["function"]["parameters"].get("required", [])
-    assert "row_id must come from collection.template.list" in schema["function"]["description"]
+    assert "row_id from collection.template.search or collection.template.list" in schema["function"]["description"]
 
 
 def test_prompt_assembler_operation_schemas_include_collection_tools_from_first_call():
@@ -253,7 +251,7 @@ def test_operation_descriptions_are_complete_in_native_and_text_schemas():
         input_schema={"type": "object", "properties": {}}, result_kind="rows",
     )
     native = build_tools_payload([operation])[0]["function"]["description"]
-    rendered = OperationPromptRenderer.render_schema(operation)["function"]["description"]
+    rendered = PromptAssembler().assemble_operation_schemas([operation])[0]["function"]["description"]
     assert description in native
     assert description in rendered
     assert native == rendered
