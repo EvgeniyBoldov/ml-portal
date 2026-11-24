@@ -71,11 +71,11 @@ async def test_fact_extractor_maps_valid_candidates_to_dtos(extractor):
                 facts=[
                     _LLMFactCandidate(
                         scope="user", subject="user.name",
-                        value="Anna", confidence=0.9,
+                        value="Anna", confidence=0.9, evidence_source_ids=["user_message"], evidence_quote="My name is Anna",
                     ),
                     _LLMFactCandidate(
                         scope="user", subject="user.stack",
-                        value="Cisco IOS", confidence=0.8,
+                        value="Cisco IOS", confidence=0.8, evidence_source_ids=["user_message"], evidence_quote="I work with Cisco IOS",
                     ),
                 ]
             )
@@ -92,12 +92,12 @@ async def test_fact_extractor_maps_valid_candidates_to_dtos(extractor):
     assert len(facts) == 2
     assert all(f.scope == FactScope.USER for f in facts)
     assert all(f.owner_id is None for f in facts)  # ownership is assigned by reconciler
-    assert {f.subject for f in facts} == {"user.name", "user.stack"}
+    assert {f.subject for f in facts} == {"name", "user.stack"}
 
 
 @pytest.mark.asyncio
 async def test_fact_extractor_sends_primary_text_only_once(extractor):
-    extractor._structured.invoke = AsyncMock(return_value=_llm_result(_LLMFactOutput()))
+    extractor._structured.invoke = AsyncMock(return_value=_llm_result(_LLMFactOutput(facts=[])))
     source_text = "Термин\nОпределение"
 
     await extractor.extract(
@@ -127,30 +127,30 @@ async def test_fact_extractor_drops_unknown_scope(extractor):
             _LLMFactOutput(
                 facts=[
                     _LLMFactCandidate(
-                        scope="global", subject="x", value="y", confidence=1.0
+                        scope="global", subject="x", value="y", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="y"
                     ),
                     _LLMFactCandidate(
                         scope="user", subject="user.name",
-                        value="Boris", confidence=1.0,
+                        value="Boris", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="My name is Boris",
                     ),
                 ]
             )
         )
     )
     facts = await extractor.extract(
-        user_message="Boris", agent_results=[], known_facts=[], user_id=uid,
+        user_message="My name is Boris", agent_results=[], known_facts=[], user_id=uid,
     )
     assert len(facts) == 1
-    assert facts[0].subject == "user.name"
+    assert facts[0].subject == "name"
 
 
 def test_fact_extractor_records_safe_validation_decisions() -> None:
     result = FactExtractor._to_dtos_with_decisions(
         _LLMFactOutput(facts=[
-            _LLMFactCandidate(scope="global", subject="x", value="y", confidence=1.0),
-            _LLMFactCandidate(scope="user", subject="user.name", value="Anna", confidence=1.0),
+            _LLMFactCandidate(scope="global", subject="x", value="y", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="y"),
+            _LLMFactCandidate(scope="user", subject="user.name", value="Anna", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="My name is Anna"),
         ]),
-        user_message="My name is Anna", evidence=[FactEvidence(
+        evidence=[FactEvidence(
             source_id="user_message", source_type="user_message", source_ref="turn-1", text="My name is Anna",
         )], user_id=uuid4(), tenant_id=None, chat_id=None,
     )
@@ -162,9 +162,8 @@ def test_fact_extractor_records_safe_validation_decisions() -> None:
 def test_fact_extractor_does_not_accept_subject_mention_as_value_evidence() -> None:
     result = FactExtractor._to_dtos_with_decisions(
         _LLMFactOutput(facts=[_LLMFactCandidate(
-            scope="user", subject="email", value="invented@example.invalid", confidence=1.0,
+            scope="user", subject="email", value="invented@example.invalid", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="Какой у меня email?",
         )]),
-        user_message="Какой у меня email?",
         evidence=[FactEvidence(
             source_id="user_message", source_type="user_message", source_ref="turn-1",
             text="Какой у меня email?",
@@ -184,7 +183,7 @@ async def test_fact_extractor_drops_user_scope_without_user_id(extractor):
                 facts=[
                     _LLMFactCandidate(
                         scope="user", subject="user.name",
-                        value="Anna", confidence=1.0,
+                        value="Anna", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="Anna",
                     )
                 ]
             )
@@ -197,7 +196,7 @@ async def test_fact_extractor_drops_user_scope_without_user_id(extractor):
 
 
 @pytest.mark.asyncio
-async def test_fact_extractor_clips_overlong_value(extractor):
+async def test_fact_extractor_rejects_overlong_value(extractor):
     uid = uuid4()
     huge = "x" * 10_000
     extractor._structured.invoke = AsyncMock(
@@ -206,7 +205,7 @@ async def test_fact_extractor_clips_overlong_value(extractor):
                 facts=[
                     _LLMFactCandidate(
                         scope="user", subject="user.note",
-                        value=huge, confidence=1.0,
+                        value=huge, confidence=1.0, evidence_source_ids=["user_message"], evidence_quote=huge,
                     )
                 ]
             )
@@ -215,8 +214,7 @@ async def test_fact_extractor_clips_overlong_value(extractor):
     facts = await extractor.extract(
         user_message=huge, agent_results=[], known_facts=[], user_id=uid,
     )
-    assert len(facts) == 1
-    assert len(facts[0].value) <= 500
+    assert facts == []
 
 
 @pytest.mark.asyncio
@@ -228,7 +226,7 @@ async def test_fact_extractor_caps_at_max_per_turn(extractor):
                 facts=[
                     _LLMFactCandidate(
                         scope="user", subject=f"user.k{i}",
-                        value=f"v{i}", confidence=1.0,
+                        value=f"v{i}", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote=f"My k{i}: v{i}",
                     )
                     for i in range(20)
                 ]
@@ -236,7 +234,7 @@ async def test_fact_extractor_caps_at_max_per_turn(extractor):
         )
     )
     facts = await extractor.extract(
-        user_message=" ".join(f"v{i}" for i in range(20)), agent_results=[], known_facts=[], user_id=uid,
+        user_message="\n".join(f"My k{i}: v{i}" for i in range(20)), agent_results=[], known_facts=[], user_id=uid,
     )
     assert len(facts) == 12
 
@@ -285,7 +283,7 @@ async def test_fact_extractor_rejects_agent_summary_without_primary_evidence(ext
                         scope="user",
                         subject="preferred vendor",
                         value="juniper",
-                        confidence=0.95,
+                        confidence=0.95, evidence_source_ids=["agent"], evidence_quote="Preferred vendor: juniper",
                     )
                 ]
             )
@@ -473,7 +471,7 @@ async def test_fact_extractor_rejects_project_fact_even_with_evidence(extractor)
     extractor._structured.invoke = AsyncMock(return_value=_llm_result(
         _LLMFactOutput(facts=[_LLMFactCandidate(
             scope="project", project_key="nemesis", project_aliases=["Нема", "нема"],
-            subject="project.name", value="Немезида", confidence=1.0,
+            subject="project.name", value="Немезида", confidence=1.0, evidence_source_ids=["user_message"], evidence_quote="Для проекта Немезида",
         )])
     ))
 
@@ -498,3 +496,24 @@ def test_fact_extractor_kind_is_a_strict_storage_route() -> None:
             scope="tenant", kind="definition", subject="аварийная ситуация",
             value="ситуация с вероятностью возникновения аварии", confidence=1.0,
         )
+
+
+@pytest.mark.parametrize(("text", "quote", "source_id", "accepted"), [
+    ("Анна — мой коллега, а меня зовут Ольга", "Анна — мой коллега", "actual", False),
+    ("Меня зовут Анна", "Меня зовут Анна", "missing", False),
+    ("Меня зовут Анна?", "Меня зовут Анна", "actual", False),
+    ("Меня зовут не Анна", "Меня зовут не Анна", "actual", False),
+    ("Пример: «Меня зовут Анна»", "Меня зовут Анна", "actual", False),
+    ("Меня зовут Анна", "Меня зовут Анна", "actual", True),
+    ("Пример:\n```\nМеня зовут Анна\n```", "Меня зовут Анна", "actual", False),
+])
+def test_fact_evidence_requires_owned_assertion(text, quote, source_id, accepted):
+    result = FactExtractor._to_dtos_with_decisions(
+        _LLMFactOutput(facts=[_LLMFactCandidate(
+            scope="user", subject="name", value="Анна", evidence_source_ids=[source_id], evidence_quote=quote,
+        )]),
+        evidence=[FactEvidence(source_id="actual", source_type="user_message", source_ref="turn", text=text)],
+        user_id=uuid4(), tenant_id=None, chat_id=None,
+    )
+
+    assert bool(result.facts) is accepted

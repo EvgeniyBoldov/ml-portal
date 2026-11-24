@@ -334,3 +334,23 @@ def test_accepted_partial_artifact_is_carried_to_synthesis() -> None:
 
     assert context["artifacts"] == [{"artifact_id": "artifact-1", "file_name": "report.xlsx", "content_type": "", "size_bytes": None}]
     assert context["limitations"] == []
+
+
+def test_resumed_plan_synthesis_uses_only_selected_current_facts():
+    from app.runtime.plan_store import InMemoryPlanStore
+
+    store = InMemoryPlanStore()
+    plan = store.create(goal="Check inventory", root_run_id="run", tenant_id="tenant", memory_context=[
+        {"id": "removed", "kind": "fact", "scope": "user", "subject": "department", "value": "Old"},
+        {"type": "planner_memory_result", "result": {"groups": []}},
+    ])
+    current = {"id": "current", "kind": "fact", "scope": "user", "subject": "department", "value": "New"}
+    store.refresh_shared_facts(plan["id"], [current, {**current, "id": "unselected"}])
+    plan["iterations"] = [{"id": "final", "synthesis_brief": {"fact_refs": ["removed", "current"]}}]
+    plan["tasks"] = {"run": {"iteration_id": "final", "status": "completed", "result": {"answer": "Done"}}}
+
+    context = SynthesisContextBuilder().build(plan=plan, iteration_id="final")
+
+    assert context["memory_context"] == [current]
+    assert context["limitations"][-1]["fact_refs"] == ["removed"]
+    assert any(entry.get("type") == "planner_memory_result" for entry in plan["memory_context"])

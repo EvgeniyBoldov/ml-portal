@@ -400,3 +400,11 @@ async def test_routing_clarification_can_remain_in_preflight() -> None:
     ))
     result = await preflight.decide(user_request="Помоги с закрытием тикета", mechanical_lookup={})
     assert result.route == "clarify"
+
+
+def test_self_jira_assignee_requires_a_jira_specific_fact():
+    facts = [{"scope": "user", "kind": "fact", "subject": "username", "value": "other-system"}]
+    request = "Найди мои задачи в Jira"
+    assert TurnPreflight._self_jira_assignee(request, facts) is None
+    facts.append({"scope": "user", "kind": "fact", "subject": "user.jira.username", "value": "jira-user"})
+    assert TurnPreflight._self_jira_assignee(request, facts) == "jira-user"

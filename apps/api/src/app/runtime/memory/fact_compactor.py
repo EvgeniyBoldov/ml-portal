@@ -5,6 +5,8 @@ remain deterministic in FactReconciler.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, Sequence
 from uuid import UUID
@@ -88,6 +90,10 @@ class FactCompactor:
                 and current.subject == candidate.subject
                 and _normalized(current.value) == _normalized(candidate.value)
                 for current in current_facts
+            ) and not any(
+                current.scope == candidate.scope and current.subject == candidate.subject
+                and _normalized(current.value) != _normalized(candidate.value)
+                for current in current_facts
             ):
                 exact.append(candidate)
                 decisions.append(MemoryDecision("fact_compactor", "compaction", "accepted", "exact_match", (candidate,), action="merge"))
@@ -111,7 +117,6 @@ class FactCompactor:
                 sandbox_overrides=sandbox_overrides,
                 event_sink=event_sink,
                 agent_execution_id=agent_execution_id,
-                fallback_factory=lambda _raw: _CompactionOutput(),
             )
         except StructuredCallError:
             decisions.extend(MemoryDecision("fact_compactor", "compaction", "accepted", "compactor_fallback", (item,)) for item in semantic)
@@ -122,23 +127,28 @@ class FactCompactor:
         compacted: list[FactDTO] = []
         represented_candidate_indexes: set[int] = set()
         for output in result.value.facts:
-            source_indexes = [
-                index
-                for index in output.source_candidate_indexes
-                if 0 <= index < len(semantic)
-            ]
-            matches = [semantic[index] for index in source_indexes]
-            if not matches:
+            source_indexes = set(output.source_candidate_indexes)
+            if not source_indexes or not all(0 <= index < len(semantic) for index in source_indexes):
                 decisions.append(MemoryDecision("fact_compactor", "compaction", "skipped", "invalid_source_indexes"))
                 continue
-            # The compactor is allowed to discard a candidate only when it
-            # explicitly references it.  A partial/invalid LLM response must
-            # not silently turn evidenced extractor output into data loss.
-            represented_candidate_indexes.update(source_indexes)
-            if output.action == "discard":
-                decisions.append(MemoryDecision("fact_compactor", "compaction", "rejected", "discarded_by_compactor", tuple(matches), action=output.action))
-                continue
+            matches = [semantic[index] for index in sorted(source_indexes)]
             base = matches[0]
+            slot = (base.scope, base.subject, base.kind, base.owner_type, base.owner_id)
+            if (
+                source_indexes & represented_candidate_indexes
+                or output.scope != base.scope.value
+                or output.subject.strip().casefold() != base.subject.casefold()
+                or _normalized(output.value) != _normalized(base.value)
+                or any((item.scope, item.subject, item.kind, item.owner_type, item.owner_id) != slot
+                       or _normalized(item.value) != _normalized(base.value) for item in matches)
+            ):
+                decisions.append(MemoryDecision("fact_compactor", "compaction", "skipped", "incompatible_candidates"))
+                continue
+            represented_candidate_indexes.update(source_indexes)
+            # A model discard cannot remove otherwise validated evidence.
+            if output.action == "discard":
+                compacted.extend(matches)
+                continue
             evidence: list[dict[str, Any]] = []
             seen_evidence: set[tuple[str, str]] = set()
             for item in matches:
@@ -153,16 +163,27 @@ class FactCompactor:
             metadata = dict(base.metadata)
             metadata.pop("aliases", None)
             metadata["evidence"] = evidence
-            metadata["compaction_action"] = output.action
-            metadata["compaction_target_ids"] = [
-                str(current_facts[index].id)
-                for index in output.target_current_indexes
+            targets = [
+                current_facts[index] for index in output.target_current_indexes
                 if 0 <= index < len(current_facts)
             ]
+            action = output.action
+            if action in {"rewrite", "supersede"} and (
+                not any(re.search(r"\b(?:теперь|вместо|исправ[а-яё]*|было|раньше|now|instead|formerly|corrected)\b",
+                                  str(item.get("text") or ""), re.IGNORECASE) for item in evidence)
+                or not targets or len(targets) != len(output.target_current_indexes)
+                or any(item.scope != base.scope or item.kind != base.kind or item.subject != base.subject
+                       or (base.owner_id is not None and item.owner_id != base.owner_id)
+                       or _normalized(item.value) == _normalized(base.value) for item in targets)
+            ):
+                action = "add"
+                targets = []
+            metadata["compaction_action"] = action
+            metadata["compaction_target_ids"] = [str(item.id) for item in targets] if action in {"rewrite", "supersede"} else []
             merged_ids = [candidate_id for item in matches for candidate_id in item.metadata.get(JOURNAL_CANDIDATE_IDS, []) if isinstance(candidate_id, str)]
             metadata[JOURNAL_CANDIDATE_IDS] = merged_ids
-            subject = self._grounded_subject(output.subject, matches, base.subject)
-            value = self._grounded_value(output.value, matches, base.value)
+            subject = base.subject
+            value = base.value
             compacted_fact = FactDTO(
                 scope=base.scope,
                 subject=subject,
@@ -174,12 +195,13 @@ class FactCompactor:
                 kind=base.kind,
                 metadata=metadata,
                 confidence=max(item.confidence for item in matches),
+                observed_at=max(item.observed_at for item in matches),
             )
             compacted.append(compacted_fact)
             decisions.append(MemoryDecision(
                 "fact_compactor", "compaction",
-                "conflict" if output.action == "mark_conflict" else "accepted",
-                "compaction_resolved", tuple(matches), action=output.action,
+                "conflict" if action == "mark_conflict" else "accepted",
+                "compaction_resolved", tuple(matches), action=action,
             ))
         untouched = [
             candidate
@@ -188,36 +210,6 @@ class FactCompactor:
         ]
         decisions.extend(MemoryDecision("fact_compactor", "compaction", "accepted", "unrepresented_passthrough", (item,)) for item in untouched)
         return FactCompactionResult([*exact, *compacted, *untouched], decisions)
-
-    @staticmethod
-    def _grounded_subject(value: str, matches: Sequence[FactDTO], fallback: str) -> str:
-        """Keep the fact in a source-backed slot after LLM compaction.
-
-        The compactor may normalize wording, but it cannot introduce a new
-        subject.  Extractor candidates have already passed evidence validation,
-        so accepting one of their canonical subjects preserves that boundary.
-        """
-        normalized = " ".join(str(value or "").strip().lower().split())[:200]
-        known_subjects = {item.subject for item in matches}
-        return normalized if normalized in known_subjects else fallback
-
-    @staticmethod
-    def _grounded_value(value: str, matches: Sequence[FactDTO], fallback: str) -> str:
-        """Accept a rewritten value only when primary evidence supports it."""
-        normalized = str(value or "").strip()[:500]
-        if not normalized:
-            return fallback
-        words = [word for word in normalized.casefold().split() if len(word) > 2]
-        for candidate in matches:
-            for raw in candidate.metadata.get("evidence", []) if isinstance(candidate.metadata, dict) else []:
-                if not isinstance(raw, dict):
-                    continue
-                evidence_text = str(raw.get("text") or "").casefold()
-                if normalized.casefold() in " ".join(evidence_text.split()):
-                    return normalized
-                if normalized.casefold() == " ".join(str(candidate.value or "").casefold().split()):
-                    return normalized
-        return fallback
 
 
 def item_to_payload(item: FactDTO, index: int | None = None) -> dict[str, Any]:

@@ -145,7 +145,7 @@ TurnPreflight may propose evidence references and user/tenant durable fact
 candidates. These are hints, not writes and not proof. Glossary definitions
 and project semantic memory are published only after document review. After
 the final answer the fact writeback pipeline independently
-validates primary user/tool evidence and runs `FactExtractor`,
+validates assertions from primary user-message evidence and runs `FactExtractor`,
 `FactCompactor` and `FactReconciler`. A response may therefore say that a fact candidate
 was submitted for verification, never that preflight persisted it.
 

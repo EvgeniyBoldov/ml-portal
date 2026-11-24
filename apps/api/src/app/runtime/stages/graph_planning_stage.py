@@ -99,6 +99,9 @@ class GraphPlanningStage:
             saved = await self._store.snapshot(plan.id)
             if saved.get("iterations") and not saved.get("scope_context"):
                 raise ValueError("scope_context_missing")
+            if planner_memory_context is not None:
+                await self._store.refresh_shared_facts(plan.id, planner_memory_context)
+                saved = await self._store.snapshot(plan.id)
             if "memory_context" in saved:
                 planner_memory_context = list(saved["memory_context"] or [])
             if saved.get("scope_context"):

@@ -73,6 +73,14 @@ def _merge_memory_results(existing: list[dict[str, Any]], results: list[dict[str
     return merged
 
 
+def _refresh_shared_facts(existing: list[dict[str, Any]], current: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def is_owned_fact(item: dict[str, Any]) -> bool:
+        return item.get("scope") in {"user", "tenant", "runtime"} and item.get("kind") == "fact"
+
+    return [*[item for item in current if is_owned_fact(item)],
+            *[item for item in existing if not is_owned_fact(item)]]
+
+
 def _continuation_memory(task: PlannedTask, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     if not task.continuation_of:
         return []
@@ -461,6 +469,10 @@ class InMemoryPlanStore:
         plan = self.get(plan_id)
         plan["memory_context"] = _merge_memory_results(list(plan.get("memory_context") or []), results)
 
+    def refresh_shared_facts(self, plan_id: str, current: list[dict[str, Any]]) -> None:
+        plan = self.get(plan_id)
+        plan["memory_context"] = _refresh_shared_facts(plan.get("memory_context") or [], current)
+
     def update_task_memory(self, plan_id: str, task_id: str, context: list[dict[str, Any]], *,
                            expected_attempt_number: Optional[int] = None) -> None:
         plan = self.get(plan_id)
@@ -841,6 +853,12 @@ class SqlPlanStore:
     async def update_memory_context(self, plan_id: UUID, results: list[dict[str, Any]]) -> None:
         plan = await self._plan(plan_id, lock=True)
         plan.memory_context = _merge_memory_results(list(plan.memory_context or []), results)
+        await self._session.flush()
+        await self._commit()
+
+    async def refresh_shared_facts(self, plan_id: UUID, current: list[dict[str, Any]]) -> None:
+        plan = await self._plan(plan_id, lock=True)
+        plan.memory_context = _refresh_shared_facts(plan.memory_context or [], current)
         await self._session.flush()
         await self._commit()
 

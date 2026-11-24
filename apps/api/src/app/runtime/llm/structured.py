@@ -833,7 +833,10 @@ class StructuredLLMCall:
                 from app.runtime.planner.prompt_contract import PLANNER_RUNTIME_CONTRACT
                 parts.append(PLANNER_RUNTIME_CONTRACT)
             if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value:
-                from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_SCOPE_POLICY_V3, TURN_PREFLIGHT_TOOL_CONTRACT
+                from app.services.system_role_defaults.turn_preflight import (
+                    TURN_PREFLIGHT_SCOPE_POLICY_V3,
+                    TURN_PREFLIGHT_TOOL_CONTRACT,
+                )
                 parts.extend([TURN_PREFLIGHT_SCOPE_POLICY_V3, TURN_PREFLIGHT_TOOL_CONTRACT])
             parts.append(
                 "# RUNTIME RESPONSE CONTRACT\n"
@@ -846,7 +849,7 @@ class StructuredLLMCall:
     def _omit_legacy_memory_routing(prompt: str, role_type: str) -> str:
         """Replace obsolete routing blocks found in stored prompts and sandbox overrides."""
         if role_type == SystemLLMRoleType.TURN_PREFLIGHT.value and "ВСЕГДА вызывай memory.lookup" in prompt:
-            from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_PROMPT_V3
+            from app.services.system_role_defaults.turn_preflight import TURN_PREFLIGHT_PROMPT_V3
 
             # The old template grouped lookup, fallback routing, and context
             # instructions under these consecutive subsections of Rules.

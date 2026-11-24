@@ -22,9 +22,34 @@ from uuid import UUID
 
 from sqlalchemy import select, update, and_, or_, case, func
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.sql import ColumnElement, Select
 
-from app.models.memory import Fact, FactScope, FactSource, FactStatus
+from app.models.memory import Fact, FactObservation, FactScope, FactSource, FactStatus
 from app.runtime.memory.dto import FactDTO
+
+
+TENANT_AUTHOR_PREFIX = "tenant-author:"
+
+
+def tenant_author_count(fact_id: UUID | ColumnElement[UUID]) -> Select[tuple[int]]:
+    return select(func.count(func.distinct(FactObservation.source_label))).where(
+        FactObservation.fact_id == fact_id,
+        FactObservation.source_type == "user_message",
+        FactObservation.source_label.like(f"{TENANT_AUTHOR_PREFIX}%"),
+    )
+
+
+def _readable_provenance() -> ColumnElement[bool]:
+    """Keep private or insufficiently corroborated tenant facts out of recall."""
+    tool_observation = select(FactObservation.id).where(
+        FactObservation.fact_id == Fact.id, FactObservation.source_type == "tool_result",
+    ).exists()
+    distinct_authors = tenant_author_count(Fact.id).scalar_subquery()
+    return or_(Fact.scope != FactScope.TENANT.value, and_(
+        ~tool_observation,
+        or_(Fact.source.in_([FactSource.MANUAL.value, FactSource.SYSTEM.value]),
+            and_(Fact.source == FactSource.USER_UTTERANCE.value, distinct_authors >= 3)),
+    ))
 
 
 class FactStore:
@@ -51,6 +76,7 @@ class FactStore:
             Fact.subject == subject,
             Fact.superseded_by.is_(None),
             Fact.status == FactStatus.CONFIRMED.value,
+            _readable_provenance(),
         )
         stmt = stmt.where(Fact.owner_type == owner_type, Fact.owner_id == owner_id)
         result = await self._session.execute(stmt.limit(1))
@@ -82,6 +108,7 @@ class FactStore:
             Fact.scope.in_(scope_values),
             Fact.superseded_by.is_(None),
             Fact.status == FactStatus.CONFIRMED.value,
+            _readable_provenance(),
         )
 
         if owner_type is None or owner_id is None:
@@ -114,7 +141,7 @@ class FactStore:
         matches = [or_(Fact.subject.ilike(f"%{token}%"), Fact.value.ilike(f"%{token}%")) for token in tokens]
         score = sum((case((match, 1), else_=0) for match in matches), 0)
         stmt = select(Fact).where(or_(*owners), Fact.status == FactStatus.CONFIRMED.value,
-                                  Fact.superseded_by.is_(None))
+                                  Fact.superseded_by.is_(None), _readable_provenance())
         if subject:
             stmt = stmt.where(func.lower(Fact.subject) == subject.strip().casefold())
         else:

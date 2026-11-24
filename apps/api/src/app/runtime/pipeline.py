@@ -37,7 +37,7 @@ from app.runtime.entity_ids import (
     turn_preflight_orchestrator_id as _turn_preflight_orchestrator_id,
 )
 from app.runtime.events import OrchestrationPhase, RuntimeEvent, RuntimeEventType
-from app.runtime.memory.fact_extractor import AgentResultSnippet, FactEvidence
+from app.runtime.memory.fact_extractor import AgentResultSnippet
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.operation_errors import RuntimeErrorCode
 from app.runtime.platform_config import PlatformConfigLoader
@@ -225,31 +225,6 @@ def _recent_dialogue(messages: list[dict[str, Any]], *, limit: int = 8, max_char
 def _sandbox_branch_id(overrides: dict[str, Any] | None) -> str | None:
     value = (overrides or {}).get("sandbox_branch_id")
     return str(value) if value else None
-
-
-def _tool_fact_evidence_text(value: Any, *, limit: int = 8_000) -> str:
-    """Bound a direct successful tool result for asynchronous fact extraction."""
-    try:
-        text = json.dumps(value, ensure_ascii=False, default=str)
-    except (TypeError, ValueError):
-        text = str(value or "")
-    return text[:limit]
-
-
-def _tool_fact_evidence_support_ref(value: Any, *, fallback: str) -> str:
-    """Return a stable retrieval-source identity for glossary confirmation."""
-    if isinstance(value, dict):
-        hits = value.get("hits")
-        if isinstance(hits, list):
-            refs = sorted({
-                str(item.get("artifact_id") or item.get("id") or "").strip()
-                for item in hits
-                if isinstance(item, dict)
-                and str(item.get("artifact_id") or item.get("id") or "").strip()
-            })
-            if refs:
-                return "|".join(refs)[:128]
-    return fallback[:128]
 
 
 def _extract_resume_checkpoint(request: PipelineRequest) -> Optional[Dict[str, Any]]:
@@ -1023,6 +998,7 @@ class RuntimePipeline:
                     "evidence_refs": [ref for ref in synthesis.evidence_refs if ref not in invalid],
                     "message_refs": [ref for ref in synthesis.message_refs if ref not in invalid],
                     "artifact_refs": [ref for ref in synthesis.artifact_refs if ref not in invalid],
+                    "fact_refs": [ref for ref in synthesis.fact_refs if ref not in invalid],
                 })
                 decision.task_brief = task_brief.model_copy(update={
                     "evidence_refs": handoff_synthesis.evidence_refs,
@@ -1849,21 +1825,6 @@ class RuntimePipeline:
             if isinstance(artifact, dict)
         ]
         turn_mem.fact_run_ref = str(runtime_state.run_id)
-        turn_mem.fact_evidence = [
-            FactEvidence(
-                source_id=str(entry.call_id),
-                source_type="tool_result",
-                source_ref=str(entry.call_id),
-                text=_tool_fact_evidence_text(entry.result_data),
-                label=str(entry.operation),
-                support_ref=_tool_fact_evidence_support_ref(
-                    entry.result_data,
-                    fallback=str(entry.call_id),
-                ),
-            )
-            for entry in runtime_state.tool_ledger.entries
-            if entry.status == "succeeded" and entry.result_data is not None
-        ]
         # Sync memory_bundle reference
         runtime_state.memory_bundle = turn_mem.memory_bundle
         assistant_final = runtime_state.final_answer or ""

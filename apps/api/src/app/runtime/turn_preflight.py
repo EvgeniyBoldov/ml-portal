@@ -431,13 +431,10 @@ class TurnPreflight:
             r"\b(?:мо\w*|у\s+меня|мне|my|mine|assigned\s+to\s+me)\b", text,
         )) and bool(re.search(r"\b(?:задач\w*|тикет\w*|issue\w*|ticket\w*)\b", text))
         mentions_jira = bool(re.search(r"\bjira\b", text))
-        if not (asks_for_own_tasks and mentions_jira):
+        if not (asks_for_own_tasks and mentions_jira) or re.search(r"\b(?:assignee|jql)\b", text):
             return None
 
-        accepted_subjects = {
-            "учетная запись", "учётная запись", "логин", "jira username",
-            "username", "user.jira.username",
-        }
+        accepted_subjects = {"user.jira.username", "jira username"}
         candidates = {
             str(item.get("value") or "").strip()
             for item in facts_context

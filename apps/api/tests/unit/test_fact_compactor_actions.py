@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -23,7 +24,7 @@ async def test_compactor_preserves_llm_selected_supersede_targets() -> None:
     )
     candidate = FactDTO(
         scope=FactScope.TENANT, subject="network.access", value="New compact rule",
-        source=FactSource.TOOL_RESULT, metadata={"evidence": [{"source_type": "tool_result", "source_ref": "call-1"}]},
+        source=FactSource.TOOL_RESULT, metadata={"evidence": [{"source_type": "user_message", "source_ref": "turn-1", "text": "We now use New compact rule"}]},
     )
     compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
     compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput(facts=[
@@ -129,3 +130,24 @@ async def test_compactor_forwards_its_execution_id_to_structured_llm() -> None:
     )
 
     assert compactor._structured.invoke.await_args.kwargs["agent_execution_id"] == "fact-compactor-execution"
+
+
+@pytest.mark.asyncio
+async def test_compactor_cannot_combine_scopes_or_supersede_another_subject():
+    personal = FactDTO(scope=FactScope.USER, subject="standard", value="ITIL", source=FactSource.USER_UTTERANCE)
+    shared = FactDTO(scope=FactScope.TENANT, subject="standard", value="ITIL", source=FactSource.USER_UTTERANCE)
+    other = replace(personal, id=uuid4(), subject="department", value="Support")
+    personal.metadata["evidence"] = [{"source_type": "user_message", "source_ref": "turn", "text": "My standard is now ITIL"}]
+    compactor = FactCompactor(session=AsyncMock(), llm_client=AsyncMock())
+    compactor._structured.invoke = AsyncMock(return_value=_result(_CompactionOutput(facts=[
+        _CompactedFact(scope="user", subject="standard", value="ITIL", action="merge",
+                       source_candidate_indexes=[0, 1]),
+        _CompactedFact(scope="user", subject="standard", value="ITIL", action="supersede",
+                       source_candidate_indexes=[0], target_current_indexes=[0]),
+    ])))
+
+    facts = await compactor.compact(candidates=[personal, shared], current_facts=[other],
+                                    user_id=uuid4(), tenant_id=uuid4(), chat_id=None)
+
+    assert {fact.scope for fact in facts} == {FactScope.USER, FactScope.TENANT}
+    assert facts[0].metadata["compaction_target_ids"] == []

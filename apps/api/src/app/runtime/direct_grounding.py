@@ -79,17 +79,18 @@ def validate_direct_grounding(
         if item.get("id") and item.get("scope") in {"user", "tenant"} and item.get("kind") == "fact"
         and str(item.get("value") or "").strip()
     }
+    fact_refs = list(dict.fromkeys([*brief.fact_refs, *synthesis.fact_refs]))
     facts = [
         {key: value for key, value in known_facts[ref].items()
          if key in {"id", "scope", "kind", "subject", "value", "confidence"}}
-        for ref in dict.fromkeys(brief.fact_refs) if ref in known_facts
+        for ref in fact_refs if ref in known_facts
     ]
     stale_files = {
         item["id"] for item in context["evidence"]
         if item["tool"] in _FILE_READS and item["id"] not in fresh_evidence_ids
     }
     invalid = (set(context.get("unavailable_material_refs") or []) | stale_files
-               | (set(brief.fact_refs) - known_facts.keys()) | (set(synthesis.artifact_refs) - artifact_ids))
+               | (set(fact_refs) - known_facts.keys()) | (set(synthesis.artifact_refs) - artifact_ids))
     outcome = DirectGrounding(run_context=context, facts=facts, invalid_refs=invalid)
     request_excerpt = (brief.request_excerpt or "").strip()
     memory_only = brief.grounding == "memory_only" or bool(_MEMORY_ONLY.search(user_request))

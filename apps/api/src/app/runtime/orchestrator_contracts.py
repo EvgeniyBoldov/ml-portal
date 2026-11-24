@@ -366,6 +366,7 @@ class SynthesisBrief(BaseModel):
     artifact_refs: List[str] = Field(default_factory=list)
     evidence_refs: List[str] = Field(default_factory=list)
     message_refs: List[str] = Field(default_factory=list)
+    fact_refs: List[str] = Field(default_factory=list, description="Selected confirmed fact IDs from planner memory_context.")
     delivery: Literal["text", "files", "text_and_files"] = "text"
     content_mode: Literal["grounded", "generative", "mixed"] = "grounded"
     files: List[FileDeliverable] = Field(default_factory=list)

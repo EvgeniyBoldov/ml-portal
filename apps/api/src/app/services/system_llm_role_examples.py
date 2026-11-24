@@ -35,7 +35,7 @@ _EXAMPLES: Dict[SystemLLMRoleType, ExamplesV2] = {
         },
     },
     SystemLLMRoleType.MEMORY: {"input": {"request": "Заявка для Нема", "facts": [{"index": 0}], "projects": [{"index": 0, "aliases": ["Нема"]}]}, "outputs": {"default": {"fact_indexes": [0], "project_indexes": [0], "ambiguities": [], "intent": "informational"}}},
-    SystemLLMRoleType.FACT_EXTRACTOR: {"input": {"user_message": "Я сетевой инженер", "evidence": [{"source_id": "user_message", "source_type": "user_message", "source_ref": "request", "text": "Я сетевой инженер"}], "known_facts": []}, "outputs": {"default": {"facts": [{"scope": "user", "kind": "fact", "subject": "user.role", "value": "network engineer", "confidence": 0.9, "aliases": [], "project_aliases": [], "evidence_source_ids": ["user_message"]}]}}},
+    SystemLLMRoleType.FACT_EXTRACTOR: {"input": {"evidence": [{"source_id": "user_message", "source_type": "user_message", "source_ref": "request", "text": "Я сетевой инженер"}], "known_facts": []}, "outputs": {"default": {"facts": [{"scope": "user", "kind": "fact", "subject": "user.role", "value": "сетевой инженер", "confidence": 0.9, "evidence_source_ids": ["user_message"], "evidence_quote": "Я сетевой инженер"}]}}},
     SystemLLMRoleType.FACT_COMPACTOR: {"input": {"candidates": [{"index": 0, "scope": "tenant", "subject": "standard", "value": "ITIL"}], "current_facts": []}, "outputs": {"default": {"facts": [{"scope": "tenant", "subject": "standard", "value": "ITIL", "action": "merge", "source_candidate_indexes": [0], "target_current_indexes": []}]}}},
     SystemLLMRoleType.DOCUMENT_MEMORY_EXTRACTOR: {
         "input": {

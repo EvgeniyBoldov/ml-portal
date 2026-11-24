@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.memory import Fact, FactObservation, FactScope, FactStatus
 from app.models.memory import FactSource
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.fact_store import TENANT_AUTHOR_PREFIX, tenant_author_count
 from app.runtime.memory.decisions import MemoryDecision
 
 
@@ -96,7 +97,8 @@ class FactReconciler:
     ) -> FactReconciliationResult:
         changes: list[FactReconciliationChange] = []
         decisions: list[MemoryDecision] = []
-        for candidate in candidates:
+        # Acquire slot locks in the same order across transactions.
+        for candidate in sorted(candidates, key=lambda item: (item.scope.value, item.subject)):
             compaction_action = str(candidate.metadata.get("compaction_action") or "add")
             if candidate.kind != "fact":
                 decisions.append(MemoryDecision(
@@ -108,10 +110,18 @@ class FactReconciler:
             if owner_id is None:
                 decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "missing_owner", (candidate,), action=compaction_action))
                 continue
+            evidence = [
+                item for item in candidate.metadata.get("evidence") or []
+                if item.get("source_type") == "user_message" and item.get("source_ref")
+                and (candidate.scope != FactScope.TENANT or user_id is not None)
+            ]
+            if not evidence:
+                decisions.append(MemoryDecision("fact_compactor", "reconciliation", "rejected", "no_admissible_evidence", (candidate,)))
+                continue
             # Serialize absent-row inserts and support updates across workers.
             bind = self._session.get_bind()
             if bind.dialect.name == "postgresql":
-                lock_key = f"{owner_type}:{owner_id}:{candidate.scope.value}:{candidate.subject}:{_normalized(candidate.value)}"
+                lock_key = f"{owner_type}:{owner_id}:{candidate.scope.value}:{candidate.subject}"
                 await self._session.execute(
                     text("SELECT pg_advisory_xact_lock(hashtextextended(:slot, 0))"), {"slot": lock_key},
                 )
@@ -150,9 +160,7 @@ class FactReconciler:
                 )
                 self._session.add(existing)
                 await self._session.flush()
-                if compaction_action in {"rewrite", "supersede"}:
-                    await self._supersede_targets(existing, candidate.metadata.get("compaction_target_ids") or [])
-            added = await self._add_observations(existing, candidate.metadata.get("evidence") or [])
+            added = await self._add_observations(existing, evidence, user_id=user_id)
             if not added:
                 decisions.append(MemoryDecision(
                     "fact_compactor", "reconciliation", "skipped", "no_new_evidence", (candidate,),
@@ -160,9 +168,15 @@ class FactReconciler:
                     support_before=support_before, support_after=int(existing.support_count or 0), support_delta=0,
                 ))
                 continue
-            existing.support_count += added
-            existing.observed_at = datetime.now(timezone.utc)
-            if compaction_action == "mark_conflict":
+            if candidate.scope == FactScope.TENANT:
+                existing.support_count = await self._tenant_author_count(existing)
+            else:
+                existing.support_count += added
+            existing.observed_at = candidate.observed_at
+            marked_conflict = compaction_action == "mark_conflict" and (
+                candidate.scope == FactScope.USER or existing.support_count >= 3
+            )
+            if marked_conflict:
                 existing.status = FactStatus.UNCONFIRMED.value
                 # A conflict is not resolved by merely hiding the incoming
                 # value. Existing confirmed values in the same semantic slot
@@ -176,6 +190,9 @@ class FactReconciler:
                 existing.status = FactStatus.CONFIRMED.value
                 existing.first_confirmed_at = existing.first_confirmed_at or datetime.now(timezone.utc)
                 existing.last_confirmed_at = datetime.now(timezone.utc)
+            if existing.status == FactStatus.CONFIRMED.value and compaction_action in {"rewrite", "supersede"}:
+                await self._supersede_targets(existing, candidate.metadata.get("compaction_target_ids") or [],
+                                              observed_at=candidate.observed_at)
             self._session.add(existing)
             status_after = str(existing.status)
             if is_new:
@@ -194,16 +211,16 @@ class FactReconciler:
                 status_after=status_after,
                 support_before=support_before,
                 support_after=int(existing.support_count or 0),
-                support_delta=added,
+                support_delta=max(0, existing.support_count - support_before),
                 compaction_action=compaction_action,
             ))
             decisions.append(MemoryDecision(
                 "fact_compactor", "publication",
-                "conflict" if compaction_action == "mark_conflict" else "published",
-                "marked_unconfirmed" if compaction_action == "mark_conflict" else change_type,
+                "conflict" if marked_conflict else "published",
+                "marked_unconfirmed" if marked_conflict else change_type,
                 (candidate,), action=compaction_action, status_before=status_before,
                 status_after=status_after, support_before=support_before,
-                support_after=int(existing.support_count or 0), support_delta=added,
+                support_after=int(existing.support_count or 0), support_delta=max(0, existing.support_count - support_before),
             ))
         await self._session.flush()
         return FactReconciliationResult(changes, decisions)
@@ -231,13 +248,15 @@ class FactReconciler:
             Fact.id != inserted.id,
             Fact.scope == inserted.scope,
             Fact.subject == inserted.subject,
+            Fact.kind == inserted.kind,
             Fact.superseded_by.is_(None),
             Fact.status == FactStatus.CONFIRMED.value,
+            Fact.observed_at <= inserted.observed_at,
         ).values(status=FactStatus.UNCONFIRMED.value)
         stmt = stmt.where(Fact.owner_type == inserted.owner_type, Fact.owner_id == inserted.owner_id)
         await self._session.execute(stmt)
 
-    async def _supersede_targets(self, replacement: Fact, raw_ids: Sequence[object]) -> None:
+    async def _supersede_targets(self, replacement: Fact, raw_ids: Sequence[object], *, observed_at: datetime) -> None:
         """Apply an LLM-selected semantic replacement without key heuristics."""
         ids: list[UUID] = []
         for raw in raw_ids:
@@ -253,16 +272,23 @@ class FactReconciler:
             Fact.id.in_(ids),
             Fact.superseded_by.is_(None),
             Fact.scope == replacement.scope,
+            Fact.subject == replacement.subject,
+            Fact.kind == replacement.kind,
+            Fact.observed_at <= observed_at,
         )
         stmt = stmt.where(Fact.owner_type == replacement.owner_type, Fact.owner_id == replacement.owner_id)
         await self._session.execute(stmt.values(superseded_by=replacement.id))
 
-    async def _add_observations(self, fact: Fact, raw: Sequence[dict[str, Any]]) -> int:
+    async def _tenant_author_count(self, fact: Fact) -> int:
+        result = await self._session.execute(tenant_author_count(fact.id))
+        return int(result.scalar_one())
+
+    async def _add_observations(self, fact: Fact, raw: Sequence[dict[str, Any]], *, user_id: UUID | None) -> int:
         added = 0
         for item in raw:
             source_type, source_ref = str(item.get("source_type") or ""), str(item.get("source_ref") or "")
-            if not source_type or not source_ref:
-                continue
+            label = f"{TENANT_AUTHOR_PREFIX}{user_id}" if fact.scope == FactScope.TENANT.value else item.get("label")
+
             exists = await self._session.execute(select(FactObservation.id).where(
                 FactObservation.fact_id == fact.id,
                 FactObservation.source_type == source_type,
@@ -270,7 +296,7 @@ class FactReconciler:
             ))
             if exists.scalar_one_or_none() is not None:
                 continue
-            observation = FactObservation(fact_id=fact.id, source_type=source_type, source_ref=source_ref, source_label=item.get("label"))
+            observation = FactObservation(fact_id=fact.id, source_type=source_type, source_ref=source_ref, source_label=label)
             self._session.add(observation)
             await self._session.flush()
             added += 1

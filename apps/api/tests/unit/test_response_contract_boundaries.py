@@ -136,5 +136,5 @@ async def test_normalized_planner_response_is_traced_without_repeating_data(monk
 def test_failure_policy_metadata_does_not_promise_fixed_retries_or_text_filters():
     from app.services.system_llm_role_contracts import build_response_contract
     assert build_response_contract('planner')['failure_policy']['on_invalid'] == 'retry_with_runtime_limits_then_fail'
-    assert build_response_contract('fact_extractor')['failure_policy']['on_invalid'] == 'retry_with_runtime_limits_then_configured_fallback'
+    assert build_response_contract('fact_extractor')['failure_policy']['on_invalid'] == 'retry_with_runtime_limits_then_fail'
     assert build_response_contract('synthesizer')['failure_policy']['on_invalid'] == 'report_stream_failure'

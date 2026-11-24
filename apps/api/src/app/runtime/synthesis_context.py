@@ -115,7 +115,20 @@ class SynthesisContextBuilder:
         # are the evidence package; passing the broad search history alongside
         # them can create unsupported links between unrelated entities.
         memory_context = []
-        if not tasks and not limitations:
+        fact_refs = set(iteration["synthesis_brief"].get("fact_refs") or [])
+        selected_facts = {
+            str(item["id"]): item for item in plan.get("memory_context") or []
+            if isinstance(item, dict) and item.get("id") and item.get("kind") == "fact"
+            and item.get("scope") in {"user", "tenant"} and str(item["id"]) in fact_refs
+        }
+        memory_context.extend(selected_facts.values())
+        if missing := sorted(fact_refs - selected_facts.keys()):
+            limitations.append({
+                "code": "selected_fact_unavailable",
+                "message": "Some selected profile facts are no longer available.",
+                "fact_refs": missing,
+            })
+        if not tasks:
             for item in plan.get("memory_context") or []:
                 if not isinstance(item, dict) or item.get("type") not in {"document_memory", "memory_recall", "planner_memory_result"}:
                     continue

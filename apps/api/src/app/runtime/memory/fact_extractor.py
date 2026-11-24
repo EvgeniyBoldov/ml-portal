@@ -10,6 +10,7 @@ owns:
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, List, Literal, Optional, Sequence
@@ -25,6 +26,7 @@ from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.llm.structured import StructuredCallError, StructuredLLMCall
 from app.runtime.events import RuntimeEvent
 from app.runtime.memory.dto import FactDTO
+from app.runtime.memory.fact_store import TENANT_AUTHOR_PREFIX
 from app.runtime.memory.decisions import JOURNAL_CANDIDATE_IDS, MemoryDecision
 from app.services.system_llm_role_service import SystemLLMRoleService
 
@@ -41,11 +43,12 @@ class _LLMFactCandidate(BaseModel):
     value: str
     confidence: float = 1.0
     kind: Literal["fact"] = "fact"
-    evidence_source_ids: List[str] = Field(default_factory=list)
+    evidence_source_ids: List[str] = Field(min_length=1, description="Exact IDs of user-message evidence supporting the assertion.")
+    evidence_quote: str = Field(min_length=1, description="Verbatim complete assertion, including who it is about.")
 
 
 class _LLMFactOutput(BaseModel):
-    facts: List[_LLMFactCandidate] = Field(default_factory=list)
+    facts: List[_LLMFactCandidate]
 
 
 # --- Public domain input/output --------------------------------------------
@@ -158,7 +161,7 @@ class FactExtractor:
     ) -> FactExtractionResult:
         # Compatibility argument ``agent_results`` is deliberately ignored:
         # summaries can never become fact evidence.
-        effective_evidence = list(evidence) or ([FactEvidence(
+        effective_evidence = [item for item in evidence if item.source_type == "user_message"] or ([FactEvidence(
             source_id="user_message", source_type="user_message", source_ref=str(chat_id or "request"), text=user_message,
         )] if user_message.strip() else [])
         payload = {
@@ -184,7 +187,6 @@ class FactExtractor:
                 sandbox_overrides=sandbox_overrides,
                 event_sink=llm_event_sink,
                 agent_execution_id=agent_execution_id,
-                fallback_factory=lambda _raw: _LLMFactOutput(facts=[]),
             )
         except StructuredCallError as exc:
             logger.warning("FactExtractor structured call failed: %s", exc)
@@ -203,7 +205,6 @@ class FactExtractor:
         policy = _resolve_fact_policy(role_extras, sandbox_overrides)
         return self._to_dtos_with_decisions(
             result.value,
-            user_message=user_message,
             evidence=effective_evidence,
             user_id=user_id,
             tenant_id=tenant_id,
@@ -222,7 +223,6 @@ class FactExtractor:
     def _to_dtos_with_decisions(
         out: _LLMFactOutput,
         *,
-        user_message: str,
         evidence: Sequence[FactEvidence],
         user_id: Optional[UUID],
         tenant_id: Optional[UUID],
@@ -248,16 +248,20 @@ class FactExtractor:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "unknown_scope"))
                 continue
 
-            subject = (cand.subject or "").strip()[:max_subject_len]
-            value = (cand.value or "").strip()[:max_value_len]
+            subject = cand.subject.strip()
+            value = cand.value.strip()
             if not subject or not value:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "empty_content"))
+                continue
+
+            if len(subject) > max_subject_len or len(value) > max_value_len:
+                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "content_too_long"))
                 continue
 
             if scope == FactScope.USER and user_id is None:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "missing_owner"))
                 continue
-            if scope == FactScope.TENANT and tenant_id is None:
+            if scope == FactScope.TENANT and (tenant_id is None or user_id is None):
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "missing_owner"))
                 continue
             kind = (cand.kind or "fact").strip().lower()
@@ -265,7 +269,7 @@ class FactExtractor:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "unsupported_kind"))
                 continue
             confidence = max(0.0, min(1.0, float(cand.confidence)))
-            if confidence < confidence_min:
+            if not math.isfinite(cand.confidence) or confidence < confidence_min:
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "below_confidence"))
                 continue
             subject = FactExtractor._normalize_subject(subject)
@@ -280,26 +284,27 @@ class FactExtractor:
                 candidate=cand,
                 subject=subject,
                 value=value,
-                user_message=user_message,
+                scope=scope,
                 evidence=evidence,
             )
             if not matched_evidence:
                 logger.debug("FactExtractor: skip fact without evidence: %r=%r", subject, value)
                 decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "evidence_not_matched"))
                 continue
-            if scope == FactScope.USER and not any(item.source_type == "user_message" for item in matched_evidence):
-                decisions.append(MemoryDecision("fact_extractor", "extraction_validation", "rejected", "user_evidence_required"))
-                continue
             fact = FactDTO(
                     scope=scope,
                     subject=subject,
                     value=value,
-                    source=(FactSource.USER_UTTERANCE if matched_evidence[0].source_type == "user_message" else FactSource.TOOL_RESULT),
+                    source=FactSource.USER_UTTERANCE,
                     tenant_id=tenant_id,
                     kind=kind,
                     confidence=confidence,
                     metadata={
-                        "evidence": [item.model_dump() for item in matched_evidence],
+                        "evidence": [
+                            item.model_dump() | {"text": cand.evidence_quote,
+                                **({"support_ref": f"{TENANT_AUTHOR_PREFIX}{user_id}"} if scope == FactScope.TENANT and user_id else {})}
+                            for item in matched_evidence
+                        ],
                         JOURNAL_CANDIDATE_IDS: [candidate_id],
                     },
                 )
@@ -312,8 +317,10 @@ class FactExtractor:
         normalized = " ".join((subject or "").strip().lower().split())
         if not normalized:
             return ""
-        if normalized in {"имя", "name", "user name", "username", "имя пользователя"}:
+        if normalized in {"имя", "name", "user name", "имя пользователя", "user.name"}:
             return "name"
+        if normalized in {"jira username", "jira account", "jira login", "user.jira.username"}:
+            return "user.jira.username"
         if normalized in {"email", "почта", "e-mail", "mail"}:
             return "email"
         if normalized in {"язык", "language", "lang"}:
@@ -339,21 +346,72 @@ class FactExtractor:
         candidate: _LLMFactCandidate,
         subject: str,
         value: str,
-        user_message: str,
+        scope: FactScope,
         evidence: Sequence[FactEvidence],
     ) -> List[FactEvidence]:
-        requested = {item.strip() for item in candidate.evidence_source_ids if item.strip()}
-        pool = [item for item in evidence if not requested or item.source_id in requested]
-        matched: List[FactEvidence] = []
-        for item in pool:
-            haystack = item.text.lower()
-            if value.lower() in haystack:
-                matched.append(item)
-        if matched:
-            return matched
-        if user_message and value.lower() in user_message.lower():
-            return [item for item in evidence if item.source_type == "user_message"][:1]
-        return []
+        ids = candidate.evidence_source_ids
+        sources = {item.source_id: item for item in evidence if item.source_type == "user_message"}
+        if not ids or any(ref not in sources for ref in ids):
+            return []
+        quote = candidate.evidence_quote.strip()
+        if not re.search(rf"(?<!\w){re.escape(value)}(?!\w)", quote, re.IGNORECASE):
+            return []
+        for ref in ids:
+            # Inspect the containing sentence as well as the proposed quote.
+            # A shortened quote must not hide a question, negation or attribution.
+            sentences = re.split(r"(?<=[.!?])\s+|\n", _QUOTED_MATERIAL.sub(" ", sources[ref].text))
+            if not any(quote in sentence and _asserts_owned_value(quote, sentence, subject, value, scope)
+                       for sentence in sentences):
+                return []
+        return [sources[ref] for ref in dict.fromkeys(ids)]
+
+
+_TENANT_MARKER = (
+    r"(?:our (?:company|department|organization)|в наше[йм] (?:компании|отделе|организации)"
+    r"|у нас в (?:компании|отделе|организации)|наш[а-яё]* (?:компани[яи]|отдел|организаци[яи]))"
+)
+_QUOTED_MATERIAL = re.compile(
+    r'(?m)^[ \t]*>[^\n]*|```[\s\S]*?(?:```|\Z)|«[^»]*»|“[^”]*”|"[^"]*"'
+    r"|(?<!\w)'[^']*'(?!\w)",
+)
+_NON_ASSERTION = re.compile(
+    r'[?«»“”`]|(?:^|\s)[>"]|\b(?:не|нет|якобы|если|например|допустим|'
+    r'not|never|if|suppose|example)\b',
+    re.IGNORECASE,
+)
+_USER_PREDICATES = {
+    "name": r"(?:my name is|меня (?:теперь )?зовут|мо[её] имя\s*[:—-])",
+    "user.jira.username": (
+        r"(?:my (?:jira (?:username|login|account)|(?:username|login|account) in jira)\s+(?:is\s+)?"
+        r"|мой (?:логин|аккаунт) в jira\s*[:—-]?)"
+    ),
+    "role": r"(?:i am (?:an? )?|я(?: работаю)?\s*[:—-]?)",
+    "stack": r"(?:i (?:use|work with)|я (?:использую|работаю с))",
+    "department": r"(?:my department is|i work in(?: the)?|мой отдел\s*[:—-]|я работаю в отделе)",
+    "отдел": r"(?:мой отдел\s*[:—-]|я работаю в отделе)",
+    "email": r"(?:my (?:email|e-mail) is|моя почта\s*[:—-]|мой email\s*[:—-])",
+    "language": r"(?:i speak|я говорю на)",
+}
+_FIELD_SEPARATOR = r"\s*(?:[:=—-]|\bis\b)\s*"
+
+
+def _asserts_owned_value(quote: str, sentence: str, subject: str, value: str, scope: FactScope) -> bool:
+    if _NON_ASSERTION.search(sentence):
+        return False
+    field = subject.removeprefix("user.").removeprefix("tenant.")
+    label = "|".join(dict.fromkeys((re.escape(field), re.escape(field.replace("_", " ").replace(".", " ")))))
+    if scope == FactScope.TENANT:
+        predicate = rf"{_TENANT_MARKER}\s+(?:{label}){_FIELD_SEPARATOR}"
+    else:
+        explicit = rf"(?:my|мой|моя|мо[её]|мои|у меня)\s+(?:{label}){_FIELD_SEPARATOR}"
+        natural = _USER_PREDICATES.get(subject, _USER_PREDICATES.get(field))
+        predicate = rf"(?:{explicit}|{natural}\s+)" if natural else explicit
+    if subject == "user.jira.username":
+        ending = r"(?![\w-]|\.[\w.-])"
+    else:
+        ending = r"(?![\w-])"
+    transition = r"(?:(?:теперь|now)\s+)?"
+    return bool(re.search(rf"\b{predicate}{transition}{re.escape(value)}{ending}", quote, re.IGNORECASE))
 
 
 def _resolve_fact_policy(role_extras: Optional[dict], sandbox_overrides: Optional[dict]) -> dict[str, Any]:

@@ -130,7 +130,7 @@ def build_response_contract(role_type: SystemLLMRoleType | str, *, delivery: str
         # Enrich with contract-specific metadata
         schema = _enrich_schema_with_contract_metadata(schema, role)
         contract = _json_contract(schema, on_invalid=(
-            "retry_with_runtime_limits_then_fail" if role == SystemLLMRoleType.PLANNER
+            "retry_with_runtime_limits_then_fail" if role in {SystemLLMRoleType.PLANNER, SystemLLMRoleType.FACT_EXTRACTOR, SystemLLMRoleType.FACT_COMPACTOR}
             else "retry_with_runtime_limits_then_configured_fallback"
         ), format_locked=True)
         contract["examples_v2"] = examples_v2
