@@ -12,7 +12,7 @@ from app.core.http.clients import LLMClientProtocol
 from app.models.system_llm_role import SystemLLMRoleType
 from app.runtime.events import RuntimeEvent
 from app.runtime.interaction import InteractionQuestion, interaction_from_context
-from app.runtime.root_route_policy import RootRouteRecommendation
+from app.runtime.root_route_policy import RootRoutePolicy, RootRouteRecommendation
 from app.runtime.llm.structured import StructuredLLMCall
 from app.runtime.orchestrator_contracts import SynthesisBrief
 from app.services.memory_scope_catalog import resolve_memory_scopes
@@ -47,6 +47,16 @@ class DirectAnswerBrief(BaseModel):
     """Grounded answer material for the direct Synthesizer route."""
     synthesis_brief: SynthesisBrief
     answer_draft: str = Field(..., min_length=1)
+    grounding: Literal["general", "supplied_material", "corporate", "memory_only"] | None = Field(
+        default=None,
+        description=(
+            "Classify the whole answer: general knowledge or original content (general), a transform of material "
+            "provided by the user (supplied_material), confirmed company facts (corporate), or the outcome of an "
+            "explicit search limited to document memory (memory_only)."
+        ),
+    )
+    fact_refs: list[str] = Field(default_factory=list, description="IDs of selected confirmed facts from facts_context.")
+    request_excerpt: str | None = Field(default=None, min_length=1, description="Exact excerpt of material supplied in the current request.")
     model_config = {"extra": "forbid"}
 
 
@@ -86,6 +96,8 @@ class TurnPreflightDecision(BaseModel):
     tool_call: Optional[MemoryToolCall] = None
     _memory_tool_results: list[dict[str, Any]] = PrivateAttr(default_factory=list)
     _proposed_route: Optional[str] = PrivateAttr(default=None)
+    _reroute_reason: str | None = PrivateAttr(default=None)
+    _runtime_answer: bool = PrivateAttr(default=False)
     clarification: Optional[Clarification] = None
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
     scope_selection: ScopeSelection = Field(default_factory=ScopeSelection)
@@ -164,6 +176,10 @@ class TurnPreflight:
                          if item.get("type") not in {"chat_context", "project_context"}]
         if self._is_glossary_write_request(user_request):
             return self._glossary_document_decision(user_request=user_request)
+        if routing_recommendation and routing_recommendation.status == "matched" and not continuation and not attachments:
+            live_lookup = self._live_lookup_decision(user_request, routing_recommendation)
+            if live_lookup is not None:
+                return live_lookup
         if event_sink:
             await event_sink(RuntimeEvent.status(
                 "memory_context_used",
@@ -347,6 +363,30 @@ class TurnPreflight:
         return decision
 
     @staticmethod
+    def _live_lookup_decision(
+        user_request: str, recommendation: RootRouteRecommendation,
+    ) -> TurnPreflightDecision | None:
+        if recommendation.rule_id == RootRoutePolicy.JIRA_JQL_RULE:
+            direction = "Выполнить поиск задач в Jira по исходному JQL через доступный источник."
+            expected_result = "Подтверждённые результаты запроса Jira, включая пустую выборку или ограничение доступа."
+        elif recommendation.rule_id == RootRoutePolicy.DCBOX_JIRA_RULE:
+            direction = "Проверить запись об указанном адресе в DCBox и найти задачи Jira, где он упоминается."
+            expected_result = "Запись DCBox и результаты поиска Jira с отдельным статусом по каждому источнику."
+        else:
+            return None
+        decision = TurnPreflightDecision(
+            route="planner",
+            task_brief=TaskBrief(
+                goal=user_request,
+                direction=direction,
+                constraints=["Сохранить исходные фильтры, адреса и JQL из запроса без изменений."],
+                expected_result=expected_result,
+            ),
+        )
+        decision._reroute_reason = recommendation.rule_id
+        return decision
+
+    @staticmethod
     def _repeats_answered_question(question: str, user_request: str, continuation: dict[str, Any]) -> bool:
         def normalized(value: Any) -> str:
             return re.sub(r"[^\w]+", " ", str(value or "").casefold()).strip()
@@ -370,6 +410,7 @@ class TurnPreflight:
         selected = selection or ScopeSelection()
         routed = TurnPreflightDecision(
             route="planner", scope_selection=selected, memory_candidates=decision.memory_candidates,
+            artifact_descriptions=decision.artifact_descriptions,
             task_brief=brief.model_copy(update={
                 "goal": user_request, "scope_keys": selected.keys, "scope_mode": selected.mode,
                 "constraints": [*brief.constraints, reason],
@@ -453,9 +494,10 @@ class TurnPreflight:
     def _glossary_document_decision(
         *, user_request: str,
     ) -> TurnPreflightDecision:
-        return TurnPreflightDecision(
+        decision = TurnPreflightDecision(
             route="synthesis",
             synthesis_brief=DirectAnswerBrief(
+                grounding="general",
                 synthesis_brief=SynthesisBrief(
                     user_question=user_request,
                     planned_work="Объяснить документный порядок публикации определения.",
@@ -468,14 +510,17 @@ class TurnPreflight:
                 answer_draft="Загрузите документ с определением. После изучения и утверждения термина он появится в глоссарии.",
             ),
         )
+        decision._runtime_answer = True
+        return decision
 
     @staticmethod
     def _memory_write_synthesis_decision(
         *, user_request: str, memory_candidates: list[MemoryCandidate],
     ) -> TurnPreflightDecision:
-        return TurnPreflightDecision(
+        decision = TurnPreflightDecision(
             route="synthesis",
             synthesis_brief=DirectAnswerBrief(
+                grounding="general",
                 synthesis_brief=SynthesisBrief(
                     user_question=user_request,
                     planned_work="Передать явно указанный пользователем факт в стандартный writeback памяти.",
@@ -492,3 +537,5 @@ class TurnPreflight:
             ),
             memory_candidates=memory_candidates,
         )
+        decision._runtime_answer = True
+        return decision

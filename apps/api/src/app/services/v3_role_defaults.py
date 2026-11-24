@@ -5,7 +5,7 @@ from typing import Any, Dict
 
 from app.models.system_llm_role import SystemLLMRoleType
 from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_PROMPT_V3
-from app.services.orchestration_prompts import SYNTHESIZER_PROMPT_V3
+from app.services.orchestration_prompts import PLANNER_PROMPT_V3, SYNTHESIZER_PROMPT_V3
 from app.runtime.memory.shadow_study_prompts import (
     SHADOW_DOCUMENT_SCREENING_PROMPT, SHADOW_DOCUMENT_STUDY_PROMPT,
     SHADOW_MEMORY_CONFLICT_PROMPT,
@@ -85,6 +85,11 @@ MEMORY_EVALUATOR_V1: Dict[str, Any] = {
     "temperature": 0.0, }
 
 V3_ROLE_DEFAULTS: Dict[SystemLLMRoleType, Dict[str, Any]] = {
+    SystemLLMRoleType.PLANNER: {
+        "model": "llm.groq.gptoss",
+        **PLANNER_PROMPT_V3,
+        "temperature": 0.1,
+    },
     SystemLLMRoleType.MEMORY: MEMORY_V3,
     SystemLLMRoleType.TURN_PREFLIGHT: TURN_PREFLIGHT_V1,
     SystemLLMRoleType.SYNTHESIZER: SYNTHESIZER_V3,

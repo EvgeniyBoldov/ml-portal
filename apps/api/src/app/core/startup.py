@@ -267,7 +267,7 @@ async def validate_role_contracts_task(session_factory: async_sessionmaker[Async
 
 
 async def ensure_runtime_role_defaults(session_factory: async_sessionmaker[AsyncSession]) -> None:
-    """Create mandatory non-planner role defaults idempotently at startup."""
+    """Create registered role defaults idempotently at startup."""
     from app.services.system_llm_role_service import SystemLLMRoleService
 
     async with session_factory() as session:

@@ -65,12 +65,22 @@ async def test_ensure_default_roles_backfills_only_empty_prompt_fields():
     assert existing.rules == "custom rules"
 
 
-async def test_ensure_default_roles_does_not_create_planner_from_python_defaults():
+async def test_ensure_default_roles_installs_all_three_orchestration_prompts():
     service = SystemLLMRoleService(session=SimpleNamespace())
     repo = _RepoStub(existing={})
     service.repo = repo
 
     roles = await service.ensure_default_roles()
 
-    assert SystemLLMRoleType.PLANNER not in roles
-    assert all(role.role_type != SystemLLMRoleType.PLANNER for role in repo.created)
+    from app.services.orchestration_prompts import PLANNER_PROMPT_V3, SYNTHESIZER_PROMPT_V3
+    from app.services.turn_preflight_prompt_v3 import TURN_PREFLIGHT_PROMPT_V3
+
+    for role_type, prompt in (
+        (SystemLLMRoleType.TURN_PREFLIGHT, TURN_PREFLIGHT_PROMPT_V3),
+        (SystemLLMRoleType.PLANNER, PLANNER_PROMPT_V3),
+        (SystemLLMRoleType.SYNTHESIZER, SYNTHESIZER_PROMPT_V3),
+    ):
+        role = roles[role_type]
+        assert role in repo.created
+        for field, value in prompt.items():
+            assert getattr(role, field) == value

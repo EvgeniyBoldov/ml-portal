@@ -7,6 +7,17 @@ Accepted — implemented in backend runtime, prompt contract and trace journal.
 This decision supersedes the direct-handoff behavior in
 [`ADR_TURN_PREFLIGHT_ROUTING.md`](ADR_TURN_PREFLIGHT_ROUTING.md).
 
+## Deterministic handoff for explicit source queries
+
+TurnPreflight can construct a planner brief without a model call for a
+standalone instruction to run a supplied Jira filter or retrieve an explicit
+DCBox address and its matching Jira issues. The brief preserves the full
+request. Planner resolves the executors from the authorized catalog.
+Documentation questions, quoted examples and ambiguous follow-ups still
+require interpretation. The route policy remains advisory for general NetBox
+signals. The model-call lifecycle and acceptance criteria below describe the
+ordinary advisory path.
+
 ## Context
 
 Historical context (superseded): before this decision, a matched deterministic
@@ -22,7 +33,7 @@ the final root routing decision.
 ## Decision
 
 For every new implicit chat turn, evaluate `RootRoutePolicy` and record its
-recommendation, then invoke `TurnPreflight` regardless of whether a rule
+recommendation, then run the TurnPreflight phase regardless of whether a rule
 matched. `TurnPreflight` receives the recommendation alongside the same
 conversation and execution context it already uses and returns the final
 `TurnPreflightDecision`.
@@ -177,7 +188,7 @@ legacy `route_policy_decision.route` remain readable as legacy records.
 
 ## Acceptance criteria
 
-- A matched policy recommendation never skips TurnPreflight or creates a
+- An ordinary advisory match never skips TurnPreflight or creates a
   planner brief itself.
 - An unmatched policy result also reaches TurnPreflight; absence of a match
   does not force planner or clarify.

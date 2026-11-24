@@ -127,13 +127,51 @@ def test_synthesis_compaction_keeps_all_task_statuses_and_bounds_final_context()
     assert any(item.get("kind") == "limitation" and item.get("message_sha256")
                for item in context["withheld_materials"])
     assert context["evidence_coverage"] == "partial"
-    omitted_tasks = {item.get("task_id") for item in context["withheld_materials"]
-                     if item.get("kind") == "task_result_field" and item.get("fields")}
-    assert omitted_tasks
+    omitted_fields = {item["task_id"]: item["fields"] for item in context["withheld_materials"]
+                      if item.get("kind") == "task_result_field"}
+    assert omitted_fields
     for report in context["completed_task_reports"]:
-        if report["task_id"] in omitted_tasks:
-            assert "structured_response" not in report and "outputs" not in report
+        assert not set(omitted_fields.get(report["task_id"], [])).intersection(report)
     assert not any("_truncated" in json.dumps(item) for item in context["completed_task_reports"])
+
+
+def test_synthesis_compaction_prioritizes_selected_evidence_and_retains_omissions_across_passes():
+    builder = SynthesisContextBuilder(max_chars=5_000)
+    evidence = {"id": "selected", "tool": "memory.search", "data": {"text": "policy " * 85}}
+    result = {"rows": [{"ticket": "NET-27", "address": "device.example"}]}
+    context = builder.build(
+        plan={
+            "goal": "Check the policy and ticket",
+            "iterations": [{"id": "final", "synthesis_brief": {"purpose": "Answer"}}],
+            "tasks": {
+                "first": {"planned_order": 0, "status": "completed", "result": {
+                    "answer": "long answer " * 205,
+                    "description": "distinct description " * 300,
+                }},
+                "second": {"planned_order": 1, "status": "completed", "result": {
+                    "structured_response": result,
+                }},
+            },
+        },
+        iteration_id="final",
+        run_context={"evidence": [evidence]},
+    )
+
+    assert context["run_context"]["evidence"] == [evidence]
+    first, second = context["completed_task_reports"]
+    assert second["structured_response"] == result
+    assert "answer" not in first and "description" not in first
+    assert {"kind": "task_result_field", "task_id": "first", "fields": ["answer", "description"],
+            "result_refs": []} in context["withheld_materials"]
+
+    # Result preparation can expand an already bounded synthesis context.
+    context["memory_context"] = [{"text": "new material " * 500}]
+    rebound = builder._compact_to_limit(context)
+
+    assert all(item in rebound["withheld_materials"] for item in context["withheld_materials"])
+    assert rebound["evidence_coverage"] == "partial"
+    assert sum(item.get("code") == "synthesis_context_budget_exceeded" for item in rebound["limitations"]) == 1
+    assert len(json.dumps(rebound, ensure_ascii=False)) <= 5_000
 
 
 def test_synthesis_limit_keeps_original_request_constraints_and_answer_requirements():

@@ -167,12 +167,13 @@ async def test_synthesizer_inventory_uses_selected_reports_and_preserves_file_de
 
 
 @pytest.mark.asyncio
-async def test_synthesis_stream_delivers_answer_from_nullable_dcbox_receipt(monkeypatch):
+@pytest.mark.parametrize("source_complete", [True, False])
+async def test_synthesis_stream_delivers_answer_from_nullable_dcbox_receipt(monkeypatch, source_complete):
     from app.agents.runtime.result_context import ResultObservation
     from app.runtime.synthesis_context import SynthesisContextBuilder
 
     observation = ResultObservation(
-        result_id="dcbox-result", revision=1, source_complete=True, source_total=2, row_count=2,
+        result_id="dcbox-result", revision=1, source_complete=source_complete, source_total=2, row_count=2,
     ).model_dump(mode="json")
     references = SynthesisContextBuilder._verified_result_references({"receipts": [{
         "success": True, "result_id": "dcbox-result", "operation": "netbox_search_objects",
@@ -183,7 +184,7 @@ async def test_synthesis_stream_delivers_answer_from_nullable_dcbox_receipt(monk
     ], "available")))
     read = AsyncMock(return_value={
         "revision": 1, "value": [{"address": "10.243.98.4/25"}, {"address": "10.243.98.4/25"}],
-        "source_complete": True, "read_complete": True,
+        "source_complete": source_complete, "read_complete": True,
     })
     monkeypatch.setattr("app.services.result_workspace.ResultWorkspace.read", read)
     monkeypatch.setattr("app.services.system_llm_role_service.SystemLLMRoleService.get_role_config",
@@ -202,7 +203,9 @@ async def test_synthesis_stream_delivers_answer_from_nullable_dcbox_receipt(monk
     assert read.await_args.kwargs["fields"] is None
     assert read.await_args.kwargs["revision"] == 1
     evidence = json.loads(llm.calls[0]["messages"][1]["content"])["evidence_preparation"]
-    assert evidence["coverage"] == "available"
+    assert evidence["coverage"] == ("available" if source_complete else "partial")
+    if not source_complete:
+        assert evidence["limitations"][0]["code"] == "selected_result_source_partial"
     assert len(evidence["result_pages"][0]["records"]) == 2
     assert state.final_answer == "Found two IP records."
     assert any(event.type == RuntimeEventType.FINAL for event in events)

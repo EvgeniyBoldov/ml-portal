@@ -52,6 +52,7 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.services.memory_scope_catalog import resolve_memory_scopes
 from app.runtime.memory.execution_context import memory_execution_context
 from app.runtime.turn_preflight import TaskBrief, TurnPreflight, TurnPreflightDecision
+from app.runtime.direct_grounding import validate_direct_grounding
 from app.runtime.root_route_policy import RootRoutePolicy, RootRouteRecommendation
 from app.runtime.phase_limits import stream_synthesis_with_deadline
 from app.runtime.interaction import InteractionQuestion, InteractionRequester, RuntimeInteraction, interaction_from_context, require_interaction_allowed
@@ -818,8 +819,7 @@ class RuntimePipeline:
         recent_dialogue = _recent_dialogue(list(request.messages or []))
         if not resume_graph:
             # Keep the same bounded, provenance-bearing dialogue for the root
-            # policy signal and TurnPreflight. The policy itself never resolves
-            # references or creates a task brief.
+            # policy signal and TurnPreflight. TurnPreflight owns the task brief.
             selected_messages = set(runtime_state.run_context.task_brief.get("message_refs") or [])
             recent_ids = {item.get("message_id") for item in recent_dialogue}
             runtime_state.run_context.recent_dialogue = [
@@ -835,6 +835,7 @@ class RuntimePipeline:
                 recommendation_id=policy_id,
                 effective_goal=effective_goal,
                 recent_dialogue=recent_dialogue,
+                continuation=continuation_state,
             )
             yield await emitter.emit(RuntimeEvent.route_policy_start(
                 policy_id=policy_id,
@@ -990,6 +991,44 @@ class RuntimePipeline:
 
         effective_scope_context = await _turn_scope_context(self._session, base_scope_context, decision, lookup)
         turn_mem.project_context = _project_context_payload(effective_scope_context, turn_mem.project_context)
+        fresh_evidence_ids = {
+            runtime_state.run_context.add_evidence(record["tool"], record.get("arguments") or {}, record["result"])
+            for record in decision.memory_tool_results if (record.get("result") or {}).get("success", False)
+        }
+        available_ids = {item.ref.artifact_id for item in runtime_state.attachment_contexts}
+        direct_grounding = None
+        if decision.synthesis_brief is not None:
+            brief = decision.synthesis_brief
+            direct_question = effective_goal if resuming_interaction else effective_user_query
+            direct_grounding = validate_direct_grounding(
+                brief, user_request=direct_question, run_context=runtime_state.run_context,
+                scope_keys=effective_scope_context.keys, facts_context=turn_mem.planner_memory_context,
+                artifact_ids=available_ids, fresh_evidence_ids=fresh_evidence_ids,
+                tool_results=decision.memory_tool_results, mechanical_lookup=lookup,
+                runtime_answer=decision._runtime_answer,
+            )
+            if direct_grounding.failure:
+                synthesis = brief.synthesis_brief
+                invalid = direct_grounding.invalid_refs
+                decision = TurnPreflight._planner_handoff(
+                    direct_question, decision, reason=direct_grounding.failure, selection=decision.scope_selection,
+                )
+                task_brief = decision.task_brief
+                assert task_brief is not None
+                handoff_synthesis = synthesis.model_copy(update={
+                    "user_question": direct_question,
+                    "planned_work": task_brief.direction,
+                    "purpose": task_brief.expected_result,
+                    "answer_requirements": "Соблюдай требования к ответу из исходного запроса.",
+                    "evidence_refs": [ref for ref in synthesis.evidence_refs if ref not in invalid],
+                    "message_refs": [ref for ref in synthesis.message_refs if ref not in invalid],
+                    "artifact_refs": [ref for ref in synthesis.artifact_refs if ref not in invalid],
+                })
+                decision.task_brief = task_brief.model_copy(update={
+                    "evidence_refs": handoff_synthesis.evidence_refs,
+                    "message_refs": handoff_synthesis.message_refs,
+                    "synthesis_brief": handoff_synthesis,
+                })
         if not resume_graph:
             proposed_route = getattr(decision, "_proposed_route", None)
             route_reason = (
@@ -1018,11 +1057,6 @@ class RuntimePipeline:
         ctx.extra["memory_search_scope_keys"] = turn_mem.project_context["scope_context"]["keys"]
         ctx.extra["project_context"] = turn_mem.project_context
         ctx.extra["memory_execution_context"] = turn_mem.project_context["execution_context"]
-        preflight_memory_results = decision.memory_tool_results
-        for record in preflight_memory_results:
-            if (record.get("result") or {}).get("success", False):
-                runtime_state.run_context.add_evidence(record["tool"], record.get("arguments") or {}, record["result"])
-        available_ids = {item.ref.artifact_id for item in runtime_state.attachment_contexts}
         runtime_state.run_context.artifact_descriptions.update({item.artifact_id: item.description
             for item in decision.artifact_descriptions if item.artifact_id in available_ids})
         if request.chat_id:
@@ -1119,26 +1153,30 @@ class RuntimePipeline:
         ]
         if decision.route == "synthesis":
             brief = decision.synthesis_brief
-            assert brief is not None
-            selected_run_context = runtime_state.run_context.projection(
-                scope_keys=effective_scope_context.model_payload().get("keys") or [],
-                evidence_refs=brief.synthesis_brief.evidence_refs,
-                message_refs=brief.synthesis_brief.message_refs,
-            )
+            assert brief is not None and direct_grounding is not None
+            selected_run_context = direct_grounding.run_context
+            selected_run_context["answer_requirements"] = brief.synthesis_brief.answer_requirements
             direct_sources = _sources_from_selected_evidence(selected_run_context)
             direct_context = {
                 "user_question": effective_goal if resuming_interaction else effective_user_query,
                 "synthesis_brief": brief.synthesis_brief.model_dump(mode="json"),
-                "direct_answer_draft": brief.answer_draft,
+                "grounding": brief.grounding,
+                "direct_answer_draft": direct_grounding.answer_draft or brief.answer_draft,
                 "plan_outline": [], "resolution_decisions": [], "completed_task_reports": [],
                     "limitations": [], "artifacts": [item.ref.model_dump(mode="json") for item in runtime_state.attachment_contexts
                     if item.ref.artifact_id in brief.synthesis_brief.artifact_refs], "sources": direct_sources,
-                "memory_context": [],
+                "memory_context": [*direct_grounding.facts, *(
+                    item for item in turn_mem.planner_memory_context if item.get("scope") == "runtime"
+                )],
                 "memory_candidates": turn_mem.preflight_candidates,
                 "run_context": selected_run_context,
                 "scope_context": effective_scope_context.model_payload(),
                 "execution_context": turn_mem.project_context["execution_context"],
             }
+            if direct_grounding.memory_search_status:
+                direct_context["memory_search_status"] = direct_grounding.memory_search_status
+            if decision._runtime_answer:
+                direct_context["runtime_confirmation"] = brief.answer_draft
             synthesis_id: str | None = None
             try:
                 async for event in stream_synthesis_with_deadline(

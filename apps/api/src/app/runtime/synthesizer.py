@@ -54,16 +54,17 @@ _PLANNED_SYNTHESIS_MODE = (
     "результаты и пояснения всех задач с их статусами, runtime sources/artifacts и limitations. Не выдавай неуспешную работу за выполненную. "
     "synthesis_brief и plan_outline задают цель и форму ответа, а не доказывают выполнение. "
     "Не используй намерения задач или непроверенные утверждения как выполненный результат. "
-    "Если подтверждённых данных нет, сообщи, что они не получены; причину называй только из diagnostics/limitations. "
+    "Если запрошенные корпоративные данные не получены, укажи, какие именно; причину называй только из diagnostics/limitations. "
     "Не выводи из пустых отчётов отсутствие интеграции или прав. "
     "Не обещай последующее получение данных или выполнение задач."
 )
 _DIRECT_SYNTHESIS_MODE = (
     "# SYNTHESIS INPUT MODE\n"
-    "mode=direct. Отсутствие completed_task_reports нормально. Источником содержания являются "
-    "direct_answer_draft, run_context.evidence и memory_context; synthesis_brief задаёт форму и разрешённую генерацию. Не требуй план, отчёты задач "
-    "или новые данные. Не утверждай, что факт, запись памяти или иное действие уже завершены, "
-    "если это не подтверждено в direct_answer_draft."
+    "mode=direct. Отсутствие completed_task_reports нормально. "
+    "direct_answer_draft — предложенная формулировка. Для корпоративных фактов и выполненных действий "
+    "требуется подтверждение в переданных первичных материалах. Общие вопросы и генерация по запросу "
+    "допускают ответ без внешних источников. memory_search_status подтверждает только исход поиска. "
+    "runtime_confirmation подтверждает только описанный системой порядок обработки. Неподтверждённые детали опусти."
 )
 
 def _compile_role_prompt(role_config: Dict[str, object], role_override: Optional[Dict[str, object]]) -> str:
@@ -769,7 +770,13 @@ class Synthesizer:
                 "next_child_offset": page.get("next_child_offset"),
                 **({"requested_fields": page["requested_fields"]} if "requested_fields" in page else {}),
             })
-            if (page.get("record_too_large") or page.get("next_offset") is not None
+            if page.get("source_complete") is False:
+                limitations.append({
+                    "code": "selected_result_source_partial",
+                    "message": "The saved result covers only part of the external source.",
+                    "result_id": result_id,
+                })
+            if (page.get("read_complete") is False or page.get("record_too_large") or page.get("next_offset") is not None
                     or page.get("next_text_offset") is not None or page.get("next_child_offset") is not None):
                 limitations.append({
                     "code": "selected_result_page_partial",

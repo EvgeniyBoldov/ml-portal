@@ -259,7 +259,7 @@ RBAC-фильтрованному каталогу доступных агент
 для явного запроса актуальных записей NetBox, если доступен
 `inventory.netbox`, но не выбирает эффективный маршрут и не создаёт `TaskBrief`.
 Каждый новый implicit turn после policy проходит через TurnPreflight независимо
-от совпадения. Planner по-прежнему сам выбирает и создаёт задачу агенту.
+от совпадения. Для однозначной команды выполнить JQL или найти адрес в DCBox и связанные задачи Jira TurnPreflight может сформировать бриф без вызова модели. Planner по-прежнему сам выбирает и создаёт задачу агенту.
 Policy recommendation сохраняется отдельной trace-сущностью перед
 TurnPreflight; итоговый маршрут и его отношение к рекомендации фиксируются
 событием `preflight_route_decision`.
@@ -595,7 +595,7 @@ Runtime v1 claims one graph task at a time. The effective `max_parallel_tasks` v
 | Нормализатор фактов | пять частей промпта, examples | model, temperature, llm_calls_max, wall_time_ms_max |
 | Изучатель документов | deprecated; hidden from admin UI, retained for legacy shadow study/review endpoints | model, temperature |
 
-`examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`). Подборщик памяти и изучатель документов не входят в активный root-turn flow. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Рекомендуемые редактируемые промпты находятся в services/orchestration_prompts.py; planner применяется явно оператором, не перезаписывается bootstrap при старте.
+`examples` — рабочий массив примеров с `input`, `output` и необязательным `description`; пустой массив допустим. Общий редактор произвольного `extras` скрыт: runtime читает только политику экстрактора (`max_facts_per_turn`, `max_subject_len`, `max_value_len`, `max_value_words`, `confidence_min`). Подборщик памяти и изучатель документов не входят в активный root-turn flow. Planner сохраняет все секции БД и sandbox overrides; rules и output_requirements доступны в редакторе. Runtime добавляет только неизменяемую механику iteration и схему Pydantic. Дефолтные промпты TurnPreflight находятся в `services/turn_preflight_prompt_v3.py`, Planner и Synthesizer — в `services/orchestration_prompts.py`. При инициализации ролей сервис создаёт отсутствующие роли и заполняет пустые текстовые секции. Для существующих непустых секций действует конфигурация БД.
 
 Alias выбранного deployment сохраняется до коннектора: одинаковое provider model name у нескольких записей не должно менять выбранные credentials и окно.
 

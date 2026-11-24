@@ -59,6 +59,7 @@ def runtime(monkeypatch):
     pipeline = RuntimePipeline(session=session, llm_client=Mock())
     journal = RecordedJournal()
     preflight = AsyncMock()
+    real_preflight_decide = module.TurnPreflight.decide
     lookup_data = {"scope_candidates": [{"key": "alpha", "matched_forms": ["Alpha"]}]}
     lookup = AsyncMock(return_value=lookup_data)
     run_limits = AsyncMock(return_value=RunLimits(iterations=5))
@@ -101,6 +102,7 @@ def runtime(monkeypatch):
     return SimpleNamespace(
         pipeline=pipeline, request=request, ctx=ctx, session=session, journal=journal,
         preflight=preflight, lookup=lookup, lookup_data=lookup_data,
+        real_preflight_decide=real_preflight_decide,
         run_limits=run_limits, phase_limits=phase_limits, read_context=read_context,
         save_context=save_context, apply_outcome=apply_outcome, writer=writer,
     )
@@ -111,6 +113,7 @@ def direct_decision():
         "route": "synthesis",
         "scope_selection": {"mode": "replace", "keys": ["alpha"]},
         "synthesis_brief": {
+            "grounding": "general",
             "answer_draft": "Draft grounded by preflight",
             "synthesis_brief": {
                 "user_question": "Prepare the project report",
@@ -128,6 +131,156 @@ async def collect(runtime, request=None):
 
 def event_data(events, kind):
     return [event.data for event in events if event.type is kind]
+
+
+@pytest.mark.asyncio
+async def test_live_combined_lookup_reaches_planner_through_deterministic_preflight(runtime, monkeypatch):
+    runtime.request.request_text = "Расскажи про адрес 192.0.2.4/25 из DCBox и в каких задачах Jira он встречается"
+    monkeypatch.setattr(module.TurnPreflight, "decide", runtime.real_preflight_decide)
+    invoke = AsyncMock(side_effect=AssertionError("Unexpected preflight LLM call"))
+    monkeypatch.setattr("app.runtime.llm.structured.StructuredLLMCall.invoke", invoke)
+
+    async def plan(*, task_brief, available_agents, **kwargs):
+        assert task_brief["goal"] == runtime.request.request_text
+        assert "DCBox" in task_brief["direction"] and "Jira" in task_brief["direction"]
+        assert available_agents == [{"slug": "research"}]
+        yield PhasedEvent(RuntimeEvent.status("planner received request"), OrchestrationPhase.PLANNER)
+
+    runtime.pipeline._assembler.build_graph_planning_stage.side_effect = None
+    runtime.pipeline._assembler.build_graph_planning_stage.return_value = SimpleNamespace(
+        run=plan, outcome=GraphPlanningOutcome(GraphPlanningOutcomeKind.FAILED, PipelineStopReason.FAILED),
+    )
+    events = await collect(runtime)
+
+    [routing] = event_data(events, EventType.PREFLIGHT_ROUTE_DECISION)
+    assert routing["proposed_route"] is None
+    assert routing["effective_route"] == "planner"
+    assert routing["reason"] == "preflight_deterministic"
+    assert routing["detail"] == "live_dcbox_jira_lookup"
+    assert routing["policy_disposition"] == "accepted"
+    assert not event_data(events, EventType.SYNTHESIS_START)
+    invoke.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("grounding", "evidence_refs"), [
+    ("corporate", []), ("corporate", ["hallucinated-reference"]), ("general", []),
+])
+async def test_unsupported_corporate_direct_handoff_reaches_planner(runtime, grounding, evidence_refs):
+    runtime.request.request_text = "Как согласуется заявка в нашей компании?"
+    decision = direct_decision()
+    decision._proposed_route = "synthesis"
+    decision.synthesis_brief.grounding = grounding
+    decision.synthesis_brief.synthesis_brief.evidence_refs = evidence_refs
+    runtime.preflight.return_value = decision
+
+    async def plan(*, task_brief, **kwargs):
+        assert task_brief["goal"] == runtime.request.request_text
+        assert task_brief["evidence_refs"] == []
+        assert task_brief["synthesis_brief"]["user_question"] == runtime.request.request_text
+        assert decision.synthesis_brief.answer_draft not in str(task_brief)
+        yield PhasedEvent(RuntimeEvent.status("planner received request"), OrchestrationPhase.PLANNER)
+
+    runtime.pipeline._assembler.build_graph_planning_stage.side_effect = None
+    runtime.pipeline._assembler.build_graph_planning_stage.return_value = SimpleNamespace(
+        run=plan, outcome=GraphPlanningOutcome(GraphPlanningOutcomeKind.FAILED, PipelineStopReason.FAILED),
+    )
+    events = await collect(runtime)
+    [routing] = event_data(events, EventType.PREFLIGHT_ROUTE_DECISION)
+    assert (routing["proposed_route"], routing["effective_route"], routing["reason"]) == (
+        "synthesis", "planner", "runtime_reroute",
+    )
+    assert not event_data(events, EventType.SYNTHESIS_START)
+
+
+@pytest.mark.asyncio
+async def test_direct_synthesis_receives_selected_confirmed_facts_and_runtime_date(runtime):
+    runtime.request.request_text = "Какой у меня корпоративный логин?"
+    decision = direct_decision()
+    decision.synthesis_brief.grounding = "corporate"
+    decision.synthesis_brief.fact_refs = ["login"]
+    runtime.preflight.return_value = decision
+    facts = [
+        {"id": "login", "scope": "user", "kind": "fact", "subject": "login", "value": "user-a"},
+        {"id": "private", "scope": "tenant", "kind": "fact", "subject": "unselected", "value": "SECRET_VALUE"},
+    ]
+    builder = runtime.pipeline._assembler.memory_builder.build
+    turn_memory = builder.side_effect(goal=runtime.request.request_text)
+    turn_memory.planner_memory_context = facts
+    builder.side_effect = None
+    builder.return_value = turn_memory
+
+    async def synthesize(*, runtime_state, synthesis_context, run_id, **kwargs):
+        login, today = synthesis_context["memory_context"]
+        assert login == facts[0]
+        assert today["scope"] == "runtime"
+        assert today["subject"] == "current_date"
+        assert "SECRET_VALUE" not in str(synthesis_context)
+        runtime_state.final_answer = "user-a"
+        yield RuntimeEvent.final("user-a", run_id=str(run_id))
+
+    runtime.pipeline._assembler.synthesizer = SimpleNamespace(stream=synthesize)
+    assert event_data(await collect(runtime), EventType.FINAL)[0]["content"] == "user-a"
+
+
+@pytest.mark.asyncio
+async def test_corporate_direct_synthesis_receives_selected_fresh_file_contents(runtime):
+    from app.runtime.run_context import RunContext
+
+    runtime.request.request_text = "По приложенному файлу расскажи, как согласуется заявка в нашей компании."
+    decision = direct_decision()
+    decision.synthesis_brief.grounding = "corporate"
+    arguments = {"artifact_id": "regulation"}
+    result = {"success": True, "artifact_id": "regulation", "content": "Заявку согласует руководитель."}
+    decision._memory_tool_results = [{"tool": "file.read", "arguments": arguments, "result": result}]
+    file_ref = RunContext().add_evidence("file.read", arguments, result)
+    decision.synthesis_brief.synthesis_brief.evidence_refs = [file_ref]
+    runtime.preflight.return_value = decision
+
+    async def synthesize(*, runtime_state, synthesis_context, run_id, **kwargs):
+        [file] = synthesis_context["run_context"]["evidence"]
+        assert file["id"] == file_ref
+        assert file["data"] == result
+        runtime_state.final_answer = result["content"]
+        yield RuntimeEvent.final(runtime_state.final_answer, run_id=str(run_id))
+
+    runtime.pipeline._assembler.synthesizer = SimpleNamespace(stream=synthesize)
+    assert event_data(await collect(runtime), EventType.FINAL)[0]["content"] == result["content"]
+    runtime.pipeline._assembler.build_graph_planning_stage.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search", ["found", "empty", "failed"])
+async def test_memory_only_direct_synthesis_uses_observed_search_result(runtime, search):
+    from app.runtime.run_context import RunContext
+
+    runtime.request.request_text = "Как согласовать заявку? Поищи только в документной памяти."
+    decision = direct_decision()
+    decision.synthesis_brief.grounding = "memory_only"
+    arguments = {"query": "согласование заявки"}
+    items = [{"text": "Заявку согласует руководитель."}] if search == "found" else []
+    result = {"success": search != "failed", "groups": [{"scope_slug": "alpha", "items": items}]}
+    decision._memory_tool_results = [{"tool": "memory.search", "arguments": arguments, "result": result}]
+    if search == "found":
+        ref = RunContext().add_evidence("memory.search", arguments, result)
+        decision.synthesis_brief.synthesis_brief.evidence_refs = [ref]
+    runtime.preflight.return_value = decision
+
+    async def synthesize(*, runtime_state, synthesis_context, run_id, **kwargs):
+        if search == "found":
+            [evidence] = synthesis_context["run_context"]["evidence"]
+            assert evidence["data"]["groups"][0]["items"] == items
+        else:
+            assert synthesis_context["direct_answer_draft"] != decision.synthesis_brief.answer_draft
+            assert not synthesis_context["run_context"]["evidence"]
+        [status] = synthesis_context["memory_search_status"]
+        assert status["success"] == (search != "failed")
+        runtime_state.final_answer = synthesis_context["direct_answer_draft"]
+        yield RuntimeEvent.final(runtime_state.final_answer, run_id=str(run_id))
+
+    runtime.pipeline._assembler.synthesizer = SimpleNamespace(stream=synthesize)
+    assert event_data(await collect(runtime), EventType.FINAL)
+    runtime.pipeline._assembler.build_graph_planning_stage.assert_not_called()
 
 
 @pytest.mark.asyncio

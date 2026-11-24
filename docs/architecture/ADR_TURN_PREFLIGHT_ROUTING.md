@@ -8,7 +8,9 @@ Accepted — implemented with the advisory policy contract in
 The earlier direct-handoff behavior described in the historical context of
 that ADR is superseded. Current behavior evaluates `RootRoutePolicy` as an
 advisory recommendation and always routes a new implicit turn through
-TurnPreflight before planning.
+TurnPreflight before planning. For a standalone explicit Jira filter execution or
+combined DCBox address and Jira issue lookup, TurnPreflight can produce a
+planner brief deterministically before calling its model.
 
 ## Decision
 
@@ -31,6 +33,21 @@ Synthesizer. Requested examples and new prose use an explicit generative content
 mode. Current ticket or inventory data, specialized data analysis, actions and
 work under a corporate process or template go to Planner. Explaining a
 procedure from its documentation can go directly to Synthesizer.
+
+The default role prompts apply this decision to the whole request. A request for
+both an inventory record and matching issues goes to Planner with both sources
+and the original filter. Direct corporate answers require material covering each
+claim. A complete projection can be empty. Synthesizer checks the draft against
+the supplied sources and reports missing data when selected references are invalid
+and no other material supports the claim. The direct brief declares its basis
+in `grounding` (`general`, `supplied_material`, `corporate`, or `memory_only`).
+It can identify confirmed profile facts in `fact_refs` and quote input material
+in `request_excerpt`. Runtime checks material references before direct synthesis.
+For saved result pages, the synthesizer records partial coverage when either the
+page or the external source is explicitly incomplete. During context compaction
+the task statuses and verified result references are reserved first. Selected run
+evidence and structured task results take precedence over narrative. Repeated
+compaction retains the manifest of material already omitted.
 
 Preflight may use registered `memory.search` for a factual question that could
 be answered from document memory. An explicit request to search memory starts

@@ -151,12 +151,14 @@ class SynthesisContextBuilder:
                 "user_question", "synthesis_brief", "plan_outline", "resolution_decisions",
                 "scope_context", "execution_context", "execution_summary",
                 "artifacts", "sources", "datastore", "evidence_preparation", "direct_answer_draft",
+                "grounding", "memory_search_status", "runtime_confirmation",
+                "evidence_coverage",
             ) if key in context
         }
         bounded["limitations"] = []
         bounded["completed_task_reports"] = []
         bounded["memory_context"] = []
-        bounded["withheld_materials"] = []
+        bounded["withheld_materials"] = deepcopy(context.get("withheld_materials") or [])
         run_context_for_reserve = context.get("run_context") if isinstance(context.get("run_context"), dict) else {}
         expected_manifest_items = (
             len(context.get("completed_task_reports") or [])
@@ -196,7 +198,7 @@ class SynthesisContextBuilder:
                 item = {**item, "fields": [field]}
             bounded["withheld_materials"].append(item)
 
-        report_fields = ("intent", "answer", "structured_response", "outputs", "needs", "diagnostics")
+        report_pairs = []
         for report in context.get("completed_task_reports", []):
             if not isinstance(report, dict):
                 continue
@@ -204,7 +206,23 @@ class SynthesisContextBuilder:
                 "task_id", "status", "completion", "expected_outputs", "output_states", "verified_result_refs",
             ) if key in report}
             bounded["completed_task_reports"].append(stub)
-            for key in report_fields:
+            report_pairs.append((report, stub))
+
+        if isinstance(run_context, dict) and bounded_run is not None:
+            for field, id_field in (("evidence", "id"), ("conversation_materials", "message_id")):
+                for item in run_context.get(field, []):
+                    if not isinstance(item, dict):
+                        continue
+                    bounded_run[field].append(deepcopy(item))
+                    if not fits():
+                        bounded_run[field].pop()
+                        mark_withheld({"kind": field, "ref": item.get(id_field),
+                                       "tool": item.get("tool")})
+
+        # Give later tasks' exact results space before adding early task prose.
+        report_fields = ("structured_response", "outputs", "answer", "description", "diagnostics", "needs", "intent")
+        for key in report_fields:
+            for report, stub in report_pairs:
                 if key not in report:
                     continue
                 stub[key] = deepcopy(report[key])
@@ -226,17 +244,6 @@ class SynthesisContextBuilder:
                     "message_chars": len(str(item.get("message") or "")),
                 })
 
-        if isinstance(run_context, dict) and bounded_run is not None:
-            for field, id_field in (("evidence", "id"), ("conversation_materials", "message_id")):
-                for item in run_context.get(field, []):
-                    if not isinstance(item, dict):
-                        continue
-                    bounded_run[field].append(deepcopy(item))
-                    if not fits():
-                        bounded_run[field].pop()
-                        mark_withheld({"kind": field, "ref": item.get(id_field),
-                                       "tool": item.get("tool")})
-
         for item in context.get("memory_context", []):
             bounded["memory_context"].append(deepcopy(item))
             if not fits():
@@ -255,7 +262,8 @@ class SynthesisContextBuilder:
                 raise SynthesisContextError(f"synthesis {key} exceed configured size")
         if bounded["withheld_materials"]:
             bounded["evidence_coverage"] = "partial"
-            bounded["limitations"].append(limitation)
+            if limitation not in bounded["limitations"]:
+                bounded["limitations"].append(limitation)
         final_size = len(json.dumps(bounded, ensure_ascii=False, default=str))
         if final_size > self._max_chars:
             raise SynthesisContextError(
