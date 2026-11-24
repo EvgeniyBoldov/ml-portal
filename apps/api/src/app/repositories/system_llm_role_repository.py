@@ -30,16 +30,19 @@ class SystemLLMRoleRepository:
         )
         return result.scalar_one_or_none()
     
-    async def get_active_role(self, role_type: SystemLLMRoleType) -> Optional[SystemLLMRole]:
+    async def get_active_role(
+        self, role_type: SystemLLMRoleType, *, for_update: bool = False
+    ) -> Optional[SystemLLMRole]:
         """Get the active role for the specified type."""
-        result = await self.session.execute(
-            select(SystemLLMRole).where(
-                and_(
-                    SystemLLMRole.role_type == role_type,
-                    SystemLLMRole.is_active.is_(True)
-                )
+        query = select(SystemLLMRole).where(
+            and_(
+                SystemLLMRole.role_type == role_type,
+                SystemLLMRole.is_active.is_(True)
             )
         )
+        if for_update:
+            query = query.with_for_update()
+        result = await self.session.execute(query)
         role = result.scalar_one_or_none()
         if role:
             await self.session.refresh(role)

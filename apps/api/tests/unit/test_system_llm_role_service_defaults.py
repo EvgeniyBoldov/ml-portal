@@ -10,7 +10,7 @@ class _RepoStub:
         self.updated = []
         self.created = []
 
-    async def get_active_role(self, role_type):
+    async def get_active_role(self, role_type, *, for_update=False):
         return self._existing.get(role_type)
 
     async def create(self, role):
@@ -84,3 +84,34 @@ async def test_ensure_default_roles_installs_all_three_orchestration_prompts():
         assert role in repo.created
         for field, value in prompt.items():
             assert getattr(role, field) == value
+
+
+async def test_fill_prompt_defaults_only_updates_empty_sections_of_the_selected_role():
+    from app.services.system_role_defaults.synthesizer import SYNTHESIZER_PROMPT_V3
+
+    service = SystemLLMRoleService(session=SimpleNamespace())
+    selected = _role(
+        identity="", mission=None, rules=" \t", examples=[], model=None, temperature=None,
+        extras={"keep": True},
+    )
+    other = _role(role_type=SystemLLMRoleType.PLANNER, identity="")
+    repo = _RepoStub({
+        SystemLLMRoleType.SYNTHESIZER: selected,
+        SystemLLMRoleType.PLANNER: other,
+    })
+    service.repo = repo
+
+    assert await service.fill_active_prompt_defaults(SystemLLMRoleType.SYNTHESIZER) is selected
+    for field in ("identity", "mission", "rules"):
+        assert getattr(selected, field) == SYNTHESIZER_PROMPT_V3[field]
+    assert selected.safety == "custom safety"
+    assert selected.output_requirements == "custom output"
+    assert selected.examples == []
+    assert selected.extras == {"keep": True}
+    assert selected.model is None
+    assert selected.temperature is None
+    assert other.identity == ""
+    assert repo.created == []
+
+    await service.fill_active_prompt_defaults(SystemLLMRoleType.SYNTHESIZER)
+    assert repo.updated == [selected]

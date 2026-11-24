@@ -171,6 +171,21 @@ export function useUpdateOrchestratorRoleSettings(role: SystemLLMRoleType) {
 
 // === SystemLLMRole Hooks ===
 
+export function useFillActivePromptDefaults() {
+  const queryClient = useQueryClient();
+  const showError = useErrorToast();
+
+  return useMutation({
+    mutationFn: systemLLMRolesApi.fillActivePromptDefaults,
+    onSuccess: async (updatedRole, role) => {
+      const queryKey = qk.admin.systemLlmRoles.active(role);
+      await queryClient.cancelQueries({ queryKey });
+      queryClient.setQueryData(queryKey, updatedRole);
+    },
+    onError: (err: Error) => showError(err.message),
+  });
+}
+
 export function useActivePlannerRole() {
   return useQuery({
     queryKey: qk.admin.systemLlmRoles.active('planner'),

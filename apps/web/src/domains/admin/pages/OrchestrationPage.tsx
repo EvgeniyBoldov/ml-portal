@@ -9,12 +9,13 @@ import {
   useActiveFactCompactorRole,
   useActiveDocumentMemoryExtractorRole,
   useActiveSynthesizerRole,
+  useFillActivePromptDefaults,
   useOrchestratorExecutionLimits,
   useUpdateOrchestratorRoleSettings,
   useUpdateDocumentMemoryExtractorRole,
 } from '@/shared/api/hooks/usePlatformSettings';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
-import { Block, EntityPageV2, Input, Tab } from '@/shared/ui';
+import { Block, Button, EntityPageV2, Input, Tab } from '@/shared/ui';
 import type { GridFieldConfig as FieldConfig } from '@/shared/ui';
 import { ContractAwareEditor } from '@/shared/ui/ContractAwareEditor/ContractAwareEditor';
 import {
@@ -235,12 +236,34 @@ export function OrchestrationPage() {
   const { data: factLimits, isLoading: factLimitsLoading } = useOrchestratorExecutionLimits('fact_extractor');
   const { data: compactLimits, isLoading: compactLimitsLoading } = useOrchestratorExecutionLimits('fact_compactor');
 
+  const fillPromptDefaults = useFillActivePromptDefaults();
   const updatePlannerSettings = useUpdateOrchestratorRoleSettings('planner');
   const updatePreflightSettings = useUpdateOrchestratorRoleSettings('turn_preflight');
   const updateSynthesizerSettings = useUpdateOrchestratorRoleSettings('synthesizer');
   const updateFactExtractorSettings = useUpdateOrchestratorRoleSettings('fact_extractor');
   const updateFactCompactorSettings = useUpdateOrchestratorRoleSettings('fact_compactor');
   const updateDocumentStudyRole = useUpdateDocumentMemoryExtractorRole();
+
+  const promptRoleActions = (
+    role: SystemLLMRole | undefined,
+    actions: Parameters<typeof buildEntityCrudActions>[0],
+  ) => {
+    const isFilling = fillPromptDefaults.isPending && fillPromptDefaults.variables === role?.role_type;
+    const crud = buildEntityCrudActions({ ...actions, onEdit: isFilling ? undefined : actions.onEdit });
+    if (actions.mode !== 'view' || !role) return crud;
+
+    return [
+      ...crud,
+      <Button
+        key="fill-prompt-defaults"
+        variant="outline"
+        disabled={fillPromptDefaults.isPending}
+        onClick={() => fillPromptDefaults.mutate(role.role_type)}
+      >
+        {isFilling ? 'Заполнение…' : 'Заполнить по дефолту'}
+      </Button>,
+    ];
+  };
 
   const { data: modelsData, isLoading: modelsLoading } = useModels({ type: 'llm_chat', enabled_only: true });
 
@@ -306,7 +329,7 @@ export function OrchestrationPage() {
         <Tab
           title="Планировщик"
           layout="grid"
-          actions={buildEntityCrudActions({
+          actions={promptRoleActions(plannerRole, {
             mode: plannerMode,
             saving: updatePlannerSettings.isPending,
             tone: 'default',
@@ -335,7 +358,7 @@ export function OrchestrationPage() {
         <Tab
           title="Маршрутизатор запроса"
           layout="grid"
-          actions={buildEntityCrudActions({
+          actions={promptRoleActions(preflightRole, {
             mode: preflightMode,
             saving: updatePreflightSettings.isPending,
             tone: 'default',
@@ -357,7 +380,7 @@ export function OrchestrationPage() {
         <Tab
           title="Синтезатор ответа"
           layout="grid"
-          actions={buildEntityCrudActions({
+          actions={promptRoleActions(synthesizerRole, {
             mode: synthMode,
             saving: updateSynthesizerSettings.isPending,
             tone: 'default',
@@ -382,7 +405,7 @@ export function OrchestrationPage() {
         <Tab
           title="Экстрактор фактов"
           layout="grid"
-          actions={buildEntityCrudActions({
+          actions={promptRoleActions(factExtractorRole, {
             mode: factMode,
             saving: updateFactExtractorSettings.isPending,
             tone: 'default',

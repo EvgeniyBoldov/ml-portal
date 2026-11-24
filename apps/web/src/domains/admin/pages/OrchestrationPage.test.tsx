@@ -2,19 +2,28 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ saveRole: vi.fn(), saveSettings: vi.fn(), limitsQuery: vi.fn() }));
+const mocks = vi.hoisted(() => ({ saveRole: vi.fn(), saveSettings: vi.fn(), fillDefaults: vi.fn(), limitsQuery: vi.fn() }));
 vi.mock('@/shared/api/hooks/useAdmin', () => ({ useModels: () => ({ data: { items: [] }, isLoading: false }) }));
 vi.mock('@/shared/api/hooks/usePlatformSettings', () => {
-  const roles = ['Planner', 'TurnPreflight', 'Synthesizer', 'FactExtractor', 'Memory', 'FactCompactor', 'DocumentMemoryExtractor'];
+  const roles = {
+    Planner: 'planner',
+    TurnPreflight: 'turn_preflight',
+    Synthesizer: 'synthesizer',
+    FactExtractor: 'fact_extractor',
+    Memory: 'memory',
+    FactCompactor: 'fact_compactor',
+    DocumentMemoryExtractor: 'document_memory_extractor',
+  };
   return {
-    ...Object.fromEntries(roles.flatMap((role) => [
-      [`useActive${role}Role`, () => ({ data: { identity: 'Identity', mission: 'Mission', rules: 'Rules', safety: 'Safety', output_requirements: 'Output', examples: [], extras: {}, temperature: 0.2, model: 'model' }, isLoading: false })],
+    ...Object.fromEntries(Object.entries(roles).flatMap(([role, roleType]) => [
+      [`useActive${role}Role`, () => ({ data: { role_type: roleType, identity: 'Identity', mission: 'Mission', rules: 'Rules', safety: 'Safety', output_requirements: 'Output', examples: [], extras: {}, temperature: 0.2, model: 'model' }, isLoading: false })],
       [`useUpdate${role}Role`, () => ({ mutateAsync: mocks.saveRole, isPending: false })],
     ])),
     useOrchestratorExecutionLimits: (role: string) => {
       mocks.limitsQuery(role);
       return { data: { own: { llm_calls_max: 5, wall_time_ms_max: null }, effective: { llm_calls_max: 5, wall_time_ms_max: 300000 } }, isLoading: false };
     },
+    useFillActivePromptDefaults: () => ({ mutate: mocks.fillDefaults, isPending: false }),
     useUpdateOrchestratorRoleSettings: () => ({ mutateAsync: mocks.saveSettings, isPending: false }),
   };
 });
@@ -46,6 +55,26 @@ describe('Orchestrator settings applicability', () => {
     expect(new Set(mocks.limitsQuery.mock.calls.map(([role]) => role))).toEqual(new Set([
       'planner', 'turn_preflight', 'synthesizer', 'fact_extractor', 'fact_compactor',
     ]));
+  });
+
+  it('fills prompt defaults in the selected role from its tab header', () => {
+    mount();
+    for (const [title, role] of [
+      ['Планировщик', 'planner'],
+      ['Маршрутизатор запроса', 'turn_preflight'],
+      ['Синтезатор ответа', 'synthesizer'],
+      ['Экстрактор фактов', 'fact_extractor'],
+    ]) {
+      fireEvent.click(screen.getByRole('button', { name: title }));
+      fireEvent.click(screen.getByRole('button', { name: 'Заполнить по дефолту' }));
+      expect(mocks.fillDefaults).toHaveBeenLastCalledWith(role);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Изменить' }));
+      expect(screen.queryByRole('button', { name: 'Заполнить по дефолту' })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Отмена' }));
+    }
+    expect(mocks.fillDefaults).toHaveBeenCalledTimes(4);
+    expect(mocks.saveSettings).not.toHaveBeenCalled();
   });
 
   it('matches the backend temperature range on every active role tab', () => {

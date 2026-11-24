@@ -20,6 +20,7 @@ from app.schemas.system_llm_roles import (
     OrchestratorRoleSettingsUpdate,
 )
 from app.services.runtime_limits_service import ActorLimits, ResolvedActorLimits, RuntimeLimitsService
+from app.services.system_role_prompt import ROLE_PROMPT_SECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,27 @@ class SystemLLMRoleService:
         logger.info(f"Role config for {role_type}: model={config['model']}, temperature={config['temperature']}")
         return config
     
+    async def fill_active_prompt_defaults(self, role_type: SystemLLMRoleType) -> SystemLLMRole:
+        """Fill the empty prompt sections of one active role from its defaults."""
+        role = await self.repo.get_active_role(role_type, for_update=True)
+        if role is None:
+            raise SystemLLMRoleNotFoundError(f"No active {role_type.value} role found")
+        return await self._fill_empty_prompt_sections(role, self._get_default_configs()[role_type])
+
+    async def _fill_empty_prompt_sections(
+        self, role: SystemLLMRole, config: Dict[str, Any]
+    ) -> SystemLLMRole:
+        updated = False
+        for field, _heading in ROLE_PROMPT_SECTIONS:
+            default = config.get(field)
+            current = getattr(role, field)
+            if default is not None and (current is None or not current.strip()):
+                setattr(role, field, default)
+                updated = True
+        if updated:
+            return await self.repo.update(role)
+        return role
+
     async def ensure_default_roles(self) -> Dict[SystemLLMRoleType, SystemLLMRole]:
         """Ensure default roles exist and return them."""
         default_roles = {}
@@ -186,19 +208,7 @@ class SystemLLMRoleService:
                 role = await self.repo.create(role)
                 logger.info(f"Created default {role_type.value} role")
             else:
-                # Do not overwrite admin-customized prompts on restart.
-                # Only backfill prompt fields when the DB value is empty.
-                updated = False
-                for field in ("identity", "mission", "rules", "safety", "output_requirements"):
-                    new_val = config.get(field)
-                    current_val = getattr(role, field, None)
-                    is_empty = current_val is None or (isinstance(current_val, str) and not current_val.strip())
-                    if new_val is not None and is_empty:
-                        setattr(role, field, new_val)
-                        updated = True
-                if updated:
-                    role = await self.repo.update(role)
-                    logger.info(f"Backfilled empty prompt fields for {role_type.value} role")
+                role = await self._fill_empty_prompt_sections(role, config)
 
             default_roles[role_type] = role
         

@@ -88,6 +88,18 @@ async def update_active_role(
     return _serialize_role(role)
 
 
+@router.post("/active/{role_type}/fill-prompt-defaults", response_model=SystemLLMRoleResponse)
+async def fill_active_prompt_defaults(
+    role_type: SystemLLMRoleType,
+    session: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+):
+    """Fill empty prompt sections of the selected active role."""
+    role = await SystemLLMRoleService(session).fill_active_prompt_defaults(role_type)
+    await session.commit()
+    return _serialize_role(role)
+
+
 @router.patch("/active/{role_type}/settings", response_model=OrchestratorRoleSettingsResponse)
 async def update_active_orchestrator_settings(
     role_type: SystemLLMRoleType,

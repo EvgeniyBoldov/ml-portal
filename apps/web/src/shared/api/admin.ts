@@ -1213,6 +1213,11 @@ export const systemLLMRolesApi = {
       body: JSON.stringify(data),
     }),
 
+  fillActivePromptDefaults: (roleType: SystemLLMRoleType): Promise<SystemLLMRole> =>
+    apiRequest(`/admin/system-llm-roles/active/${roleType}/fill-prompt-defaults`, {
+      method: 'POST',
+    }),
+
   ensureDefaults: (): Promise<{ message: string; roles: Record<string, string> }> =>
     apiRequest('/admin/system-llm-roles/ensure-defaults', {
       method: 'POST',
