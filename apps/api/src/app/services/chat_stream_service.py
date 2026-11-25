@@ -462,13 +462,15 @@ class ChatStreamService:
             # the one shared transport for sandbox and chat; chat accepts only
             # its safe progress projection and never raw journal events.
             tail_subscriber = RuntimeTailSubscriber(stream_key=str(runtime_run_id))
-            progress_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+            progress_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
             listener_task: Optional[asyncio.Task[None]] = None
 
             async def _listen_progress() -> None:
                 async for message in tail_subscriber.listen():
                     if message.get("type") == "runtime_progress" and str(message.get("run_id")) == str(runtime_run_id):
-                        await progress_queue.put(message)
+                        if progress_queue.full():
+                            progress_queue.get_nowait()
+                        progress_queue.put_nowait(message)
 
             async def _map_pipeline_event(event: RuntimeEvent) -> Optional[dict[str, Any]]:
                 # FINAL and STOP are handled specially below — skip _map for them

@@ -131,7 +131,10 @@ async def test_runner_start_closes_partial_control_subscription(monkeypatch, can
 
     class OwnerRedis:
         async def set(self, *_args, **_kwargs):
-            raise AssertionError("owner key must not be set after failed subscribe")
+            return True
+
+        async def eval(self, *_args):
+            calls.append("owner_release")
 
     redis = Redis()
     monkeypatch.setattr(tail_bus_module.aioredis, "from_url", lambda *_args, **_kwargs: redis)
@@ -152,7 +155,7 @@ async def test_runner_start_closes_partial_control_subscription(monkeypatch, can
                 command=command, llm_client=object(), redis_client=OwnerRedis(), session_factory=object(),
             )
 
-    assert calls == ["unsubscribe", "pubsub_close", "marker_delete", "redis_close"]
+    assert calls == ["unsubscribe", "pubsub_close", "marker_delete", "redis_close", "owner_release"]
 
 
 @pytest.mark.asyncio
@@ -317,7 +320,7 @@ async def test_control_channel_failure_does_not_rewrite_a_committed_final(monkey
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_point", ["stage_read", "state_publish", "final_publish", "owner_cancel"])
+@pytest.mark.parametrize("failure_point", ["stage_read", "progress_publish", "state_publish", "final_publish", "owner_cancel"])
 async def test_optional_delivery_failure_does_not_reclassify_committed_outcome(monkeypatch, failure_point):
     events = []
 
@@ -333,6 +336,7 @@ async def test_optional_delivery_failure_does_not_reclassify_committed_outcome(m
             pass
 
         async def send_message_stream(self, **_kwargs):
+            yield {"type": "stage"}
             yield {"type": "state", "status": "completed"}
             yield {"type": "final", "message_id": "answer", "content": "Persisted answer"}
 
@@ -358,7 +362,8 @@ async def test_optional_delivery_failure_does_not_reclassify_committed_outcome(m
             event_type = payload.get("event", {}).get("type")
             if failure_point == "owner_cancel" and event_type == "final":
                 raise asyncio.CancelledError
-            if (failure_point == "state_publish" and event_type == "state"
+            if (failure_point == "progress_publish" and event_type == "stage"
+                    or failure_point == "state_publish" and event_type == "state"
                     or failure_point == "final_publish" and event_type == "final"):
                 raise OSError("terminal event delivery failed")
             events.append(payload)
@@ -653,6 +658,7 @@ async def test_resume_waits_for_previous_owner_cleanup_before_starting_new_task(
 
         async def set(self, key, value, **_kwargs):
             self.values[key] = value
+            return True
 
         async def delete(self, key):
             self.values.pop(key, None)
@@ -701,7 +707,8 @@ async def test_resume_waits_for_previous_owner_cleanup_before_starting_new_task(
     assert resumed_started.is_set()
     assert observed_commands == [old_command, resume_command]
     owner = __import__("json").loads(redis.values[chat_run_owner_key(str(run_id))])
-    assert owner == {"chat_id": str(chat_id), "user_id": str(user_id)}
+    assert owner == {"chat_id": str(chat_id), "user_id": str(user_id),
+                     "execution_id": str(resume_command.execution_id)}
 
 
 @pytest.mark.asyncio
@@ -718,7 +725,7 @@ async def test_cancelling_resume_wait_does_not_cancel_previous_owner(monkeypatch
 
     class Redis:
         async def set(self, *_args, **_kwargs):
-            pass
+            return True
 
     runner = ChatRuntimeRunner()
     monkeypatch.setattr(runner_module, "RuntimeRunControlSubscriber", lambda **_kwargs: Control())
@@ -793,3 +800,39 @@ async def test_final_event_is_yielded_before_optional_compaction_snapshot(monkey
     assert final_event is not None
     context_service.load_snapshot.assert_not_awaited()
     await stream.aclose()
+
+@pytest.mark.asyncio
+async def test_run_owner_claim_preserves_first_execution():
+    redis = SimpleNamespace(set=AsyncMock(side_effect=[True, None]))
+    run_id = uuid4()
+    first = ChatRuntimeCommand(run_id, uuid4(), uuid4(), uuid4(), "first", [])
+    second = ChatRuntimeCommand(run_id, uuid4(), uuid4(), uuid4(), "second", [])
+
+    await runner_module.claim_chat_run(redis, first)
+    with pytest.raises(runner_module.ChatRunConflictError):
+        await runner_module.claim_chat_run(redis, second)
+    assert all(call.kwargs["nx"] for call in redis.set.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_observer_recovers_saved_final_when_redis_is_silent(monkeypatch):
+    from app.api.v1.routers.chat import messages
+
+    run_id, chat_id, user_id = uuid4(), uuid4(), uuid4()
+
+    async def listen():
+        await asyncio.Event().wait()
+        yield {}
+
+    read = AsyncMock(return_value=[
+        {"type": "final", "message_id": str(uuid4()), "content": "Persisted answer"},
+    ])
+    monkeypatch.setattr(messages, "_saved_run_events", read)
+    monkeypatch.setattr(messages, "CHAT_STATUS_KEEPALIVE_SECONDS", 0.01)
+
+    frames = [frame async for frame in messages._observe_run(
+        SimpleNamespace(listen=listen), run_id=run_id, chat_id=chat_id, user_id=user_id,
+    )]
+    read.assert_awaited_once_with(run_id, chat_id, user_id)
+    assert "Persisted answer" in frames[0]
+    assert "event: done" in frames[-1]

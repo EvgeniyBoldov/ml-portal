@@ -211,7 +211,9 @@ class OpenAICompatibleLLM:
             )
             raise
         except Exception as e:
-            normalized = self._normalize_error(e, secrets=self._diagnostic_secrets(connection, request_params))
+            normalized = self._normalize_error(
+                e, secrets=self._diagnostic_secrets(connection, request_params), request_params=request_params,
+            )
             duration_ms = int((time.monotonic() - request_started) * 1000)
             self._record_call(connector=connector, call_kind="chat", outcome="error", duration_ms=duration_ms,
                               error_code=normalized.code.value)
@@ -312,7 +314,9 @@ class OpenAICompatibleLLM:
             )
             raise
         except Exception as e:
-            normalized = self._normalize_error(e, secrets=self._diagnostic_secrets(connection, request_params))
+            normalized = self._normalize_error(
+                e, secrets=self._diagnostic_secrets(connection, request_params), request_params=request_params,
+            )
             duration_ms = int((time.monotonic() - request_started) * 1000)
             self._record_call(connector=connector, call_kind="stream", outcome="error", duration_ms=duration_ms,
                               error_code=normalized.code.value)
@@ -455,7 +459,9 @@ class OpenAICompatibleLLM:
         return tuple(sorted(values, key=len, reverse=True))
 
     @staticmethod
-    def _normalize_error(exc: Exception, *, secrets: tuple[str, ...] = ()) -> LLMProviderError:
+    def _normalize_error(
+        exc: Exception, *, secrets: tuple[str, ...] = (), request_params: Mapping[str, Any] | None = None,
+    ) -> LLMProviderError:
         if isinstance(exc, LLMProviderError):
             return exc
         status_code = getattr(exc, "status_code", None)
@@ -472,6 +478,13 @@ class OpenAICompatibleLLM:
         # compatibility fallback.
         response_text = getattr(response, "text", "") if response is not None else ""
         text = f"{exc} {provider_code or ''} {provider_message} {response_text or ''}".lower()
+        response_format = (request_params or {}).get("response_format")
+        schema_grammar_rejected = (
+            status_code == 400
+            and isinstance(response_format, Mapping)
+            and response_format.get("type") == "json_schema"
+            and "failed to parse grammar" in text
+        )
         retry_after_ms: Optional[int] = None
         retry_after = headers.get("retry-after") if headers is not None else None
         if retry_after:
@@ -510,7 +523,7 @@ class OpenAICompatibleLLM:
             "enable-auto-tool-choice and --tool-call-parser",
         )) or ("tool_use_failed" in text and ("tool choice is none" in text or "tool calling" in text)):
             code, safe, retryable = LLMErrorCode.TOOL_CALLING_UNSUPPORTED, "LLM does not support native tool calling", False
-        elif "json_validate_failed" in text or (
+        elif schema_grammar_rejected or "json_validate_failed" in text or (
             OpenAICompatibleLLM._structured_mode_rejected(text)
             and not any(marker in text for marker in ("invalid schema", "invalid json_schema", "invalid json schema"))
         ):

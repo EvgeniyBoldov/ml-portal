@@ -88,6 +88,25 @@ def test_normalize_error_classifies_json_validation_rejection_as_structured_outp
     assert normalized.retryable is False
 
 
+@pytest.mark.parametrize(("format_type", "message", "expected_code"), [
+    ("json_schema", "Failed to initialize samplers: failed to parse grammar", LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED),
+    ("json_object", "Failed to initialize samplers: failed to parse grammar", LLMErrorCode.INVALID_REQUEST),
+    (None, "Failed to initialize samplers: failed to parse grammar", LLMErrorCode.INVALID_REQUEST),
+    ("json_schema", "Invalid model parameter", LLMErrorCode.INVALID_REQUEST),
+])
+def test_normalize_error_classifies_grammar_rejection_only_in_json_schema_mode(
+    format_type: str | None, message: str, expected_code: LLMErrorCode,
+):
+    error = RuntimeError(message)
+    error.response = SimpleNamespace(status_code=400, headers={}, text="")
+    params = {"response_format": {"type": format_type}} if format_type else {}
+
+    normalized = OpenAICompatibleLLM._normalize_error(error, request_params=params)
+
+    assert normalized.code is expected_code
+    assert normalized.retryable is False
+
+
 def test_normalize_error_classifies_provider_tpm_limit_without_http_status():
     error = RuntimeError(
         "Rate limit reached: tokens per minute. Please try again in 16.14s."

@@ -71,12 +71,14 @@ Attempt status vocabularies are unchanged.
 - `delta` is an answer-rendering optimization. `final` is authoritative answer
   content and includes `completed` or `failed` status.
 
-Ordinary SSE detach/navigation only removes the observer. Stop sends the
-explicit cancel command to the execution owner. Redis chat events remain
-pub/sub without replay: reattachment restores the persisted lifecycle and latest
-stage snapshot, but does not reconstruct already-published deltas or earlier
-activity history. The UI reloads persisted messages on terminal errors and
-cancellation.
+Ordinary SSE detach or navigation removes the observer. Stop sends an explicit
+cancel command to the execution owner. Redis pub/sub carries live events.
+After 15 seconds without events, or once the event subscriber closes, the
+observer reads the chat and user's persisted turn in a short-lived DB session.
+It can deliver a saved answer, pause, error or cancellation and close the stream
+even if the Redis terminal frame or `done` was lost. While execution is active,
+the observer sends SSE keepalive comments. Deltas and earlier progress are
+ephemeral. Progress keeps only the latest pending update.
 
 Browser restoration is guarded by a generation token: a late active-run lookup
 cannot attach over a newer chat selection or send/resume operation. History
@@ -105,28 +107,23 @@ and `done` to attached Redis observers, tagged with the failed execution's
 for the remaining frames. No terminal notification is fabricated when
 compensation is not confirmed or a live runner still owns the run. Subscriber
 resources are cleaned up on failed attach/start paths as well as normal stream
-completion. For a same-run resume while the previous
-process owner is finishing a pause, the runner waits for that owner, shielded
-from caller cancellation and outside the global runner lock, then rechecks
-ownership before creating the resumed task. Previous-owner cleanup cannot
-delete the resumed owner's Redis marker.
+completion. New sends reserve the run ID atomically in Redis before subscribing
+to its events. An occupied ID or an ID already used by a persisted turn returns
+HTTP 409. An intentional resume uses the existing persisted turn and waits
+briefly for the previous execution of the same owner to release its reservation.
+Cleanup checks the owning execution ID before deleting its reservation and
+stage snapshot. Separate run IDs can initialize concurrently. The HTTP request
+releases its database connection before the runner starts work in its own session.
 
-Each runner execution has an internal `execution_id`, distinct from the stable
-root `run_id`. The runner tags its Redis service events and `done` marker with
-that ID. A resume observer accepts only its exact execution ID, so a queued
-`done` from the prior continuation cannot close the new stream. The initial
-duplicate-send observer remains unfiltered because a start request can reuse an
-already-running task created by another command. A generic attach treats a
-tagged `done` as a prompt to check current persisted chat/user/run status in a
-fresh short-lived session; it ignores the marker if the run is still active
-and closes only after the persisted run is terminal. The ID is internal to
-event transport; public lifecycle frames keep the root `run_id`.
+Each execution has an internal `execution_id`, distinct from the root
+`run_id`. Initial sends and resumes accept events for their own execution ID.
+A generic attach verifies the persisted status before closing on `done` if
+a later execution may have resumed that run. Public lifecycle frames expose
+the root run ID.
 
-Stage snapshots are optional progress state: a Redis read failure is logged and
-the corresponding state/attach frame simply has no stage snapshot. Once a
-durable terminal outcome has been produced, a failure publishing a later
-service event or finishing the runner tail is logged and cleaned up without
-rewriting the persisted terminal status as failed or cancelled.
+The runner publishes with the existing Redis client. Publication errors and
+timeouts are logged, and the turn continues to its persisted outcome. Stage
+snapshots are optional and unavailable Redis data can omit them from the stream.
 
 Optional context compaction dispatch happens after the terminal `final` or
 `stop` event has been yielded. A detached task captures a bounded plain DTO,

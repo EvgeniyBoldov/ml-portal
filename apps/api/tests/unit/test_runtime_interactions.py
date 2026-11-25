@@ -209,7 +209,10 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
         async def subscribe(self): pass
         async def unsubscribe(self): pass
         async def listen(self):
-            yield {"type": "done"}
+            execution_id = str(captured["command"].execution_id)
+            yield {"type": "service_event", "execution_id": execution_id,
+                   "event": {"type": "final", "message_id": str(uuid4())}}
+            yield {"type": "done", "execution_id": execution_id}
     monkeypatch.setattr(messages.chat_runtime_runner, "start", start)
     monkeypatch.setattr(messages, "RuntimeTailSubscriber", Subscriber)
     monkeypatch.setattr(messages, "get_redis", lambda: object())
@@ -225,8 +228,7 @@ async def test_chat_resume_uses_same_typed_contract_for_text_and_boolean(monkeyp
     checkpoint = captured["command"].continuation_meta["resume_checkpoint"]
     assert checkpoint["interaction_response"] == value
     assert checkpoint["interaction"]["requester"]["stage"] == "turn_preflight"
-    # The turn remains durably paused until the SSE consumer starts; constructing
-    # a StreamingResponse must not consume the only resumable checkpoint.
+    # Resume claims the same turn and passes the checkpoint to the runner.
     assert str(captured["command"].resumed_turn_id) == str(turn.id) and turn.status == "running"
     assert captured["command"].persist_user_message is True
 

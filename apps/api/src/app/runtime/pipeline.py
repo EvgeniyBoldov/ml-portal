@@ -700,27 +700,8 @@ class RuntimePipeline:
             phase=OrchestrationPhase.PIPELINE,
         )
 
-        # Load planner role config for context snapshot
-        role_service = SystemLLMRoleService(self._session)
-        try:
-            planner_role_config = await role_service.get_role_config(SystemLLMRoleType.PLANNER)
-            from app.runtime.llm.structured import StructuredLLMCall
-            from app.runtime.planner.graph_planner import PlannerStep
-
-            planner_override = ((request.sandbox_overrides or {}).get("role_overrides") or {}).get("planner")
-            planner_prompt = StructuredLLMCall._compile_role_prompt(
-                planner_role_config,
-                planner_override if isinstance(planner_override, dict) else None,
-                schema=PlannerStep,
-            )
-            planner_model = planner_role_config.get("model")
-        except Exception:
-            planner_prompt = ""
-            planner_model = None
-
         budget_resolver = BudgetResolver(self._session)
         run_limits_v2 = await budget_resolver.resolve_run(platform.config, request.sandbox_overrides)
-        planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
         preflight_limits = await budget_resolver.resolve_orchestrator("turn_preflight", request.sandbox_overrides)
         budget_registry = BudgetRegistry(run_limits=run_limits_v2)
         saved_budget_usage = resume_checkpoint.get("budget_usage") if isinstance(resume_checkpoint, dict) else None
@@ -750,22 +731,6 @@ class RuntimePipeline:
                 "continuation": continuation_state or None,
             },
         )
-        planner_context_snapshot = compact_snapshot(
-            inputs={
-                "goal": effective_goal,
-            },
-            prompt=prompt_snapshot(planner_prompt, run_logging_level),
-            limits=serialize_limits(planner_limits),
-            rbac=planner_rbac_audit if isinstance(planner_rbac_audit, dict) else None,
-            meta={
-                "role": "planner",
-                "model": planner_model or request.model,
-                "execution_mode": execution_mode.value,
-                "explicit_agent_slug": explicit_slug,
-                "continuation": continuation_state or None,
-            },
-        )
-
         yield await emitter.emit(RuntimeEvent.status(
             "run_context_snapshot",
             context_snapshot=run_context_snapshot,
@@ -1246,26 +1211,40 @@ class RuntimePipeline:
                 runtime_state.set_lifecycle_status("failed")
                 yield await emitter.emit(RuntimeEvent.run_end(run_id=run_id_str, status="failed"), phase=OrchestrationPhase.PIPELINE)
             return
+        planner_limits = await budget_resolver.resolve_orchestrator("planner", request.sandbox_overrides)
+        ctx.extra["planner_phase_limits"] = planner_limits
+        planner_prompt = ""
+        planner_model = None
+        try:
+            from app.runtime.planner.graph_planner import GraphPlanner
+
+            role_config = await SystemLLMRoleService(self._session).get_role_config(SystemLLMRoleType.PLANNER)
+            planner_override = ((request.sandbox_overrides or {}).get("role_overrides") or {}).get("planner")
+            planner_prompt = GraphPlanner.compile_prompt(role_config, planner_override)
+            planner_model = (planner_override.get("model") if isinstance(planner_override, dict) else None
+                             ) or role_config.get("model")
+            ctx.extra["planner_role_config"] = role_config
+        except Exception:
+            logger.warning("planner_role_snapshot_unavailable", exc_info=True)
+
         preflight_task_brief: dict[str, Any] = {}
         if decision.route == "planner" and decision.task_brief is not None:
             effective_goal = decision.task_brief.goal
             runtime_state.goal = effective_goal
             preflight_task_brief = decision.task_brief.model_dump(mode="json")
-            # The run retains the raw user request, while the planner trace
-            # records the preflight-normalized task it actually received.
-            planner_context_snapshot = compact_snapshot(
-                inputs={"goal": effective_goal, "task_brief": preflight_task_brief},
-                prompt=prompt_snapshot(planner_prompt, run_logging_level),
-                limits=serialize_limits(planner_limits),
-                rbac=planner_rbac_audit if isinstance(planner_rbac_audit, dict) else None,
-                meta={
-                    "role": "planner", "model": planner_model or request.model,
-                    "execution_mode": execution_mode.value,
-                    "explicit_agent_slug": explicit_slug,
-                    "continuation": continuation_state or None,
-                    "preflight_direction": decision.task_brief.direction,
-                },
-            )
+        planner_context_snapshot = compact_snapshot(
+            inputs={"goal": effective_goal, "task_brief": preflight_task_brief or None},
+            prompt=prompt_snapshot(planner_prompt, run_logging_level),
+            limits=serialize_limits(planner_limits),
+            rbac=planner_rbac_audit if isinstance(planner_rbac_audit, dict) else None,
+            meta={
+                "role": "planner", "model": planner_model or request.model,
+                "execution_mode": execution_mode.value,
+                "explicit_agent_slug": explicit_slug,
+                "continuation": continuation_state or None,
+                "preflight_direction": preflight_task_brief.get("direction"),
+            },
+        )
         memory_recall = MemoryRecallContext(
             resolved_terms=[], resolved_entities=[], relevant_projects=[],
             relevant_knowledge=[], applicable_rules=[], applicable_procedures=[],

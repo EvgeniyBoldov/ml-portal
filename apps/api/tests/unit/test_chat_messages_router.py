@@ -63,8 +63,18 @@ def _mock_runtime(monkeypatch, captured: dict[str, object]):
         captured["llm_client"] = kwargs["llm_client"]
         captured["redis_client"] = kwargs["redis_client"]
         captured["session_factory"] = kwargs["session_factory"]
+        task = asyncio.get_running_loop().create_future()
+        task.set_result(None)
+        return task
 
-    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", _TailSubscriber)
+    class Subscriber(_TailSubscriber):
+        async def listen(self):
+            execution_id = str(captured["command"].execution_id)
+            yield {"type": "service_event", "execution_id": execution_id,
+                   "event": {"type": "final", "message_id": "answer"}}
+            yield {"type": "done", "execution_id": execution_id}
+
+    monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", Subscriber)
     monkeypatch.setattr(chat_messages.chat_runtime_runner, "start", start)
     monkeypatch.setattr(chat_messages, "get_session_factory", lambda: "session-factory")
     monkeypatch.setattr(chat_messages, "map_service_event_to_sse", lambda event: f"event: {event['type']}\ndata: {{}}\n\n")
@@ -145,7 +155,7 @@ async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
         ),
         request=request,
         chat_ctx=chat_ctx,
-        session=AsyncMock(),
+        session=AsyncMock(scalar=AsyncMock(return_value=None)),
         redis=AsyncMock(),
         llm=AsyncMock(),
         _rl=None,
@@ -165,8 +175,6 @@ async def test_send_message_stream_uses_frontend_request_contract(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_root_observer_ignores_obsolete_done_while_continuation_is_active(monkeypatch):
-    from app.services import chat_turn_service as turns_module
-
     chat_id, user_id, tenant_id, run_id = uuid4(), uuid4(), uuid4(), uuid4()
     turn = SimpleNamespace(chat_id=chat_id, user_id=user_id, runtime_run_id=run_id,
                            status="running", pause_status=None, user_message_id=None)
@@ -183,26 +191,9 @@ async def test_root_observer_ignores_obsolete_done_while_continuation_is_active(
             }}
             yield {"type": "done", "execution_id": "new-owner"}
 
-    class FreshSession:
-        async def __aenter__(self):
-            return object()
-
-        async def __aexit__(self, *_args):
-            pass
-
-    states = iter(["running", "failed"])
-
-    class TurnService:
-        def __init__(self, _session):
-            pass
-
-        async def get_by_runtime_run_id(self, requested_run):
-            assert requested_run == run_id
-            return SimpleNamespace(chat_id=chat_id, user_id=user_id, status=next(states))
-
     monkeypatch.setattr(chat_messages, "RuntimeTailSubscriber", Subscriber)
-    monkeypatch.setattr(chat_messages, "get_session_factory", lambda: FreshSession)
-    monkeypatch.setattr(turns_module, "ChatTurnService", TurnService)
+    persisted = AsyncMock(side_effect=[[], [{"type": "state", "status": "failed"}]])
+    monkeypatch.setattr(chat_messages, "_saved_run_events", persisted)
     monkeypatch.setattr(chat_messages, "read_chat_stage_snapshot", AsyncMock(return_value=None))
     session = AsyncMock()
     session.execute.return_value = _Result(turn)

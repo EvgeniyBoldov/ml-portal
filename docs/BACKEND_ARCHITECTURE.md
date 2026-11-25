@@ -40,7 +40,10 @@ Pydantic models:
   once in `response_format.json_schema`; system prompts retain behavior rules and
   examples without a generated schema copy. On fallback to `json_object`, the
   same schema moves into the system prompt. Local Pydantic validation runs in
-  either mode. File synthesis follows the same contract transport.
+  either mode. If the provider returns HTTP 400 with `failed to parse grammar`
+  for a `json_schema` request, the OpenAI-compatible adapter classifies it as a
+  structured output rejection. The shared call then tries `json_object` once
+  when retry budget is available. File synthesis follows the same contract transport.
 
 Root tool descriptors carry names/descriptions only: their argument models
 already belong to the structured response schema. Role examples come only from

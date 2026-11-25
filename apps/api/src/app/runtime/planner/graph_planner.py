@@ -27,6 +27,19 @@ class GraphPlanner:
         self._llm = StructuredLLMCall(session=session, llm_client=llm_client)
         self._input_builder = PlannerInputBuilder()
 
+    @staticmethod
+    def compile_prompt(role_config: dict[str, Any], role_override: Any) -> str:
+        system_prompt = StructuredLLMCall._compile_role_prompt(
+            role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
+        )
+        system_prompt += (
+            "\nRuntime interaction protocol: when a user decision is necessary, return kind=interaction "
+            "with interaction={question: a specific question, response_type: text or boolean}. "
+            "Runtime saves this planner checkpoint and returns the typed answer to this planner. "
+            "Use interaction_answers as additional context for the original goal; do not repeat answered questions."
+        )
+        return system_prompt
+
     async def plan(
         self,
         *,
@@ -88,20 +101,11 @@ class GraphPlanner:
                 parent_entity_type="planner_iteration", parent_entity_id=planner_iteration_trace_id,
                 items=[*agent_items, *tool_items],
             ))
-        role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
-        # Editable role instructions and the generated protocol use one compiler.
-        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(
-            SystemLLMRoleType.PLANNER.value,
-        )
-        system_prompt = self._llm._compile_role_prompt(
-            role_config, role_override if isinstance(role_override, dict) else None, schema=PlannerStep,
-        )
-        system_prompt += (
-            "\nRuntime interaction protocol: when a user decision is necessary, return kind=interaction "
-            "with interaction={question: a specific question, response_type: text or boolean}. "
-            "Runtime saves this planner checkpoint and returns the typed answer to this planner. "
-            "Use interaction_answers as additional context for the original goal; do not repeat answered questions."
-        )
+        role_config = ctx.extra.get("planner_role_config") if ctx is not None else None
+        if role_config is None:
+            role_config = await self._llm.role_service.get_role_config(SystemLLMRoleType.PLANNER)
+        role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get("planner")
+        system_prompt = self.compile_prompt(role_config, role_override)
         model_name = str((role_override.get("model") if isinstance(role_override, dict) else None)
                          or role_config.get("model") or "unknown")
         prompt_memory_budget = await prompt_payload_budget(session=self._session, model=model_name,
@@ -142,6 +146,7 @@ class GraphPlanner:
                 validation_context={"planner_execution_ledger": request.context.execution_ledger},
                 output_validator=validate_step,
                 system_prompt=system_prompt,
+                role_config=role_config,
                 chat_id=chat_id,
                 tenant_id=tenant_id,
                 user_id=user_id,

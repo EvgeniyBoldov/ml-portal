@@ -431,6 +431,9 @@ Local Pydantic validation remains authoritative in both modes. This applies to
 all shared structured role calls, including preflight, planner, context compaction
 and file synthesis. It never replaces the
 operator's planner rules. Planner start snapshots use this same assembled prompt.
+The pipeline loads the planner role configuration and resolves its limits when
+routing reaches planning. The planner and structured LLM call reuse this
+configuration throughout the run.
 The role input projection shares the deployed model's context allowance across
 the full planner payload, including its agent catalog, execution ledger, memory
 and selected read observations. Memory/read evidence may be omitted only as a

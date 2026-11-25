@@ -26,7 +26,7 @@ from app.core.exceptions import ChatRuntimeStartError
 from app.core.http.clients import LLMClientProtocol
 from app.core.logging import get_logger
 from app.core.security import UserCtx
-from app.models.chat import Chats
+from app.models.chat import ChatMessages, Chats
 from app.models.chat_turn import ChatTurn
 from app.repositories.chats_repo import AsyncChatMessagesRepository
 from app.schemas.chat_events import (
@@ -42,7 +42,9 @@ from app.schemas.runtime_continuation import RuntimeResumeAction, RuntimeResumeR
 from app.services.chat_router_event_mapper import build_resume_content, map_service_event_to_sse
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.chat_runtime_runner import (
-    CHAT_RUN_OWNER_TTL_SECONDS,
+    ChatRunConflictError,
+    claim_chat_run,
+    release_chat_run,
     ChatRuntimeCommand,
     chat_event_stream_key,
     chat_run_owner_key,
@@ -68,6 +70,116 @@ router = APIRouter()
 logger = get_logger(__name__)
 CHAT_STATUS_POLL_SECONDS = 2.0
 CHAT_STATUS_KEEPALIVE_SECONDS = 15.0
+
+
+async def _saved_run_events(
+    run_id: uuid.UUID, chat_id: uuid.UUID, user_id: uuid.UUID,
+) -> list[dict[str, Any]]:
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            select(ChatTurn, ChatMessages)
+            .outerjoin(ChatMessages, (ChatMessages.id == ChatTurn.assistant_message_id)
+                       & (ChatMessages.chat_id == ChatTurn.chat_id))
+            .where(ChatTurn.runtime_run_id == run_id, ChatTurn.chat_id == chat_id,
+                   ChatTurn.user_id == user_id)
+            .order_by(ChatTurn.started_at.desc()).limit(1)
+        )
+        row = result.first()
+        if row is None:
+            return []
+        turn, answer = row
+        status = normalize_chat_turn_status(turn.status, turn.pause_status)
+        if status == "running":
+            return []
+        events = [{"type": "state", "run_id": str(run_id), "status": status,
+                   "pause_reason": turn.pause_status, "user_message_id": turn.user_message_id}]
+        if status in WAITING_STATUSES:
+            events.append({"type": "run_paused", "run_id": str(run_id), "reason": status,
+                           "action": turn.paused_action or {}, "context": turn.paused_context or {}})
+        elif status == "cancelled":
+            events.append({"type": "cancelled", "run_id": str(run_id)})
+        elif answer is not None:
+            meta = answer.meta or {}
+            events.append({"type": "final", "message_id": answer.id, "content": answer.content.get("text"),
+                           "created_at": answer.created_at, "status": status,
+                           "sources": meta.get("rag_sources"), "attachments": meta.get("attachments"),
+                           "stop_reason": meta.get("runtime_stop_reason")})
+        else:
+            events.append({"type": "error", "code": "chat_runtime_failed",
+                           "error": "Не удалось обработать запрос. Попробуйте позже."})
+        return events
+
+
+async def _observe_run(
+    subscriber: RuntimeTailSubscriber, *, run_id: uuid.UUID, chat_id: uuid.UUID,
+    user_id: uuid.UUID, execution_id: uuid.UUID | None = None,
+    owner_task: asyncio.Task[None] | None = None,
+) -> AsyncGenerator[str, None]:
+    iterator = subscriber.listen()
+    pending = asyncio.create_task(anext(iterator))
+    terminal_seen = False
+    try:
+        while True:
+            transport_done = False
+            if pending is not None:
+                done, _ = await asyncio.wait({pending}, timeout=CHAT_STATUS_KEEPALIVE_SECONDS)
+                if done:
+                    try:
+                        event = pending.result()
+                    except Exception:
+                        logger.warning("chat_run_event_transport_closed run_id=%s", run_id, exc_info=True)
+                        pending = None
+                    else:
+                        pending = asyncio.create_task(anext(iterator))
+                        if execution_id is not None and event.get("execution_id") != str(execution_id):
+                            continue
+                        transport_done = event.get("type") == "done"
+                        payload = event.get("event") if event.get("type") == "service_event" else None
+                        if isinstance(payload, dict):
+                            try:
+                                frame = map_service_event_to_sse(payload)
+                            except (ValueError, KeyError, TypeError):
+                                logger.warning("chat_run_event_mapping_failed run_id=%s", run_id, exc_info=True)
+                                frame = None
+                            if frame:
+                                terminal_seen |= payload.get("type") in {
+                                    "final", "cached", "stop", "run_paused", "cancelled", "error",
+                                }
+                                yield frame
+                        if not transport_done:
+                            continue
+            else:
+                await asyncio.sleep(CHAT_STATUS_POLL_SECONDS)
+
+            if terminal_seen and execution_id is not None:
+                break
+            try:
+                saved = await _saved_run_events(run_id, chat_id, user_id)
+            except Exception:
+                logger.warning("chat_run_outcome_read_failed run_id=%s", run_id, exc_info=True)
+                yield ": keepalive\n\n"
+                continue
+            if terminal_seen and saved:
+                break
+            if saved:
+                for payload in saved:
+                    frame = map_service_event_to_sse(payload)
+                    if frame:
+                        yield frame
+                break
+            if owner_task is not None and (transport_done or owner_task.done()):
+                yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(
+                    error="Не удалось получить итог запроса. Обновите историю чата.",
+                    code="chat_runtime_outcome_unavailable",
+                ))
+                break
+            yield ": keepalive\n\n"
+        yield format_chat_sse_done()
+    finally:
+        if pending is not None:
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        await iterator.aclose()
 
 
 async def _publish_resume_start_failure(
@@ -346,26 +458,11 @@ async def attach_chat_run_events(
     async def _gen() -> AsyncGenerator[str, None]:
         try:
             yield state_frame or ""
-            async for event in subscriber.listen():
-                if event.get("type") == "done":
-                    if event.get("execution_id"):
-                        from app.services.chat_turn_service import ChatTurnService
-                        factory = get_session_factory()
-                        async with factory() as status_session:
-                            current = await ChatTurnService(status_session).get_by_runtime_run_id(run_uuid)
-                            if (current is not None and current.status in ACTIVE_STATUSES
-                                    and str(current.chat_id) == str(chat_ctx.chat_id)
-                                    and str(current.user_id) == str(current_user.id)):
-                                # A previous dispatch can finish after the
-                                # same root turn has already claimed resume.
-                                continue
-                    break
-                payload = event.get("event") if event.get("type") == "service_event" else None
-                if isinstance(payload, dict):
-                    sse_text = map_service_event_to_sse(payload)
-                    if sse_text:
-                        yield sse_text
-            yield format_chat_sse_done()
+            async for frame in _observe_run(
+                subscriber, run_id=run_uuid, chat_id=uuid.UUID(str(chat_ctx.chat_id)),
+                user_id=uuid.UUID(str(current_user.id)),
+            ):
+                yield frame
         finally:
             await subscriber.unsubscribe()
 
@@ -406,6 +503,18 @@ async def cancel_active_chat_run(
         except (TypeError, ValueError):
             owner = None
         if not isinstance(owner, dict) or owner.get("chat_id") != str(chat_ctx.chat_id) or owner.get("user_id") != str(current_user.id):
+            raise HTTPException(status_code=404, detail="Active run not found")
+        # A startup reservation is usable only before a turn exists.
+        # An existing run is authorized by its persisted row above.
+        persisted_turn = await session.scalar(
+            select(ChatTurn).where(ChatTurn.runtime_run_id == run_uuid)
+            .order_by(ChatTurn.started_at.desc()).limit(1)
+        )
+        if persisted_turn is not None and (
+            str(persisted_turn.chat_id) != str(chat_ctx.chat_id)
+            or str(persisted_turn.user_id) != str(current_user.id)
+            or persisted_turn.status not in ACTIVE_STATUSES
+        ):
             raise HTTPException(status_code=404, detail="Active run not found")
     try:
         await RuntimeRunControlBus().publish_cancel(str(run_uuid), persist_marker=True)
@@ -517,50 +626,52 @@ async def send_message_stream(
         artifact_ids=artifact_ids,
         idempotency_key=idempotency_key,
     )
-    # Register an ACL-bound owner before StreamingResponse starts iterating.
-    # This makes Stop usable immediately after the client receives its run id.
-    await redis.set(
-        chat_run_owner_key(str(run_uuid)),
-        json.dumps({"chat_id": str(chat_ctx.chat_id), "user_id": str(chat_ctx.user_id)}),
-        ex=CHAT_RUN_OWNER_TTL_SECONDS,
+    await session.close()
+
+    try:
+        await claim_chat_run(redis, command)
+    except ChatRunConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    subscriber = RuntimeTailSubscriber(
+        stream_key=chat_event_stream_key(str(run_uuid)), redis_client=redis,
     )
+    starting = False
+    try:
+        existing = await session.scalar(
+            select(ChatTurn.id).where(ChatTurn.runtime_run_id == run_uuid).limit(1)
+        )
+        if existing is not None:
+            raise HTTPException(status_code=409, detail="Run ID is already in use")
+        await session.close()
+        await subscriber.subscribe()
+        starting = True
+        task = await chat_runtime_runner.start(
+            command=command, llm_client=llm, redis_client=redis,
+            session_factory=get_session_factory(), already_claimed=True,
+        )
+    except BaseException:
+        import anyio
+        with anyio.CancelScope(shield=True):
+            try:
+                await subscriber.unsubscribe()
+            except Exception:
+                logger.warning("chat_run_start_subscriber_cleanup_failed run_id=%s", run_uuid, exc_info=True)
+            finally:
+                if not starting or not chat_runtime_runner.is_running(run_uuid):
+                    await release_chat_run(redis, command)
+        raise
 
     async def _gen() -> AsyncGenerator[str, None]:
-        subscriber = RuntimeTailSubscriber(
-            stream_key=chat_event_stream_key(str(run_uuid)), redis_client=redis,
-        )
         try:
-            await subscriber.subscribe()
-            await chat_runtime_runner.start(
-                command=command,
-                llm_client=llm,
-                redis_client=redis,
-                session_factory=get_session_factory(),
-            )
-            # Release the request dependency's DB connection while the SSE
-            # observer remains open. Execution owns a separate session.
-            await session.close()
             yield map_service_event_to_sse({
                 "type": "run_started", "run_id": str(run_uuid), "status": "running",
             }) or ""
-            async for event in subscriber.listen():
-                if event.get("type") == "done":
-                    break
-                payload = event.get("event") if event.get("type") == "service_event" else None
-                if not isinstance(payload, dict):
-                    continue
-                try:
-                    sse_text = map_service_event_to_sse(payload)
-                except Exception as exc:
-                    logger.warning("Failed to map detached chat event to SSE: %s", exc)
-                    sse_text = None
-                if sse_text:
-                    yield sse_text
-            yield format_chat_sse_done()
-        except Exception as e:
-            logger.error(f"Error in chat stream: {e}", exc_info=True)
-            yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))
-            yield format_chat_sse_done()
+            async for frame in _observe_run(
+                subscriber, run_id=run_uuid, chat_id=command.chat_id, user_id=command.user_id,
+                execution_id=command.execution_id, owner_task=task,
+            ):
+                yield frame
         finally:
             await subscriber.unsubscribe()
 
@@ -725,6 +836,7 @@ async def resume_run(
     if claimed_turn is None:
         raise HTTPException(status_code=409, detail="Paused run is no longer available")
     await session.commit()
+    await session.close()
     resume_content = build_resume_content(
         action=body.action.value,
         user_input=normalized_input,
@@ -754,7 +866,7 @@ async def resume_run(
     )
     try:
         await resume_subscriber.subscribe()
-        await chat_runtime_runner.start(
+        task = await chat_runtime_runner.start(
             command=command,
             llm_client=resume_llm,
             redis_client=resume_redis,
@@ -810,24 +922,11 @@ async def resume_run(
             yield map_service_event_to_sse({
                 "type": "run_started", "run_id": str(run_uuid), "status": "running",
             }) or ""
-            async for event in resume_subscriber.listen():
-                # A root run is reused across pauses. Events queued while the
-                # previous owner finishes must not terminate this continuation.
-                if event.get("execution_id") != str(command.execution_id):
-                    continue
-                if event.get("type") == "done":
-                    break
-                payload = event.get("event") if event.get("type") == "service_event" else None
-                if not isinstance(payload, dict):
-                    continue
-                try:
-                    sse_text = map_service_event_to_sse(payload)
-                except Exception as exc:
-                    logger.warning("Failed to map resume event to SSE: %s", exc)
-                    sse_text = None
-                if sse_text:
-                    yield sse_text
-            yield format_chat_sse_done()
+            async for frame in _observe_run(
+                resume_subscriber, run_id=run_uuid, chat_id=command.chat_id, user_id=command.user_id,
+                execution_id=command.execution_id, owner_task=task,
+            ):
+                yield frame
         except Exception as e:
             logger.error(f"Error in resume stream: {e}", exc_info=True)
             yield format_chat_sse(ChatSSEEventType.ERROR, ErrorPayload(error="Не удалось обработать запрос. Попробуйте позже.", code="chat_stream_failed"))

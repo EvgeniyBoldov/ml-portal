@@ -116,6 +116,7 @@ class StructuredLLMCall:
         use_default_model: bool = False,
         validation_context: Optional[Dict[str, Any]] = None,
         output_validator: Optional[Callable[[T], None]] = None,
+        role_config: Optional[Dict[str, Any]] = None,
     ) -> StructuredCallResult[T]:
         """Execute the role with structured JSON payload, validate output against `schema`.
 
@@ -129,7 +130,8 @@ class StructuredLLMCall:
             fallback_factory: Called with raw response if validation fails;
                   if it returns a valid instance, we use it instead of raising.
         """
-        role_config = await self.role_service.get_role_config(role)
+        if role_config is None:
+            role_config = await self.role_service.get_role_config(role)
 
         role_key = str(role.value).strip().lower()
         role_override = ((sandbox_overrides or {}).get("role_overrides") or {}).get(role_key)

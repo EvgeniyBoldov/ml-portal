@@ -158,9 +158,9 @@ class GraphPlanningStage:
         planner_entity_id = str(orchestrator_id or run_id)
         budget_registry = ctx.extra.get("runtime_budget_registry")
         budget_resolver = ctx.extra.get("runtime_budget_resolver")
-        planner_limits = None
+        planner_limits = ctx.extra.get("planner_phase_limits")
         if budget_registry is not None:
-            if budget_resolver is not None:
+            if planner_limits is None and budget_resolver is not None:
                 planner_limits = await budget_resolver.resolve_orchestrator(
                     "planner", request.sandbox_overrides,
                 )

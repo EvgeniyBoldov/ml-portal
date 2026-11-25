@@ -26,6 +26,8 @@ from app.services.runtime_tail_event_bus import (
 
 logger = get_logger(__name__)
 CHAT_RUN_OWNER_TTL_SECONDS = 2 * 60 * 60
+CHAT_EVENT_REDIS_TIMEOUT_SECONDS = 2.0
+CHAT_RESUME_HANDOFF_TIMEOUT_SECONDS = 2.0
 
 
 def chat_event_stream_key(run_id: str) -> str:
@@ -42,7 +44,8 @@ def chat_stage_snapshot_key(run_id: str) -> str:
 
 async def read_chat_stage_snapshot(redis_client: Any, run_id: str) -> dict[str, Any] | None:
     try:
-        raw = await redis_client.get(chat_stage_snapshot_key(run_id))
+        async with asyncio.timeout(CHAT_EVENT_REDIS_TIMEOUT_SECONDS):
+            raw = await redis_client.get(chat_stage_snapshot_key(run_id))
     except Exception:
         logger.warning("chat_runtime_stage_snapshot_read_failed run_id=%s", run_id, exc_info=True)
         return None
@@ -71,16 +74,50 @@ class ChatRuntimeCommand:
     execution_id: uuid.UUID = field(default_factory=uuid.uuid4)
 
 
+class ChatRunConflictError(Exception):
+    """The run id is already reserved by an execution."""
+
+
+def _owner_record(command: ChatRuntimeCommand) -> str:
+    return json.dumps({
+        "chat_id": str(command.chat_id),
+        "user_id": str(command.user_id),
+        "execution_id": str(command.execution_id),
+    })
+
+
+async def claim_chat_run(redis_client: Any, command: ChatRuntimeCommand) -> None:
+    if not await redis_client.set(
+        chat_run_owner_key(str(command.run_id)), _owner_record(command),
+        ex=CHAT_RUN_OWNER_TTL_SECONDS, nx=True,
+    ):
+        raise ChatRunConflictError("Run ID is already in use")
+
+
+async def release_chat_run(redis_client: Any, command: ChatRuntimeCommand) -> None:
+    try:
+        await redis_client.eval(
+            """
+            if redis.call('get', KEYS[1]) == ARGV[1] then
+                return redis.call('del', KEYS[1], KEYS[2])
+            end
+            return 0
+            """,
+            2, chat_run_owner_key(str(command.run_id)),
+            chat_stage_snapshot_key(str(command.run_id)), _owner_record(command),
+        )
+    except Exception:
+        logger.warning("chat_runtime_owner_release_failed run_id=%s", command.run_id, exc_info=True)
+
+
 class ChatRuntimeRunner:
     """Own a chat turn task and publish its public events to Redis."""
 
     def __init__(self) -> None:
         self._tasks: dict[uuid.UUID, asyncio.Task[None]] = {}
-        self._lock = asyncio.Lock()
-        self._event_bus = RuntimeTailEventBus()
+        self._event_bus: RuntimeTailEventBus | None = None
 
     def is_running(self, run_id: uuid.UUID) -> bool:
-        """Return whether this process currently owns a live execution task."""
         task = self._tasks.get(run_id)
         return task is not None and not task.done()
 
@@ -91,86 +128,75 @@ class ChatRuntimeRunner:
         llm_client: LLMClientProtocol,
         redis_client: Any,
         session_factory: Any,
+        already_claimed: bool = False,
     ) -> asyncio.Task[None]:
-        previous_owner: asyncio.Task[None] | None = None
-        ready: asyncio.Event | None = None
-        task: asyncio.Task[None] | None = None
-        async with self._lock:
+        existing = self._tasks.get(command.run_id)
+        while existing is not None and not existing.done():
+            if command.resumed_turn_id is None:
+                raise ChatRunConflictError("Run ID is already in use")
+            await asyncio.gather(asyncio.shield(existing), return_exceptions=True)
             existing = self._tasks.get(command.run_id)
-            if existing is not None and not existing.done():
-                if command.resumed_turn_id is None:
-                    return existing
-                # The previous owner may still be publishing a terminal pause
-                # and clearing this run's Redis owner key. A resume must not
-                # borrow that task or install a new owner before its cleanup.
-                previous_owner = existing
-            else:
-                # Subscribe before starting execution so a Stop request cannot
-                # be lost between returning the run id and beginning the pipeline.
-                control = RuntimeRunControlSubscriber(
-                    run_id=str(command.run_id), persist_cancel_marker=True,
-                )
-                try:
-                    await control.subscribe()
-                    await redis_client.set(
-                        chat_run_owner_key(str(command.run_id)),
-                        json.dumps({
-                            "chat_id": str(command.chat_id),
-                            "user_id": str(command.user_id),
-                        }),
-                        ex=CHAT_RUN_OWNER_TTL_SECONDS,
-                    )
-                except BaseException:
-                    import anyio
-                    with anyio.CancelScope(shield=True):
-                        try:
-                            await control.unsubscribe()
-                        except Exception:
-                            logger.warning(
-                                "chat_runtime_control_setup_cleanup_failed run_id=%s",
-                                command.run_id,
-                                exc_info=True,
-                            )
-                    raise
-                ready = asyncio.Event()
-                task = asyncio.create_task(
-                    self._run(
-                        command=command,
-                        llm_client=llm_client,
-                        redis_client=redis_client,
-                        session_factory=session_factory,
-                        control=control,
-                        ready=ready,
-                    ),
-                    name=f"chat-runtime:{command.run_id}",
-                )
-                self._tasks[command.run_id] = task
 
-                def clear_finished(finished: asyncio.Task[None]) -> None:
-                    if self._tasks.get(command.run_id) is finished:
-                        self._tasks.pop(command.run_id, None)
+        ready = asyncio.Event()
 
-                task.add_done_callback(clear_finished)
-        if previous_owner is not None:
-            await asyncio.gather(asyncio.shield(previous_owner), return_exceptions=True)
-            # Recheck under the lock: another owner may have won the handoff
-            # while this resume waited outside the global lock.
-            return await self.start(
-                command=command,
-                llm_client=llm_client,
-                redis_client=redis_client,
-                session_factory=session_factory,
+        async def run_owned() -> None:
+            if not already_claimed:
+                deadline = asyncio.get_running_loop().time() + CHAT_RESUME_HANDOFF_TIMEOUT_SECONDS
+                while True:
+                    try:
+                        await claim_chat_run(redis_client, command)
+                        break
+                    except ChatRunConflictError:
+                        if command.resumed_turn_id is None or asyncio.get_running_loop().time() >= deadline:
+                            raise
+                        raw = await redis_client.get(chat_run_owner_key(str(command.run_id)))
+                        if raw:
+                            owner = json.loads(raw)
+                            if (not isinstance(owner, dict) or owner.get("chat_id") != str(command.chat_id)
+                                    or owner.get("user_id") != str(command.user_id)):
+                                raise
+                        await asyncio.sleep(0.05)
+            control = RuntimeRunControlSubscriber(
+                run_id=str(command.run_id), persist_cancel_marker=True,
             )
-        assert ready is not None and task is not None
+            try:
+                await control.subscribe()
+            except BaseException:
+                import anyio
+                with anyio.CancelScope(shield=True):
+                    try:
+                        await control.unsubscribe()
+                    except Exception:
+                        logger.warning("chat_runtime_control_setup_cleanup_failed run_id=%s",
+                                       command.run_id, exc_info=True)
+                    await release_chat_run(redis_client, command)
+                raise
+            if already_claimed:
+                ready.set()
+            await self._run(
+                command=command, llm_client=llm_client, redis_client=redis_client,
+                session_factory=session_factory, control=control, ready=ready,
+            )
+
+        # The local registry check and insertion contain no await.
+        task = asyncio.create_task(run_owned(), name=f"chat-runtime:{command.run_id}")
+        self._tasks[command.run_id] = task
+
+        def clear_finished(finished: asyncio.Task[None]) -> None:
+            if self._tasks.get(command.run_id) is finished:
+                self._tasks.pop(command.run_id, None)
+            if not finished.cancelled():
+                finished.exception()
+
+        task.add_done_callback(clear_finished)
         ready_wait = asyncio.create_task(ready.wait())
-        await asyncio.wait({task, ready_wait}, return_when=asyncio.FIRST_COMPLETED)
-        if not ready_wait.done():
+        try:
+            await asyncio.wait({task, ready_wait}, return_when=asyncio.FIRST_COMPLETED)
+            if task.done():
+                await task
+        finally:
             ready_wait.cancel()
             await asyncio.gather(ready_wait, return_exceptions=True)
-        else:
-            await ready_wait
-        if task.done():
-            await task
         return task
 
     async def _run(
@@ -185,8 +211,17 @@ class ChatRuntimeRunner:
     ) -> None:
         terminal_result_produced = False
 
+        bus = self._event_bus or RuntimeTailEventBus(redis_client=redis_client)
+
         async def publish(payload: dict[str, Any]) -> None:
-            await self._publish(command.run_id, {**payload, "execution_id": str(command.execution_id)})
+            try:
+                async with asyncio.timeout(CHAT_EVENT_REDIS_TIMEOUT_SECONDS):
+                    await bus.publish(
+                        stream_key=chat_event_stream_key(str(command.run_id)),
+                        payload={**payload, "execution_id": str(command.execution_id)},
+                    )
+            except Exception:
+                logger.warning("chat_runtime_event_publish_failed run_id=%s", command.run_id, exc_info=True)
 
         async def execute() -> None:
             nonlocal terminal_result_produced
@@ -238,11 +273,12 @@ class ChatRuntimeRunner:
                         if isinstance(activity, dict):
                             try:
                                 activity.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
-                                await redis_client.set(
-                                    chat_stage_snapshot_key(str(command.run_id)),
-                                    json.dumps(activity, ensure_ascii=False),
-                                    ex=CHAT_RUN_OWNER_TTL_SECONDS,
-                                )
+                                async with asyncio.timeout(CHAT_EVENT_REDIS_TIMEOUT_SECONDS):
+                                    await redis_client.set(
+                                        chat_stage_snapshot_key(str(command.run_id)),
+                                        json.dumps(activity, ensure_ascii=False),
+                                        ex=CHAT_RUN_OWNER_TTL_SECONDS,
+                                    )
                             except Exception:
                                 logger.warning("chat_runtime_stage_snapshot_failed run_id=%s", command.run_id, exc_info=True)
                     if event.get("type") == "state":
@@ -250,19 +286,7 @@ class ChatRuntimeRunner:
                         activity = await read_chat_stage_snapshot(redis_client, str(command.run_id))
                         if activity:
                             event.setdefault("stage", activity.get("stage"))
-                    try:
-                        await self._event_bus.publish(
-                            stream_key=chat_event_stream_key(str(command.run_id)),
-                            payload={"type": "service_event", "event": event,
-                                     "execution_id": str(command.execution_id)},
-                        )
-                    except Exception:
-                        if not terminal_result_produced:
-                            raise
-                        # Persistence already owns the terminal outcome. A
-                        # transport failure must not turn it into a failed run.
-                        logger.warning("chat_runtime_terminal_event_publish_failed run_id=%s",
-                                       command.run_id, exc_info=True)
+                    await publish({"type": "service_event", "event": event})
 
         execution = asyncio.create_task(execute(), name=f"chat-turn:{command.run_id}")
         cancel_wait = asyncio.create_task(control.wait_for_cancel())
@@ -366,20 +390,8 @@ class ChatRuntimeRunner:
                     "type": "service_event",
                     "event": {"type": "cancelled", "run_id": str(command.run_id)},
                 })
+            await release_chat_run(redis_client, command)
             await publish({"type": "done"})
-            try:
-                await redis_client.delete(chat_run_owner_key(str(command.run_id)))
-                await redis_client.delete(chat_stage_snapshot_key(str(command.run_id)))
-            except Exception:
-                logger.warning("chat_runtime_owner_key_delete_failed run_id=%s", command.run_id, exc_info=True)
-
-    async def _publish(self, run_id: uuid.UUID, payload: dict[str, Any]) -> None:
-        try:
-            await self._event_bus.publish(
-                stream_key=chat_event_stream_key(str(run_id)), payload=payload,
-            )
-        except Exception:
-            logger.warning("chat_runtime_event_publish_failed run_id=%s", run_id, exc_info=True)
 
     @staticmethod
     async def _fail_turn(
