@@ -348,10 +348,10 @@ separate projection that preserves native assistant/tool call pairing and direct
 or otherwise unrecoverable evidence. Older recoverable dataset responses may be
 represented by compact receipts. The authorized, task-selected result inventory
 is refreshed before decisions, so new results and revisions are visible.
-Each outbound agent decision uses one projected request snapshot: that same
-message list and tool/schema options are sent to the provider, recorded in
-`llm_request` and `llm_turn.request_snapshot`, and used for fallback
-input-token estimation.
+Each outbound agent decision uses one projected request snapshot. The same
+message list and provider-facing tool and response schemas are sent to the
+provider, recorded in `llm_request`, and used for fallback input-token
+estimation. [LLM request snapshots](RUNTIME_TRACE_SPEC.md#llm-request-snapshots)
 The full journal transcript remains available for resume and audit, but is not
 reported as the content sent to the model.
 
@@ -395,7 +395,7 @@ presentation pass can reuse space left by a small sibling. The final assembled r
 response format, is checked again with `inspect_context`; if an upgrade does not
 fit, runtime falls back to minimum receipts, and if even those do not fit it
 returns the typed context-window error. The final `llm_request` snapshot is
-authoritative for the exact presentation the model received; the linked
+authoritative for the exact presentation the model received. The linked
 `tool_result_batch_projected` status reports final per-call inline coverage,
 while `tool_result` remains the execution result/event. Direct results are
 normally delivered inline. Template search and list project candidate identifiers

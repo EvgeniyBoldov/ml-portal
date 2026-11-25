@@ -11,6 +11,7 @@ from pydantic import BaseModel, JsonValue, Field, GetJsonSchemaHandler, field_va
 from pydantic.json_schema import JsonSchemaValue
 from pydantic_core import CoreSchema
 
+from app.adapters.impl.llm_schema import project_provider_schema
 from app.runtime.task_value_normalization import is_absent
 from app.runtime.interaction import InteractionQuestion
 from app.agents.runtime.result_context import ResultObservation
@@ -737,7 +738,7 @@ def task_completion_json_schema(request: TaskRequest, *, shadow: bool = False, p
         schema["properties"].pop(key, None)
     schema["$defs"] = {key: val for key, val in schema.get("$defs", {}).items()
                        if key in {"AgentExecutionCompletion", "DiscoveredNeed", "InteractionQuestion", "JsonValue"}}
-    return _terminal_provider_schema(schema) if provider_compatible else schema
+    return _terminal_provider_schema(project_provider_schema(schema)) if provider_compatible else schema
 
 
 def _terminal_provider_schema(schema: Dict[str, Any] | bool) -> Dict[str, Any] | bool:

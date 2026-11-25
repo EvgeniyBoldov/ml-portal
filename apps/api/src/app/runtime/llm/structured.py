@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.http.clients import LLMClientProtocol
 from app.adapters.interfaces.llm import LLMCallOptions, LLMErrorCode, LLMProviderError
 from app.adapters.impl.llm_context import estimate_request_tokens
+from app.adapters.impl.llm_schema import project_provider_schema
 from app.core.logging import get_logger
 from app.core.config import get_settings
 from app.models.system_llm_role import SystemLLMRoleType
@@ -175,14 +176,15 @@ class StructuredLLMCall:
 
         # JSON schema enforcement: constrain LLM output to the Pydantic schema.
         # Works with OpenAI, Groq, and other providers supporting response_format.
+        response_schema: Dict[str, Any] = {}
         if schema is not None:
             try:
-                json_schema = self._compact_response_schema(schema.model_json_schema())
+                response_schema = self._compact_response_schema(schema.model_json_schema())
                 params["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {
                         "name": schema.__name__,
-                        "schema": json_schema,
+                        "schema": project_provider_schema(response_schema),
                         "strict": False,  # strict mode too restrictive for nested dicts
                     },
                 }
@@ -456,7 +458,7 @@ class StructuredLLMCall:
                         LLMErrorCode.STRUCTURED_OUTPUT_UNSUPPORTED,
                     }
                     and attempt < max_retries
-                    and self._fallback_to_json_object(params, messages)
+                    and self._fallback_to_json_object(params, messages, response_schema)
                 )
                 fail_fast = (
                     (isinstance(exc, LLMProviderError) and not exc.retryable)
@@ -686,7 +688,7 @@ class StructuredLLMCall:
 
     @staticmethod
     def _fallback_to_json_object(
-        params: Dict[str, Any], messages: list[Dict[str, str]],
+        params: Dict[str, Any], messages: list[Dict[str, str]], schema: Dict[str, Any],
     ) -> bool:
         """Move the contract to the prompt only when native schema mode fails.
 
@@ -696,7 +698,6 @@ class StructuredLLMCall:
         """
         response_format = params.get("response_format")
         if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
-            schema = response_format["json_schema"]["schema"]
             params["response_format"] = {"type": "json_object"}
             messages[0] = {
                 **messages[0],

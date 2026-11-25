@@ -66,6 +66,11 @@ class ConfirmationRequiredError(RuntimeError):
 
 class OperationExecutionFacade:
     """Execute tool calls with validation, timeouts, and source extraction."""
+
+    @staticmethod
+    def has_full_argument_validation() -> bool:
+        return _JSONSCHEMA_AVAILABLE and _jsonschema is not None
+
     def __init__(
         self,
         confirmation_service: Optional[ConfirmationService] = None,
@@ -603,7 +608,7 @@ class OperationExecutionFacade:
         # Coerce types before validation to handle LLM passing strings instead of integers
         coerced_args = OperationExecutionFacade._coerce_args(arguments, schema)
 
-        if _JSONSCHEMA_AVAILABLE and _jsonschema is not None:
+        if OperationExecutionFacade.has_full_argument_validation():
             return OperationExecutionFacade._validate_args_jsonschema(coerced_args, schema)
         return OperationExecutionFacade._validate_args_builtin(coerced_args, schema)
 

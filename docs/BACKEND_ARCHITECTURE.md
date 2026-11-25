@@ -38,9 +38,14 @@ Pydantic models:
 - **Format lock**: All built-in roles have `format_locked: true` — contracts are read-only in UI
 - **Request assembly**: Shared structured calls send the compact generated schema
   once in `response_format.json_schema`; system prompts retain behavior rules and
-  examples without a generated schema copy. On fallback to `json_object`, the
-  same schema moves into the system prompt. Local Pydantic validation runs in
-  either mode. If the provider returns HTTP 400 with `failed to parse grammar`
+  examples without a generated schema copy. Shared structured responses and
+  agent completions opt in to a grammar-compatible schema. Native agent tools
+  opt in when full local JSON Schema argument validation is available. Runtime
+  omits `maxLength` values of 2000 or more where the omission only widens the
+  provider's schema. The projection runs before request snapshots and context
+  estimation. The generated contract supplies the schema for `json_object`
+  fallback and governs local validation.
+  If the provider returns HTTP 400 with `failed to parse grammar`
   for a `json_schema` request, the OpenAI-compatible adapter classifies it as a
   structured output rejection. The shared call then tries `json_object` once
   when retry budget is available. File synthesis follows the same contract transport.

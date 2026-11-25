@@ -23,6 +23,7 @@ from urllib.parse import quote, urldefrag, urljoin
 
 from referencing.jsonschema import DRAFT202012
 
+from app.adapters.impl.llm_schema import project_provider_schema
 from app.agents.context import ToolCall
 from app.agents.json_utils import extract_balanced_json
 from app.agents.runtime.prompt_contract import (
@@ -268,7 +269,9 @@ def _isolate_binding_schema(schema: dict[str, Any], resource_id: str) -> None:
                 node[key] = resolved_ref
 
 
-def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str, Any]]:
+def build_tools_payload(
+    operations: "List[ResolvedOperation]", *, project_for_provider: bool = False,
+) -> List[Dict[str, Any]]:
     """Publish one canonical function per operation in either calling mode."""
     groups: dict[str, list[ResolvedOperation]] = defaultdict(list)
     for op in operations:
@@ -322,7 +325,8 @@ def build_tools_payload(operations: "List[ResolvedOperation]") -> List[Dict[str,
                     "anyOf": [{"$ref": f"#/$defs/{key}"} for key in definitions],
                 }
         tools.append({"type": "function", "function": {
-            "name": name, "description": description, "parameters": parameters,
+            "name": name, "description": description,
+            "parameters": project_provider_schema(parameters) if project_for_provider else parameters,
         }})
     return tools
 

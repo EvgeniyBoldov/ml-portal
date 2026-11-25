@@ -28,11 +28,13 @@ sync, system capability resolution and effective permissions.
   document graph. Preparation reuses an existing index only after checking its
   source version, expiry, encoder/model identity and actual document chunk count.
 * `file.data.search(artifact_id, query, backend=auto|vector|longmemory, limit=5)`
-  searches a prepared index for that exact document. `auto` tries a current
-  vector index first, then a current LongMemory index. It does not build an index,
-  extract missing text or fall back to a shared corpus. Results contain exact
-  canonical-text character spans, chunk IDs, scores and representation identity.
-  Source metadata carries these references through task results and synthesis.
+  searches a prepared index for that exact document. `query` must contain 1 to
+  4000 characters after trimming leading and trailing whitespace. `auto` tries
+  a current vector index first, then a current LongMemory index. It does not
+  build an index, extract missing text or fall back to a shared corpus. Results
+  contain exact canonical-text character spans, chunk IDs, scores and
+  representation identity. Source metadata carries these references through
+  task results and synthesis.
   Responses are bounded explicitly with `response_truncated`; truncating the
   first oversized hit is marked on that hit as well.
 

@@ -80,7 +80,7 @@ from app.agents.protocol import (
     parse_native_tool_calls,
 )
 from app.agents.operation_publication import PUBLIC_RETRIEVAL_OPERATIONS
-from app.agents.runtime.tools import ConfirmationRequiredError
+from app.agents.runtime.tools import ConfirmationRequiredError, OperationExecutionFacade
 from app.agents.runtime.model_context import BatchContextBudget
 from app.agents.runtime.base import BaseRuntime
 from app.agents.runtime.published_capabilities import (
@@ -852,7 +852,9 @@ class AgentToolRuntime(BaseRuntime):
                 model_messages = project_model_messages([
                     item for item in llm_messages if item is not task_memory_message or item["content"]
                 ])
-                tools_payload = build_tools_payload(available_operations) if native_tool_calling and available_operations else None
+                tools_payload = build_tools_payload(
+                    available_operations, project_for_provider=OperationExecutionFacade.has_full_argument_validation(),
+                ) if native_tool_calling and available_operations else None
                 outbound_snapshot = outbound_request_snapshot(
                     model=gen.model, messages=model_messages, tools=tools_payload,
                     tool_choice=("required" if loop_state.force_tool_choice else "auto") if tools_payload else None,
@@ -2573,7 +2575,6 @@ class AgentToolRuntime(BaseRuntime):
         arguments: Dict[str, Any],
         available_operations: List[Any],
     ) -> bool:
-        from app.agents.runtime.tools import OperationExecutionFacade
         operation, _ = OperationExecutionFacade._find_operation(
             operation_slug,
             arguments if isinstance(arguments, dict) else {},

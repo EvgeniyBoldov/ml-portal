@@ -59,7 +59,7 @@ async def test_correction_can_repair_prose_then_wrong_slot_without_losing_native
     runtime._create_run_session = Mock(return_value=session)
     monkeypatch.setattr(agent_module, "serialize_published_operations", lambda operations: [])
     monkeypatch.setattr(agent_module, "serialize_published_collections", lambda *args: [])
-    monkeypatch.setattr(agent_module, "build_tools_payload", lambda operations: [{"type": "function"}])
+    monkeypatch.setattr(agent_module, "build_tools_payload", lambda operations, **kwargs: [{"type": "function"}])
     monkeypatch.setattr(agent_module, "parse_native_tool_calls", lambda response: None)
     # Keep workspace tools in tool-enabled cases; the other cases exercise
     # the LLM-only branch rather than implicitly gaining workspace tools.

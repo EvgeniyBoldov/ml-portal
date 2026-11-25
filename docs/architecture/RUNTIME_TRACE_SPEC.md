@@ -141,6 +141,14 @@ or planner iteration. Their `tool_call` is admitted before execution and their
 `memory_search_finished` with the same call ID, actor and terminal status;
 query text and search results are excluded from these logs.
 
+### LLM request snapshots
+
+`llm_request` records the messages and provider-facing schemas. Agent requests
+record native schemas in `tools[].function.parameters` or
+`response_format.json_schema.schema`. Structured roles record response options
+under `request_params` for each attempt. Runtime applies grammar compatibility
+before recording these fields. For a `json_object` fallback attempt, the system
+message carries the compact contract with its original length bounds. [Backend Architecture](../BACKEND_ARCHITECTURE.md#system-llm-role-contracts)
 
 Each user-visible LLM request has one stable `llm_call_id` from its initial
 `llm_request` through the terminal response with an action or answer. Retries
