@@ -20,8 +20,6 @@ class Tenants(Base, LifecycleMixin):
     chunk_profile: Mapped[str | None] = mapped_column(String(50), nullable=True, comment="Default chunking profile (by_tokens, by_paragraphs, etc.)")
     chunk_size: Mapped[int | None] = mapped_column(nullable=True, comment="Default chunk size in tokens")
     chunk_overlap: Mapped[int | None] = mapped_column(nullable=True, comment="Default chunk overlap in tokens")
-    ocr: Mapped[bool] = mapped_column(Boolean, default=False)
-    layout: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

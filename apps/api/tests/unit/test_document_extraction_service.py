@@ -106,27 +106,6 @@ async def test_local_extractor_is_used_when_docling_is_unavailable(monkeypatch: 
 
 
 @pytest.mark.asyncio
-async def test_layout_extractor_is_preserved_as_pdf_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def docling(_request: ExtractionRequest, _filename: str) -> ExtractResult:
-        raise ConnectionError("Docling unavailable")
-
-    class LayoutFallback:
-        kind = "pdf(layout-pdfminer)"
-
-        def extract(self, payload: bytes, filename: str) -> ExtractResult:
-            assert payload == b"%PDF-test"
-            assert filename == "sample.pdf"
-            return ExtractResult(text="layout fallback", kind=self.kind)
-
-    monkeypatch.setattr(DocumentExtractionService, "_extract_docling", staticmethod(docling))
-    result = await DocumentExtractionService().extract(
-        ExtractionRequest(payload=b"%PDF-test", filename="sample.pdf", fallback_extractor=LayoutFallback())
-    )
-    assert result.text == "layout fallback"
-    assert result.parser == "pdf(layout-pdfminer)"
-
-
-@pytest.mark.asyncio
 async def test_unsupported_format_does_not_decode_binary_as_text_after_docling_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

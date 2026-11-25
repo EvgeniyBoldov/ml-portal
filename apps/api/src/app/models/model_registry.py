@@ -2,7 +2,7 @@
 
 New architecture:
 - Only LLM and Embedding models in database (dynamic, changeable)
-- OCR/ASR/Reranker are local services (configured via settings.py)
+- ASR/Reranker are local services (configured via settings.py)
 - External providers (OpenAI, Groq) for MVP
 - Easy swap to local providers later
 """
@@ -24,10 +24,9 @@ class ModelType(str, enum.Enum):
     LLM_CHAT = "llm_chat"
     EMBEDDING = "embedding"
     RERANKER = "reranker"
-    OCR = "ocr"
     ASR = "asr"
     TTS = "tts"
-    # Note: ocr, asr, reranker, vision are NOW in database (immutable)
+    # Note: asr, reranker, vision are NOW in database (immutable)
 
 
 class ModelStatus(str, enum.Enum):

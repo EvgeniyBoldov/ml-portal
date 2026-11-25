@@ -23,8 +23,6 @@ def _tenant(**overrides):
         "embed_models": [],
         "rerank_model": None,
         "extra_embed_model": None,
-        "ocr": False,
-        "layout": False,
         "lifecycle_status": "active",
         "deprecated_at": None,
         "retention_days": 14,

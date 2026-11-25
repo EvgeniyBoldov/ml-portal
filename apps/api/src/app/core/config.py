@@ -135,10 +135,6 @@ class Settings(BaseSettings):
     RERANK_MODEL: str = Field(default="cross-encoder/ms-marco-MiniLM-L-6-v2", description="Reranker model name")
     RERANK_ENABLED: bool = Field(default=True, description="Enable reranker service")
     
-    # OCR (local service, future)
-    OCR_SERVICE_URL: str = Field(default="http://ocr:8003", description="OCR service URL")
-    OCR_ENABLED: bool = Field(default=False, description="Enable OCR service")
-    
     # ASR / Speech-to-Text (local service, future)
     ASR_SERVICE_URL: str = Field(default="http://whisper:8004", description="ASR service URL")
     ASR_ENABLED: bool = Field(default=False, description="Enable ASR service")

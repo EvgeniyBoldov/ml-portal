@@ -16,7 +16,6 @@ class ModelTypeEnum(str, Enum):
     LLM_CHAT = "llm_chat"
     EMBEDDING = "embedding"
     RERANKER = "reranker"
-    OCR = "ocr"
     ASR = "asr"
     TTS = "tts"
 

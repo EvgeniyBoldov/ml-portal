@@ -249,8 +249,6 @@ export interface Tenant {
   extra_embed_model?: string | null;
   embed_models?: string[];
   rerank_model?: string | null;
-  ocr?: boolean;
-  layout?: boolean;
   lifecycle_status?: string;
   deprecated_at?: string | null;
   retention_days?: number;
@@ -273,8 +271,6 @@ export type TenantCreate = {
   description?: string | null;
   is_active?: boolean;
   extra_embed_model?: string | null;
-  ocr?: boolean;
-  layout?: boolean;
 };
 
 export type TenantUpdate = Partial<TenantCreate> & { is_default?: boolean; tenant_admin_user_ids?: string[] };
@@ -963,8 +959,6 @@ export const adminApi = {
       vector_dim?: number;
     }>;
     rerank_model?: { model: string; version: string };
-    ocr: boolean;
-    layout: boolean;
   }> {
     return apiRequest(`/admin/tenants/${id}/models/resolve`);
   },

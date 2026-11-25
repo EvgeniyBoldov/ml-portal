@@ -16,9 +16,9 @@
 │ is_active   │       │ role        │
 │ lifecycle_  │       │ lifecycle_  │
 │ status      │       │ status      │
-│ ocr         │       │ tenant_id   │
-│ layout      │       │ is_active   │
-└─────────────┘       └─────────────┘
+│             │       │ tenant_id   │
+└─────────────┘       │ is_active   │
+                      └─────────────┘
 ```
 
 Lifecycle статусы используются для soft/hard delete процесса (`active` / `deprecated`) и фоновой GC очистки по retention TTL. Для агентов hard delete удаляет связанную политику RBAC и запись агента, включая записи в состоянии `deprecated`.

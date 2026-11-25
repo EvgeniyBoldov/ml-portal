@@ -3,59 +3,21 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from celery import Task
-from sqlalchemy import select
 
 from app.celery_app import app as celery_app
 from app.core.logging import get_logger
-from app.models.model_registry import Model, ModelType, ModelStatus
-from app.models.tenant import Tenants
 from app.repositories.rag_ingest_repos import AsyncSourceRepository
 from app.services.document_artifacts import (
     get_document_artifact,
     normalize_document_source_meta,
 )
 from app.services.document_source_metadata_service import DocumentSourceMetadataService
-from app.services.extractors import ExtractorRegistry
 from app.services.document_extraction_service import DocumentExtractionService, ExtractionRequest
 from app.storage.paths import get_extracted_path, calculate_text_checksum
 from app.workers.tasks_rag_ingest.stage_context import IngestStageContext, run_stage
 from app.workers.tasks_rag_ingest.stage_results import ExtractResult
 
 logger = get_logger(__name__)
-
-
-async def _resolve_extractor(ctx: IngestStageContext, ext: str) -> Any:
-    """
-    Resolve the right extractor based on tenant settings.
-
-    If tenant.layout=True and file is PDF → use LayoutPdfExtractor.
-    Otherwise → use default ExtractorRegistry lookup.
-    """
-    if ext != "pdf":
-        return ExtractorRegistry.get_extractor(ext)
-
-    result = await ctx.session.execute(
-        select(Tenants).where(Tenants.id == ctx.tenant_id)
-    )
-    tenant = result.scalar_one_or_none()
-
-    if tenant and tenant.layout:
-        from app.services.extractors.layout_pdf import LayoutPdfExtractor
-        model_result = await ctx.session.execute(
-            select(Model).where(
-                Model.type == ModelType.OCR,
-                Model.default_for_type == True,
-                Model.enabled == True,
-                Model.status == ModelStatus.AVAILABLE,
-                Model.deleted_at.is_(None),
-            ).limit(1)
-        )
-        layout_model = model_result.scalar_one_or_none()
-        engine_config = layout_model.extra_config if layout_model and layout_model.extra_config else {}
-        logger.info(f"Using layout-aware PDF extractor for tenant {ctx.tenant_id_str}")
-        return LayoutPdfExtractor(engine_config=engine_config)
-
-    return ExtractorRegistry.get_extractor(ext)
 
 
 def _detect_ext(filename: str) -> str:
@@ -79,10 +41,9 @@ def extract_document(
 
     Flow:
     1. Download original file from S3
-    2. Resolve extractor (layout-aware if tenant.layout=True)
-    3. Extract text (preserving structure if possible)
-    4. Upload extracted raw text to S3
-    5. Return ExtractResult for normalize stage
+    2. Extract text (Docling-first with local fallback)
+    3. Upload extracted raw text to S3
+    4. Return ExtractResult for normalize stage
     """
 
     async def _execute(ctx: IngestStageContext) -> ExtractResult:
@@ -115,7 +76,7 @@ def extract_document(
         await ctx.session.commit()
         file_content = await ctx.s3_get(origin_key)
 
-        # 4. Resolve extractor and extract
+        # 4. Extract text
         filename = (
             source_meta.get("document", {}).get("filename")
             or original_artifact.get("filename")
@@ -132,12 +93,6 @@ def extract_document(
             len(file_content),
         )
 
-        extractor = await _resolve_extractor(ctx, ext)
-        if extractor and getattr(extractor, "kind", "") == "pdf(layout-pdfminer)":
-            logger.info(
-                "Resolved fallback extractor: source_id=%s filename=%s extractor=%s",
-                source_id, filename, getattr(extractor, "kind", type(extractor).__name__),
-            )
         # Release the DB connection before the potentially long Docling/local
         # extraction and subsequent object-storage write.
         await ctx.session.commit()
@@ -148,11 +103,6 @@ def extract_document(
                 content_type=source_meta.get("document", {}).get("content_type"),
                 profile="rag_ingest",
                 max_bytes=max(len(file_content), 1),
-                fallback_extractor=(
-                    extractor
-                    if getattr(extractor, "kind", "") in {"pdf(layout)", "pdf(layout-pdfminer)"}
-                    else None
-                ),
             )
         )
         extracted_text = shared.text.strip()

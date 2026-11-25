@@ -14,9 +14,7 @@ class TenantBase(BaseModel):
     is_active: bool = Field(True, description="Whether tenant is active")
     # Model-related fields (requests use extra_embed_model, responses provide computed lists)
     extra_embed_model: Optional[str] = Field(None, description="An optional extra embedding model (besides global)")
-    ocr: bool = Field(False, description="Enable OCR processing")
-    layout: bool = Field(False, description="Enable layout analysis")
-    
+
     model_config = ConfigDict(extra='ignore')
 
 class TenantCreate(TenantBase):
@@ -29,8 +27,6 @@ class TenantUpdate(BaseModel):
     description: Optional[str] = Field(None, max_length=500)
     is_active: Optional[bool] = None
     extra_embed_model: Optional[str] = Field(None, description="An optional extra embedding model (besides global)")
-    ocr: Optional[bool] = Field(None, description="Enable OCR processing")
-    layout: Optional[bool] = Field(None, description="Enable layout analysis")
     is_default: Optional[bool] = Field(None, description="Set this tenant as platform default")
     
     model_config = ConfigDict(extra='ignore')

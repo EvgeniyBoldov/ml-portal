@@ -9,7 +9,7 @@ from io import BytesIO
 from typing import Any, Awaitable, Callable, Optional
 
 from app.core.config import get_settings
-from app.services.extractors import BaseExtractor, ExtractResult, ExtractorRegistry
+from app.services.extractors import ExtractResult, ExtractorRegistry
 
 
 TEXT_EXTENSIONS = {
@@ -31,7 +31,6 @@ class ExtractionRequest:
     max_chars: int = 32_000
     max_bytes: int = 8 * 1024 * 1024
     observer: Optional[Callable[[str, dict[str, Any]], Awaitable[None]]] = None
-    fallback_extractor: Optional[BaseExtractor] = None
 
 
 @dataclass
@@ -170,8 +169,6 @@ class DocumentExtractionService:
 
     @staticmethod
     def _extract_fallback(request: ExtractionRequest, filename: str) -> ExtractResult:
-        if request.fallback_extractor is not None:
-            return request.fallback_extractor.extract(request.payload, filename)
         extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
         if extension not in set(ExtractorRegistry.supported_extensions()) | TEXT_EXTENSIONS:
             return ExtractResult(

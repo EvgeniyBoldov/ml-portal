@@ -181,8 +181,6 @@ class AsyncTenantsService:
         return {
             "embed_models": response["embed_models_info"],
             "rerank_model": response["rerank_model_info"],
-            "ocr": response["ocr"],
-            "layout": response["layout"],
         }
 
     async def _build_tenant_response(
@@ -267,8 +265,6 @@ class AsyncTenantsService:
             "rerank_model": rerank_model,
             "rerank_model_info": rerank_model_info,
             "extra_embed_model": tenant.embedding_model_alias,
-            "ocr": tenant.ocr,
-            "layout": tenant.layout,
             "created_at": tenant.created_at,
             "updated_at": tenant.updated_at,
         }

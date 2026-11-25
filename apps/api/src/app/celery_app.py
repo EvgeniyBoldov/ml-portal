@@ -186,7 +186,6 @@ app.conf.task_queues = (
     
     # Средний приоритет - анализ документов
     Queue('analyze_medium', routing_key='analyze_medium', priority=5),
-    Queue('ocr_medium', routing_key='ocr_medium', priority=5),
     
     # Низкий приоритет - RAG индексация
     Queue('rag_low', routing_key='rag_low', priority=2),

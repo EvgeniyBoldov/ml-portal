@@ -55,8 +55,6 @@ class TestAsyncTenantsService:
         tenant.is_active = True
         tenant.lifecycle_status = "active"
         tenant.embedding_model_alias = None
-        tenant.ocr = True
-        tenant.layout = False
         tenant.created_at = datetime.now(timezone.utc)
         tenant.updated_at = datetime.now(timezone.utc)
         return tenant
@@ -394,8 +392,6 @@ class TestGetTenantActiveModels(TestAsyncTenantsService):
         
         assert "embed_models" in result
         assert "rerank_model" in result
-        assert "ocr" in result
-        assert "layout" in result
     
     @pytest.mark.asyncio
     async def test_get_active_models_tenant_not_found(self, tenants_service, mock_tenants_repo):
@@ -494,7 +490,5 @@ class TestBuildTenantResponse(TestAsyncTenantsService):
         assert "rerank_model" in result
         assert "rerank_model_info" in result
         assert "extra_embed_model" in result
-        assert "ocr" in result
-        assert "layout" in result
         assert "created_at" in result
         assert "updated_at" in result
