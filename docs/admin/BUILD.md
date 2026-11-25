@@ -10,7 +10,9 @@ make dev-up
 ```
 
 The local base is `ml-portal-base-ml:latest`. It is intentionally unrelated to
-production release tags.
+production release tags. The base installs CPU-only `torch` from the
+[PyTorch CPU wheel index](https://download.pytorch.org/whl/cpu) before the
+rest of the ML requirements, so no CUDA packages are downloaded.
 
 MCP images install dependencies from the selected server's `requirements.txt`
 before copying its source. The dependency layer is reused while that file is

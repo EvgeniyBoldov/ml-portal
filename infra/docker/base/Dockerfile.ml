@@ -6,24 +6,25 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies including OCR tools
+# Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     curl \
     libmagic1 \
     libmagic-dev \
-    tesseract-ocr \
-    tesseract-ocr-rus \
-    poppler-utils \
-    libgl1-mesa-dri \
-    libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # Copy requirements and install Python dependencies
 COPY infra/docker/base/requirements.ml.txt ./requirements.txt
+# Install CPU-only torch first so the default CUDA wheels from PyPI are never
+# pulled in; the requirements below then see torch as already satisfied.
 RUN python -m pip install --upgrade pip && \
+    pip install --no-cache-dir \
+        --index-url https://download.pytorch.org/whl/cpu \
+        --extra-index-url https://pypi.org/simple \
+        "torch>=2.0.0" && \
     pip install --no-cache-dir -r requirements.txt
 
 

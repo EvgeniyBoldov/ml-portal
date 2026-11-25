@@ -3,17 +3,13 @@
 # =============================================================================
 
 # Core ML Libraries (Heavy)
+# torch is installed from the PyTorch CPU index in the Dockerfile before this
+# file is processed, so the CUDA build is never pulled in.
+# transformers, scikit-learn and scipy arrive transitively via
+# sentence-transformers.
 torch>=2.0.0
-transformers>=4.30.0
 sentence-transformers>=2.2.0
 numpy>=1.24.0
-scikit-learn>=1.3.0
-scipy>=1.10.0
-
-# OCR and Image Processing
-Pillow>=9.0.0
-opencv-python>=4.5.0
-pytesseract>=0.3.10
 
 # HTTP Client
 httpx==0.25.2
