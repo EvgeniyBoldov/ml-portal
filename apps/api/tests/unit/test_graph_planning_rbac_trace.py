@@ -24,7 +24,9 @@ async def test_planner_iteration_logs_its_rbac_snapshot():
     store = SimpleNamespace(get_by_run=AsyncMock(return_value=plan), snapshot=AsyncMock(return_value={"status": "completed"}))
     stage = GraphPlanningStage(orchestrator=SimpleNamespace(run=run), store=store, max_steps=1)
     state = RuntimeTurnState(run_id=run_id)
-    request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None)
+    # continuation_meta mirrors PipelineRequest's default_factory=dict: the
+    # stage reads durable_runtime from it on every run.
+    request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None, continuation_meta={})
     ctx = SimpleNamespace(extra={})
 
     events = [item.event async for item in stage.run(
@@ -44,6 +46,7 @@ async def test_planner_iteration_logs_its_rbac_snapshot():
 @pytest.mark.asyncio
 async def test_resume_restores_saved_scope_origin_and_memory_instead_of_new_turn_defaults():
     from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdentity
+    from app.runtime.plan_store import _refresh_shared_facts
     scope = EffectiveScopeContext(selected=[ScopeIdentity(key="project.a", type="project", source="turn")],
                                   ceiling_keys=["project.a"])
     project_context = {"type": "project_context", "source": "explicit", "scope_origins": {"project.a": "turn"},
@@ -56,10 +59,21 @@ async def test_resume_restores_saved_scope_origin_and_memory_instead_of_new_turn
         if False:
             yield
     plan = SimpleNamespace(id=uuid4(), status="active", goal="saved goal")
-    store = SimpleNamespace(get_by_run=AsyncMock(return_value=plan), snapshot=AsyncMock(return_value=saved))
+
+    async def refresh_shared_facts(plan_id, current):
+        # Mirror SqlPlanStore: only validated owned facts (scope in user/
+        # tenant/runtime with kind=fact) are refreshed from the new turn;
+        # unvalidated turn defaults must not leak into resumed plan memory.
+        saved["memory_context"] = _refresh_shared_facts(saved.get("memory_context") or [], current)
+
+    store = SimpleNamespace(
+        get_by_run=AsyncMock(return_value=plan),
+        snapshot=AsyncMock(return_value=saved),
+        refresh_shared_facts=refresh_shared_facts,
+    )
     stage = GraphPlanningStage(orchestrator=SimpleNamespace(run=run), store=store, max_steps=1)
     state = RuntimeTurnState(run_id=uuid4())
-    request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None)
+    request = SimpleNamespace(chat_id=None, sandbox_overrides={}, messages=[], model=None, continuation_meta={})
     ctx = SimpleNamespace(extra={"project_context": {"effective_scope_keys": ["project.b"],
                                                      "source": "user_default", "suppress_project_default": False}})
     _ = [item async for item in stage.run(runtime_state=state, request=request, ctx=ctx,
