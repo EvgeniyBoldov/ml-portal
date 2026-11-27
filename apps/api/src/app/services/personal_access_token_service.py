@@ -1,13 +1,11 @@
 """Personal Bearer tokens: public lookup id plus a cryptographically random secret."""
 from datetime import datetime, timedelta, timezone
-import hashlib
-import hmac
 import re
-import secrets
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.bearer_tokens import issue_token, token_matches
 from app.core.security import UserCtx
 from app.core.config import get_settings
 from app.models.api_token import ApiToken
@@ -27,11 +25,10 @@ class PersonalAccessTokenService:
     async def create(self, *, user_id: UUID, name: str, expires_days: int | None) -> tuple[ApiToken, str]:
         if not get_settings().PAT_ENABLED:
             raise ValueError("personal_access_tokens_disabled")
-        token_id = uuid4()
-        raw = f"{TOKEN_PREFIX}{token_id.hex}.{secrets.token_urlsafe(32)}"
+        token_id, raw, digest = issue_token(TOKEN_PREFIX)
         expires_at = datetime.now(timezone.utc) + timedelta(days=expires_days) if expires_days else None
         token = await self.repo.create(ApiToken(id=token_id, user_id=user_id, name=name,
-            token_hash=hashlib.sha256(raw.encode()).hexdigest(), token_prefix=raw[:20],
+            token_hash=digest, token_prefix=raw[:20],
             expires_at=expires_at, is_active=True))
         return token, raw
 
@@ -52,7 +49,7 @@ class PersonalAccessTokenService:
         now = datetime.now(timezone.utc)
         if token.expires_at is not None and token.expires_at <= now:
             return None
-        if not hmac.compare_digest(token.token_hash, hashlib.sha256(raw.encode()).hexdigest()):
+        if not token_matches(raw, token.token_hash):
             return None
         tenant_ids = await self.repo.active_tenant_ids(user.id)
         memberships = []

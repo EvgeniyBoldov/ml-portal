@@ -27,6 +27,8 @@ class AsyncMemoryStore:
     async def finish_attempt(self, plan_id, task_id, **kwargs): return self.inner.finish_attempt(str(plan_id), task_id, **kwargs)
     async def finish_failure(self, plan_id, task_id, failure, **kwargs): return self.inner.finish_failure(str(plan_id), task_id, failure, **kwargs)
     async def complete_synthesis(self, plan_id): return self.inner.complete_synthesis(str(plan_id))
+    async def pause_timer(self, plan_id, payload, **kwargs): return self.inner.pause_timer(str(plan_id), payload)
+    async def resume_timer(self, plan_id, pause_id, **kwargs): return self.inner.resume_timer(str(plan_id), pause_id, **kwargs)
     async def mark_failed(self, plan_id, code, message): return self.inner.mark_failed(str(plan_id), code, message)
     async def recover_stale_claims(self, plan_id, **kwargs): return self.inner.recover_stale_claims(str(plan_id), **kwargs)
     async def link_attempt_execution(self, plan_id, task_id, agent_execution_id, **kwargs): return self.inner.link_attempt_execution(str(plan_id), task_id, agent_execution_id, **kwargs)
@@ -47,6 +49,62 @@ class Synthesizer:
         runtime_state.final_answer = "answer"
         from app.runtime.events import RuntimeEvent
         yield RuntimeEvent.final("answer", sources=[], run_id=str(run_id), attachments=[])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("after_task", [False, True])
+async def test_durable_timer_pause_before_initial_plan_and_after_task(after_task):
+    from app.runtime.planner.graph_planner import TimerPauseRequired
+
+    class TimerPlanner:
+        calls = 0
+
+        async def plan(self, *, request, **kwargs):
+            self.calls += 1
+            if after_task and self.calls == 1:
+                return IterationProposal(tasks=[PlannedTask(
+                    task_id="inspect", executor="research", intent="inspect", instructions="inspect",
+                )], terminal=TerminalKind.PLANNER)
+            raise TimerPauseRequired({
+                "wake_at": "2026-11-27T12:00:00+00:00", "reason": "Recheck later",
+                "next_check": "Read the source again", "user_update": "I will check later.",
+            }, {"request": request.model_dump(mode="json"), "tool_results": []})
+
+    class TimerExecutor:
+        async def execute_attempt(self, *, request, **kwargs):
+            return TaskExecutionReceipt(
+                declaration=TaskCompletionDeclaration(completion="fulfilled", report="observed"),
+                verified={},
+            )
+
+    store = AsyncMemoryStore()
+    planner = TimerPlanner()
+    events = [event async for event in GraphOrchestrator(
+        store=store, planner=planner, executor=TimerExecutor(), synthesizer=Synthesizer(),
+    ).run(
+        plan_id=store.plan["id"], goal="goal",
+        available_agents=[{"slug": "research", "supports_dynamic_contracts": True}],
+        planner_kwargs={"timer_enabled": True},
+    )]
+    snapshot = await store.snapshot(store.plan["id"])
+    assert snapshot["status"] == "waiting_timer"
+    assert len([event for event in events if event.get("type") == "timer_pause"]) == 1
+    assert snapshot["pauses"][0]["kind"] == "timer"
+    if after_task:
+        assert snapshot["tasks"]["inspect"]["status"] == "completed"
+        assert snapshot["iterations"][0]["checkpoint_status"] == "idle"
+    else:
+        assert snapshot["iterations"] == []
+    pause = snapshot["pauses"][0]
+    await store.resume_timer(
+        store.plan["id"], pause["id"], planned_wake_at=pause["payload"]["wake_at"],
+        actual_wake_at="2026-11-27T12:05:00+00:00",
+    )
+    await store.resume_timer(
+        store.plan["id"], pause["id"], planned_wake_at=pause["payload"]["wake_at"],
+        actual_wake_at="2026-11-27T12:05:00+00:00",
+    )
+    assert (await store.snapshot(store.plan["id"]))["status"] == "active"
 
 
 @pytest.mark.asyncio

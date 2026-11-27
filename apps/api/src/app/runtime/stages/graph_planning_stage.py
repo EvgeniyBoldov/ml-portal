@@ -27,6 +27,7 @@ from app.runtime.phase_limits import iter_with_phase_deadline
 class GraphPlanningOutcomeKind(str, Enum):
     COMPLETED = "completed"
     PAUSED = "paused"
+    WAITING_TIMER = "waiting_timer"
     FAILED = "failed"
 
 
@@ -69,6 +70,7 @@ class GraphPlanningStage:
         pause_question: Optional[str] = None
         pause_message: Optional[str] = None
         confirmation_context: Optional[Dict[str, Any]] = None
+        timer_context: Optional[Dict[str, Any]] = None
         open_iteration: dict[str, Any] | None = None
         runtime_sink = ctx.extra.get("runtime_event_logger") if isinstance(ctx.extra, dict) else None
         if runtime_sink is not None:
@@ -79,6 +81,12 @@ class GraphPlanningStage:
                 await runtime_sink.emit(event, phase=OrchestrationPhase.PLANNER)
 
             self._orchestrator.event_sink = emit_planner_event
+        durable_runtime = request.continuation_meta.get("durable_runtime") is True
+        durable_segment = ctx.extra.get("durable_segment")
+        if durable_runtime and isinstance(self._store, SqlPlanStore) and durable_segment is None:
+            raise RuntimeError("durable graph execution requires an active durable segment fence")
+        if durable_runtime and durable_segment is not None and hasattr(self._store, "set_durable_fence"):
+            self._store.set_durable_fence(durable_segment)
         run_id = UUID(str(runtime_state.run_id))
         plan = await self._store.get_by_run(run_id)
         target = interaction_from_context(runtime_state.continuation.get("paused_context"))
@@ -86,6 +94,46 @@ class GraphPlanningStage:
             raise ValueError("Saved interaction plan no longer exists")
         plan_created = plan is None
         resumed_task_id: Optional[str] = None
+        continuation = runtime_state.continuation if isinstance(runtime_state.continuation, dict) else {}
+        timer_resume: dict[str, Any] | None = (
+            {key: continuation[key] for key in ("pause_id", "planned_wake_at", "actual_wake_at")
+             if continuation.get(key) is not None}
+            if durable_runtime and continuation.get("resume_action") == "timer_elapsed" else None
+        )
+        timer_checkpoint: dict[str, Any] | None = None
+        timer_pause_count = 0
+        if plan is None and timer_resume is not None:
+            raise ValueError("timer continuation references a missing plan")
+        if plan is not None and plan.status == "waiting_timer":
+            if timer_resume is None:
+                raise ValueError("timer pause requires a trusted durable timer continuation")
+            if not all(timer_resume.get(key) for key in ("pause_id", "planned_wake_at", "actual_wake_at")):
+                raise ValueError("timer continuation is missing its pause identity or wake timestamps")
+        if plan is not None and timer_resume is not None:
+            if durable_segment is not None:
+                await durable_segment.fence()
+            timer_snapshot = await self._store.snapshot(plan.id)
+            timer_pause_count = sum(1 for item in timer_snapshot.get("pauses", []) if item.get("kind") == "timer")
+            timer_pause = next((item for item in timer_snapshot.get("pauses", [])
+                                if item.get("id") == timer_resume["pause_id"] and item.get("kind") == "timer"), None)
+            if timer_pause is None:
+                raise ValueError("timer continuation does not match a saved timer pause")
+            payload = timer_pause.get("payload") if isinstance(timer_pause.get("payload"), dict) else {}
+            paused_sequence = int(payload.get("paused_iteration_sequence") or 0)
+            current_sequence = max((int(item.get("sequence") or 0) for item in timer_snapshot.get("iterations", [])), default=0)
+            if current_sequence > paused_sequence:
+                if plan.status == "waiting_timer":
+                    raise ValueError("timer plan advanced before its pause was resumed")
+                # A prior delivery already consumed the timer and persisted a
+                # newer planner iteration; continue from the saved graph.
+                timer_resume = None
+            else:
+                timer_checkpoint = payload.get("checkpoint") if isinstance(payload.get("checkpoint"), dict) else None
+                await self._store.resume_timer(
+                    plan.id, timer_resume["pause_id"],
+                    planned_wake_at=timer_resume["planned_wake_at"],
+                    actual_wake_at=timer_resume["actual_wake_at"], commit=False,
+                )
         if plan is None:
             plan = await self._store.create(
                 goal=runtime_state.goal,
@@ -97,6 +145,7 @@ class GraphPlanningStage:
             )
         else:
             saved = await self._store.snapshot(plan.id)
+            timer_pause_count = sum(1 for item in saved.get("pauses", []) if item.get("kind") == "timer")
             if saved.get("iterations") and not saved.get("scope_context"):
                 raise ValueError("scope_context_missing")
             if planner_memory_context is not None:
@@ -132,12 +181,16 @@ class GraphPlanningStage:
                 OrchestrationPhase.PLANNER,
             )
         if plan.status == "waiting_input":
-            continuation = runtime_state.continuation if isinstance(runtime_state.continuation, dict) else {}
             interaction = interaction_from_context(continuation.get("paused_context"))
             if interaction is not None:
                 if str(plan.id) != interaction.requester.plan_id or "interaction_response" not in continuation:
                     raise ValueError("interaction does not match the saved plan checkpoint")
-                await self._store.resume_interaction(plan.id, interaction.id, continuation["interaction_response"])
+                if durable_segment is not None:
+                    await durable_segment.fence()
+                await self._store.resume_interaction(
+                    plan.id, interaction.id, continuation["interaction_response"],
+                    commit=not durable_runtime, durable=durable_runtime,
+                )
                 if not (interaction.operation and continuation["interaction_response"] is False):
                     resumed_task_id = interaction.requester.task_id
             else:
@@ -190,6 +243,14 @@ class GraphPlanningStage:
             "budget_registry": budget_registry,
             "budget_resolver": budget_resolver,
             "planner_budget_entity_id": planner_entity_id,
+            "timer_enabled": durable_runtime,
+            "timer_resume": timer_resume,
+            "timer_checkpoint": timer_checkpoint,
+            "durable_timezone": request.continuation_meta.get("durable_timezone"),
+            "timer_min_delay_seconds": request.continuation_meta.get("timer_min_delay_seconds", 60),
+            "timer_max_horizon_seconds": request.continuation_meta.get("timer_max_horizon_seconds", 2_592_000),
+            "timer_pause_count": timer_pause_count,
+            "timer_pause_limit": request.continuation_meta.get("timer_pause_limit", 100),
         }
         configured_wall_time_ms = getattr(planner_limits, "wall_time_ms", None)
         planner_wall_time_ms = (
@@ -245,6 +306,9 @@ class GraphPlanningStage:
                     runtime_event = RuntimeEvent.status("execution_interrupted",
                         error_code=runtime_event.data.get("error_code"),
                         parent_entity_type="run", parent_entity_id=str(runtime_state.run_id))
+                if runtime_event.type == RuntimeEventType.STATUS and runtime_event.data.get("stage") == "timer_paused":
+                    timer_context = {key: runtime_event.data.get(key) for key in (
+                        "pause_id", "wake_at", "reason", "user_update", "checkpoint") if runtime_event.data.get(key) is not None}
                 if isinstance(runtime_event.data.get("interaction"), dict):
                     confirmation_context = dict(runtime_event.data)
                 if runtime_event.type == RuntimeEventType.WAITING_INPUT:
@@ -272,7 +336,8 @@ class GraphPlanningStage:
                         OrchestrationPhase.PLANNER,
                     )
         except asyncio.CancelledError:
-            await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
+            if not durable_runtime:
+                await self._store.cancel_plan(plan.id, reason="orchestrator_cancelled")
             if open_iteration and open_iteration.get("iteration_id"):
                 yield PhasedEvent(RuntimeEvent.planner_iteration_end(
                     iteration_id=open_iteration["iteration_id"],
@@ -319,6 +384,13 @@ class GraphPlanningStage:
                 pause_question=pause_question,
                 pause_message=pause_message,
                 pause_context=confirmation_context,
+            )
+        elif status == "waiting_timer":
+            self.outcome = GraphPlanningOutcome(
+                kind=GraphPlanningOutcomeKind.PAUSED,
+                stop_reason=PipelineStopReason.WAITING_TIMER,
+                pause_message=str((timer_context or {}).get("user_update") or "") or None,
+                pause_context=timer_context,
             )
         else:
             self.outcome = GraphPlanningOutcome(

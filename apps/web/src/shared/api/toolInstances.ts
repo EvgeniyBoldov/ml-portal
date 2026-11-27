@@ -2,7 +2,7 @@
  * Tool Instances API v3
  *
  * Connector classification axes:
- * - connector_type: data | mcp | model
+ * - connector_type: data | mcp | model | integration
  * - connector_subtype: sql | api (for data connectors)
  * - placement: local | remote
  */
@@ -16,7 +16,7 @@ export interface ToolInstance {
   name: string;
   description?: string;
   instance_kind: string;   // "data" | "service"
-  connector_type: string;  // "data" | "mcp" | "model"
+  connector_type: string;  // "data" | "mcp" | "model" | "integration"
   connector_subtype?: string | null; // "sql" | "api" for data connectors
   placement: string;       // "local" | "remote"
   provider_kind?: string | null;

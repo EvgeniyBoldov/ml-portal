@@ -10,6 +10,15 @@ function AdminLayout() {
   const isPeriodicTasksPage = useMatch('/admin/periodic-tasks/*');
   const isToolsPage = useMatch('/admin/tools/*');
   const isConnectorsPage = useMatch('/admin/connectors/*');
+  const isExternalRequestPage = useMatch(
+    '/admin/agent-runs/external-requests/:id'
+  );
+  const usesCompactLayout =
+    isAccessPage ||
+    isPeriodicTasksPage ||
+    isToolsPage ||
+    isConnectorsPage ||
+    isExternalRequestPage;
   const { logout, user } = useAuth();
 
   return (
@@ -24,7 +33,13 @@ function AdminLayout() {
         onLogout={logout}
       />
 
-      <div className={(isAccessPage || isPeriodicTasksPage || isToolsPage || isConnectorsPage) ? `${styles.layout} ${styles.compactLayout}` : styles.layout}>
+      <div
+        className={
+          usesCompactLayout
+            ? `${styles.layout} ${styles.compactLayout}`
+            : styles.layout
+        }
+      >
         <AdminSidebar />
         <main className={styles.main}>
           <Outlet />

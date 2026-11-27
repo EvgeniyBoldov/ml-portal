@@ -43,7 +43,7 @@ class RuntimeOutcomeProjection(BaseModel):
     chat_turn_id: str
     user_message_id: str | None = None
     current_user_intent: str = ""
-    terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "failed"]
+    terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "waiting_timer", "failed"]
     effective_goal: str = ""
     project_context: dict[str, Any] = Field(default_factory=dict)
     term_bindings: list[dict[str, Any]] = Field(default_factory=list)
@@ -61,7 +61,7 @@ class RuntimeOutcomeProjector:
     @staticmethod
     def project(
         *, runtime_state: RuntimeTurnState, chat_id: str, chat_turn_id: str,
-        terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "failed"],
+        terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "waiting_timer", "failed"],
         project_context: Optional[dict[str, Any]] = None,
         term_bindings: Optional[list[dict[str, Any]]] = None,
         clarification: Optional[dict[str, Any]] = None,

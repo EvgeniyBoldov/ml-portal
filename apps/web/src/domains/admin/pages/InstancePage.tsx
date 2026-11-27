@@ -1,7 +1,7 @@
 /**
  * InstancePage v3 — просмотр/создание/редактирование/удаление коннектора.
  *
- * Classification axes: connector_type (data|mcp|model), connector_subtype (sql|api), placement (local|remote).
+ * Classification axes: connector_type (data|mcp|model|integration), connector_subtype (sql|api), placement (local|remote).
  */
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -69,6 +69,7 @@ const CLASSIFICATION_FIELDS: FieldConfig[] = [
       { value: 'data', label: 'Data — источник данных' },
       { value: 'mcp', label: 'MCP — провайдер инструментов' },
       { value: 'model', label: 'Model — провайдер моделей' },
+      { value: 'integration', label: 'Integration — внешняя интеграция' },
     ],
   },
   {
@@ -539,14 +540,16 @@ export function InstancePage() {
                     Инструменты
                   </Button>,
                 ] : []),
-                <Button
-                  key="health"
-                  variant="success"
-                  onClick={() => healthCheckMutation.mutate()}
-                  disabled={healthCheckMutation.isPending}
-                >
-                  {healthCheckMutation.isPending ? 'Проверка...' : ADMIN_ACTION_LABELS.check}
-                </Button>,
+                ...(instance?.connector_type !== 'integration' ? [
+                  <Button
+                    key="health"
+                    variant="success"
+                    onClick={() => healthCheckMutation.mutate()}
+                    disabled={healthCheckMutation.isPending}
+                  >
+                    {healthCheckMutation.isPending ? 'Проверка...' : ADMIN_ACTION_LABELS.check}
+                  </Button>,
+                ] : []),
               ]
             : [],
           extraPosition: 'beforeCrud',

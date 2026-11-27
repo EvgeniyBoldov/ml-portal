@@ -56,7 +56,7 @@ _BRIEF_EVENTS = frozenset({
     "run_start", "run_end", "orchestrator_start", "orchestrator_end",
     "planner_iteration_start", "planner_iteration_end", "step_start", "step_end",
     "agent_start", "agent_end", "plan_created", "plan_iteration_applied",
-    "plan_waiting_input", "plan_completed", "plan_failed",
+    "plan_waiting_input", "plan_waiting_timer", "plan_completed", "plan_failed",
     "task_planned", "task_started", "task_paused", "task_resumed", "task_completed", "task_needs_dependency", "task_blocked", "task_unfulfillable",
     "task_failed", "attempt_started", "attempt_succeeded", "attempt_failed",
     "checkpoint_planned", "checkpoint_decided",

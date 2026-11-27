@@ -84,7 +84,7 @@ export async function getPausedRun(chatId: string) {
 export interface ActiveChatRun {
   run_id: string;
   turn_id: string;
-  status: 'running';
+  status: 'queued' | 'running' | 'waiting_timer';
   user_message_id: string | null;
   stage?: 'preparing' | 'planning' | 'executing' | 'synthesizing' | 'finalizing' | null;
   activity?: {
@@ -97,7 +97,9 @@ export interface ActiveChatRun {
 }
 
 export type ChatLifecycleStatus =
+  | 'queued'
   | 'running'
+  | 'waiting_timer'
   | 'waiting_input'
   | 'waiting_confirmation'
   | 'completed'

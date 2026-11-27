@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -21,6 +22,11 @@ from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeIdent
 from app.runtime.memory.transport import TurnMemory
 from app.runtime.pipeline import RuntimePipeline
 from app.runtime.stages.graph_planning_stage import GraphPlanningOutcome, GraphPlanningOutcomeKind
+from app.runtime.stages.graph_planning_stage import GraphPlanningStage
+from app.runtime.orchestrator import GraphOrchestrator
+from app.runtime.orchestrator_contracts import IterationProposal
+from app.runtime.plan_store import InMemoryPlanStore
+from app.runtime.planner.graph_planner import TimerPauseRequired
 from app.runtime.turn_preflight import TurnPreflightDecision
 from app.services.runtime_run_context_service import RuntimeRunContextService
 
@@ -453,6 +459,81 @@ async def test_planner_route_owns_the_request_until_its_outcome(runtime, stop):
         assert not event_data(runtime.journal.events, EventType.ERROR)
     elif stop is PipelineStopReason.FAILED:
         assert event_data(events, EventType.ERROR)[0]["error_code"] == "runtime_execution_failed"
+
+
+@pytest.mark.asyncio
+async def test_runtime_pipeline_durable_timer_pause_and_wake_use_the_saved_graph(runtime):
+    runtime.request.continuation_meta = {
+        "durable_runtime": True, "durable_timezone": "Europe/Moscow",
+    }
+    runtime.preflight.return_value = TurnPreflightDecision.model_validate({
+        "route": "planner", "task_brief": {
+            "goal": "Monitor the application", "direction": "Check for future status changes",
+            "expected_result": "Report a status change",
+        },
+    })
+
+    class AsyncStore:
+        def __init__(self):
+            self.inner = InMemoryPlanStore()
+        async def get_by_run(self, run_id):
+            plan = next((item for item in self.inner.plans.values()
+                         if str(item["root_run_id"]) == str(run_id)), None)
+            return SimpleNamespace(**self.inner.snapshot(plan["id"])) if plan else None
+        async def create(self, **kwargs):
+            return SimpleNamespace(**self.inner.create(**kwargs))
+        async def snapshot(self, plan_id): return self.inner.snapshot(str(plan_id))
+        def __getattr__(self, name):
+            async def invoke(plan_id, *args, **kwargs):
+                return getattr(self.inner, name)(str(plan_id), *args, **kwargs)
+            return invoke
+
+    class SleepingPlanner:
+        def __init__(self): self.requests = []
+        async def plan(self, *, request, **kwargs):
+            self.requests.append(request)
+            wake_at = (datetime.now(timezone.utc) + timedelta(hours=2 + len(self.requests))).isoformat()
+            raise TimerPauseRequired({
+                "wake_at": wake_at, "reason": "Check the application again",
+                "next_check": "Read the current application status",
+                "user_update": "I will check again later.",
+            }, {"request": request.model_dump(mode="json"), "tool_results": []})
+
+    store, planner = AsyncStore(), SleepingPlanner()
+    runtime.pipeline._assembler.build_graph_planning_stage.side_effect = None
+    runtime.pipeline._assembler.build_graph_planning_stage.side_effect = lambda *, max_steps: GraphPlanningStage(
+        orchestrator=GraphOrchestrator(store=store, planner=planner, executor=Mock(), synthesizer=Mock()),
+        store=store, max_steps=max_steps,
+    )
+    first_events = await collect(runtime)
+    [first_stop] = event_data(first_events, EventType.STOP)
+    assert first_stop["reason"] == PipelineStopReason.WAITING_TIMER.value
+    assert first_stop["context"]["pause_id"]
+    assert "checkpoint" not in first_stop["context"]
+    root_run_id = first_stop["run_id"]
+    plan = next(item for item in store.inner.plans.values() if str(item["root_run_id"]) == root_run_id)
+    assert await store.get_by_run(UUID(root_run_id)) is not None
+    pause = plan["pauses"][-1]
+
+    resumed_request = runtime.request.model_copy(update={
+        "request_text": "timer elapsed",
+        "runtime_run_id": str(plan["root_run_id"]),
+        "continuation_meta": {
+            "durable_runtime": True, "durable_timezone": "Europe/Moscow",
+            "resume_checkpoint": {
+                "resume_action": "timer_elapsed", "pause_id": pause["id"],
+                "planned_wake_at": pause["payload"]["wake_at"],
+                "actual_wake_at": datetime.now(timezone.utc).isoformat(),
+                "original_goal": "Monitor the application", "source_run_id": root_run_id,
+            },
+        },
+    })
+    second_events = await collect(runtime, resumed_request)
+    [second_stop] = event_data(second_events, EventType.STOP)
+    assert second_stop["reason"] == PipelineStopReason.WAITING_TIMER.value
+    assert store.inner.plans[plan["id"]]["pauses"][0]["status"] == "elapsed"
+    assert store.inner.plans[plan["id"]]["pauses"][1]["status"] == "waiting"
+    assert planner.requests[1].context.timer_resume["pause_id"] == pause["id"]
 
 
 @pytest.mark.asyncio

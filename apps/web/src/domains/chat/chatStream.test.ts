@@ -143,6 +143,26 @@ describe('consumeChatStream', () => {
     ]);
   });
 
+  it('projects the scheduled wake without turning it into an input pause', async () => {
+    const onEvent = vi.fn();
+    const wakeAt = '2026-11-27T12:00:00Z';
+    await expect(
+      consumeChatStream(
+        response(frame('pause', {
+          run_id: 'run',
+          reason: 'waiting_timer',
+          action: { kind: 'cancel' },
+          context: { wake_at: wakeAt },
+        })),
+        onEvent
+      )
+    ).resolves.toBe('pause');
+    expect(onEvent).toHaveBeenCalledWith({
+      type: 'pause',
+      pause: expect.objectContaining({ reason: 'waiting_timer', wakeAt }),
+    });
+  });
+
   it.each(['', 'data: [DONE]\n\n', 'event: delta\ndata: partial\n\n'])(
     'rejects a stream without an answer or pause: %j',
     async text => {

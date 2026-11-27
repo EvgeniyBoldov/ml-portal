@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ValidationError, model_validator
 
 from app.core.exceptions import AppError as ToolInstanceError
-from app.models.tool_instance import InstanceKind, InstancePlacement, ToolInstance
+from app.models.tool_instance import ConnectorType, InstanceKind, InstancePlacement, ToolInstance
 from app.services.instance_capabilities import resolve_provider_kind
 
 SLUG_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{1,254}$")
@@ -36,7 +37,7 @@ class ToolInstanceValidationService:
         normalized = str(value or "").strip().lower()
         if not normalized:
             return "data"
-        if normalized not in {"data", "mcp", "model"}:
+        if normalized not in {item.value for item in ConnectorType}:
             raise ToolInstanceError(f"Invalid connector_type '{normalized}'")
         return normalized
 
@@ -106,11 +107,30 @@ class ToolInstanceValidationService:
     @staticmethod
     def validate_config_requirements(
         *,
+        connector_type: str,
         instance_kind: str,
         placement: str,
         url: str,
         config: Optional[Dict[str, Any]],
     ) -> None:
+        if connector_type == ConnectorType.INTEGRATION:
+            error = "Integration connectors require an absolute HTTP(S) endpoint URL without credentials or a fragment"
+            try:
+                endpoint = urlsplit(url)
+                port = endpoint.port
+            except ValueError as exc:
+                raise ToolInstanceError(error) from exc
+            if (
+                endpoint.scheme not in {"http", "https"}
+                or not endpoint.hostname
+                or endpoint.username is not None
+                or "#" in url
+                or "\\" in url
+                or any(character.isspace() or ord(character) < 32 for character in url)
+                or port == 0
+            ):
+                raise ToolInstanceError(error)
+
         normalized = config or {}
         provider_kind = resolve_provider_kind(normalized)
         binding_type = str(normalized.get("binding_type") or "").strip().lower()

@@ -74,7 +74,14 @@ async def test_list_connectors_http_forwards_filters_and_returns_public_fields(m
 
 
 @pytest.mark.asyncio
-async def test_create_connector_http_derives_slug_and_commits(monkeypatch):
+@pytest.mark.parametrize(
+    ("connector_type", "subtype", "url", "config"),
+    [
+        ("data", "api", "https://inventory.example.test", {"base_path": "/v1"}),
+        ("integration", None, "https://clouds.example.test/api/v1/integrations/assignments/events", None),
+    ],
+)
+async def test_create_connector_http_derives_slug_and_commits(monkeypatch, connector_type, subtype, url, config):
     calls = {}
     session = SimpleNamespace(commit=AsyncMock(), refresh=AsyncMock())
 
@@ -84,20 +91,25 @@ async def test_create_connector_http_derives_slug_and_commits(monkeypatch):
 
         async def create_instance(self, **kwargs):
             calls.update(kwargs)
-            return _instance(slug=kwargs["slug"], name=kwargs["name"])
+            return _instance(
+                slug=kwargs["slug"], name=kwargs["name"], connector_type=kwargs["connector_type"],
+                connector_subtype=kwargs["connector_subtype"], url=kwargs["url"], config=kwargs["config"],
+            )
 
     monkeypatch.setattr(instances_router, "ToolInstanceService", Service)
     app = _app()
     app.dependency_overrides[db_session] = lambda: session
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
         response = await client.post("/admin/connectors", json={
-            "name": "Inventory API", "connector_type": "data", "connector_subtype": "api",
-            "url": "https://inventory.example.test", "config": {"base_path": "/v1"},
+            "name": "My Connector", "connector_type": connector_type, "connector_subtype": subtype,
+            "url": url, "config": config,
         })
 
     assert response.status_code == 201
-    assert calls["slug"] == "inventory-api"
-    assert calls["connector_subtype"] == "api"
+    assert calls["slug"] == "my-connector"
+    assert calls["connector_type"] == response.json()["connector_type"] == connector_type
+    assert calls["connector_subtype"] == subtype
+    assert response.json()["url"] == url
     session.commit.assert_awaited_once()
     session.refresh.assert_awaited_once()
 

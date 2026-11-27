@@ -134,6 +134,7 @@ class PlannerInputBuilder:
         payload = {
             "goal": context.goal,
             "trigger": context.trigger,
+            **({"timer_resume": dict(context.timer_resume)} if getattr(context, "timer_resume", None) else {}),
             "execution_ledger": context.execution_ledger,
             "resolution_targets": {
                 "completed_task_ids": [item["task_id"] for item in context.execution_ledger.get("tasks", [])

@@ -3,7 +3,7 @@ import MarkdownRenderer from '@/shared/ui/MarkdownRenderer';
 import { Icon } from '@/shared/ui/Icon';
 import RAGSources from './RAGSources';
 import { ChatAttachments } from './ChatAttachments';
-import { ChatRunStatus } from './ChatRunStatus';
+import { ChatRunStatus, getChatRunStatusLabel } from './ChatRunStatus';
 import type { ActiveChatRun, ChatTimelineMessage } from '../types';
 import styles from './Message.module.css';
 
@@ -56,11 +56,7 @@ export function AssistantMessage({
           )}
           {run && (
             <span className={styles.statusLabel}>
-              {run.status === 'running'
-                ? 'Выполняется'
-                : run.status === 'waiting_confirmation'
-                  ? 'Ожидает подтверждения'
-                  : 'Ожидает ответа'}
+              {getChatRunStatusLabel(run)}
             </span>
           )}
         </div>

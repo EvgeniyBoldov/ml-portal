@@ -14,6 +14,7 @@ const CONNECTOR_LABELS: Record<string, { label: string; tone: 'info' | 'neutral'
   data: { label: 'Data', tone: 'info' },
   mcp: { label: 'MCP', tone: 'neutral' },
   model: { label: 'Model', tone: 'neutral' },
+  integration: { label: 'Integration', tone: 'neutral' },
 };
 
 const SUBTYPE_OPTIONS = [
@@ -87,6 +88,7 @@ function InstancesListPage() {
           { value: 'data', label: 'Data' },
           { value: 'mcp', label: 'MCP' },
           { value: 'model', label: 'Model' },
+          { value: 'integration', label: 'Integration' },
         ],
         getValue: (inst) => inst.connector_type,
       },

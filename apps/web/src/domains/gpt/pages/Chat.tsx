@@ -433,7 +433,14 @@ export default function Chat() {
           <ChatComposer
             key={chatId}
             onSend={handleSend}
-            disabled={busy && !state.isStreaming}
+            canStopScheduledRun={
+              state.activeRun?.status === 'waiting_timer' || state.activeRun?.status === 'queued'
+            }
+            disabled={
+              (busy && !state.isStreaming) ||
+              state.activeRun?.status === 'waiting_timer' ||
+              state.activeRun?.status === 'queued'
+            }
             isStreaming={state.isStreaming}
             previousMessage={
               [...messages].reverse().find(message => message.role === 'user')

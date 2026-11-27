@@ -36,6 +36,7 @@ class PlanStatus(str, Enum):
     DRAFT = "draft"
     ACTIVE = "active"
     WAITING_INPUT = "waiting_input"
+    WAITING_TIMER = "waiting_timer"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -470,6 +471,7 @@ class PlannerContext(BaseModel):
     task_brief: Dict[str, Any] = Field(default_factory=dict)
     scope_context: Dict[str, Any] = Field(default_factory=dict)
     planner_search_results: List[Dict[str, Any]] = Field(default_factory=list)
+    timer_resume: Dict[str, Any] = Field(default_factory=dict)
     model_config = {"extra": "forbid"}
 
 

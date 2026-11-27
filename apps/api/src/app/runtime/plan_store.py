@@ -511,7 +511,7 @@ class InMemoryPlanStore:
                 iteration["checkpoint_status"] = "idle"
                 iteration["checkpoint_claimed_at"] = None
 
-    def cancel_plan(self, plan_id: str, *, reason: str = "cancelled") -> None:
+    def cancel_plan(self, plan_id: str, *, reason: str = "cancelled", commit: bool = True) -> None:
         plan = self.get(plan_id)
         if plan["status"] in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
             return
@@ -675,7 +675,7 @@ class InMemoryPlanStore:
                 "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, plan, inputs), **_task_interactions(plan, task_id)}
 
     def pause_interaction(self, plan_id: str, interaction: RuntimeInteraction, *,
-                          expected_attempt_number: Optional[int] = None) -> None:
+                          expected_attempt_number: Optional[int] = None, commit: bool = True) -> None:
         plan = self.get(plan_id)
         if plan["status"] == PlanStatus.WAITING_INPUT.value:
             raise PlanValidationError("plan already has an active interaction")
@@ -695,14 +695,48 @@ class InMemoryPlanStore:
             "payload": {"interaction": interaction.model_dump(mode="json")}, "status": "waiting"})
         plan["status"] = PlanStatus.WAITING_INPUT.value
 
-    def resume_interaction(self, plan_id: str, interaction_id: str, response: Any) -> None:
+    def pause_timer(self, plan_id: str, payload: Dict[str, Any], *, commit: bool = True) -> str:
         plan = self.get(plan_id)
-        pause = next((row for row in plan["pauses"] if row["status"] == "waiting"
-                      and (row["payload"].get("interaction") or {}).get("id") == interaction_id), None)
+        draft_without_iteration = plan["status"] == PlanStatus.DRAFT.value and not plan["iterations"]
+        if (plan["status"] != PlanStatus.ACTIVE.value and not draft_without_iteration) or not isinstance(payload.get("wake_at"), str):
+            raise PlanValidationError("timer pause requires an active plan or an uninitialized draft and wake_at")
+        pause_id = str(uuid4())
+        payload = {**deepcopy(payload), "paused_iteration_sequence": len(plan["iterations"])}
+        plan["pauses"].append({"id": pause_id, "task_id": "", "kind": "timer",
+            "payload": payload, "status": "waiting"})
+        plan["status"] = PlanStatus.WAITING_TIMER.value
+        active = next((item for item in plan["iterations"] if item["status"] == IterationStatus.ACTIVE.value), None)
+        if active and active["checkpoint_status"] == "planner_running":
+            active["checkpoint_status"], active["checkpoint_claimed_at"] = "idle", None
+        return pause_id
+
+    def resume_timer(self, plan_id: str, pause_id: str, *, planned_wake_at: str, actual_wake_at: str, commit: bool = True) -> None:
+        plan = self.get(plan_id)
+        pause = next((row for row in plan["pauses"] if row.get("id") == pause_id), None)
+        if pause is None or pause.get("kind") != "timer":
+            raise PlanValidationError("timer pause does not exist")
+        if pause["status"] == "elapsed" and plan["status"] == PlanStatus.ACTIVE.value:
+            return
+        if plan["status"] != PlanStatus.WAITING_TIMER.value or pause["status"] != "waiting":
+            raise PlanValidationError("timer pause is no longer active")
+        if pause["payload"].get("wake_at") != planned_wake_at:
+            raise PlanValidationError("timer wake_at does not match active pause")
+        pause["status"] = "elapsed"
+        pause["payload"].update(planned_wake_at=planned_wake_at, actual_wake_at=actual_wake_at)
+        plan["status"] = PlanStatus.ACTIVE.value
+
+    def resume_interaction(self, plan_id: str, interaction_id: str, response: Any, *, commit: bool = True, durable: bool = False) -> None:
+        plan = self.get(plan_id)
+        pause = next((row for row in plan["pauses"]
+                      if (row["payload"].get("interaction") or {}).get("id") == interaction_id), None)
         if pause is None:
             raise PlanValidationError("interaction does not match active pause")
         interaction = RuntimeInteraction.model_validate(pause["payload"]["interaction"])
         response = interaction.validate_response(response)
+        if durable and pause["status"] == "answered" and pause["payload"].get("response") == response and plan["status"] == PlanStatus.ACTIVE.value:
+            return
+        if pause["status"] != "waiting":
+            raise PlanValidationError("interaction does not match active pause")
         task = None
         if interaction.requester.task_id:
             task = plan["tasks"].get(interaction.requester.task_id)
@@ -811,10 +845,53 @@ class SqlPlanStore:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+        self._durable_fence: Any | None = None
 
-    async def _commit(self) -> None:
+    def set_durable_fence(self, fence: Any | None) -> None:
+        self._durable_fence = fence
+
+    async def _commit(self, *, commit: bool = True) -> None:
         """Persist a lifecycle boundary before any caller can do external work."""
-        await self._session.commit()
+        if commit:
+            await self._session.commit()
+
+    async def pause_timer(self, plan_id: UUID, payload: Dict[str, Any], *, commit: bool = True) -> str:
+        plan = await self._plan(plan_id, lock=True)
+        wake_at = payload.get("wake_at")
+        draft_without_iteration = plan.status == PlanStatus.DRAFT.value and not await self._active_iteration(plan_id)
+        if (plan.status != PlanStatus.ACTIVE.value and not draft_without_iteration) or not isinstance(wake_at, str):
+            raise PlanValidationError("timer pause requires an active plan or an uninitialized draft and wake_at")
+        active = await self._active_iteration(plan_id, lock=True)
+        payload = {**deepcopy(payload),
+                   "paused_iteration_sequence": int(active.sequence) if active is not None else 0}
+        if active is not None and active.checkpoint_status == "planner_running":
+            active.checkpoint_status, active.checkpoint_claimed_at = "idle", None
+        pause_id = uuid4()
+        self._session.add(RuntimePause(id=pause_id, plan_id=plan_id, task_id="", kind="timer",
+            operation_fingerprint="", payload=deepcopy(payload), status="waiting"))
+        plan.status = PlanStatus.WAITING_TIMER.value
+        await self._session.flush()
+        await self._commit(commit=commit)
+        return str(pause_id)
+
+    async def resume_timer(self, plan_id: UUID, pause_id: str, *, planned_wake_at: str,
+                           actual_wake_at: str, commit: bool = True) -> None:
+        plan = await self._plan(plan_id, lock=True)
+        pause = (await self._session.execute(select(RuntimePause).where(
+            RuntimePause.plan_id == plan_id, RuntimePause.id == UUID(pause_id)).with_for_update())).scalar_one_or_none()
+        if pause is None or pause.kind != "timer":
+            raise PlanValidationError("timer pause does not exist")
+        if pause.status == "elapsed" and plan.status == PlanStatus.ACTIVE.value:
+            return
+        if plan.status != PlanStatus.WAITING_TIMER.value or pause.status != "waiting":
+            raise PlanValidationError("timer pause is no longer active")
+        if pause.payload.get("wake_at") != planned_wake_at:
+            raise PlanValidationError("timer wake_at does not match active pause")
+        pause.status, pause.resolved_at = "elapsed", _now()
+        pause.payload = {**pause.payload, "planned_wake_at": planned_wake_at, "actual_wake_at": actual_wake_at}
+        plan.status = PlanStatus.ACTIVE.value
+        await self._session.flush()
+        await self._commit(commit=commit)
 
     async def _claimed_attempt(
         self, plan_id: UUID, task_id: str, expected_attempt_number: Optional[int],
@@ -843,6 +920,8 @@ class SqlPlanStore:
 
     async def create(self, *, goal: str, root_run_id: UUID, tenant_id: UUID, chat_id: Optional[UUID] = None,
                      scope_context: dict[str, Any] | None = None, memory_context: list[dict[str, Any]] | None = None) -> RuntimePlan:
+        if self._durable_fence is not None:
+            await self._durable_fence.fence()
         plan = RuntimePlan(goal=goal, root_run_id=root_run_id, tenant_id=tenant_id, chat_id=chat_id,
                            scope_context=scope_context or {}, memory_context=memory_context or [])
         self._session.add(plan)
@@ -894,7 +973,7 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def cancel_plan(self, plan_id: UUID, *, reason: str = "cancelled") -> None:
+    async def cancel_plan(self, plan_id: UUID, *, reason: str = "cancelled", commit: bool = True) -> None:
         plan = await self._plan(plan_id, lock=True)
         if plan.status in {PlanStatus.COMPLETED.value, PlanStatus.FAILED.value, PlanStatus.CANCELLED.value}:
             return
@@ -917,7 +996,7 @@ class SqlPlanStore:
             pause.status, pause.resolved_at = "cancelled", _now()
         plan.status = PlanStatus.CANCELLED.value
         await self._session.flush()
-        await self._commit()
+        await self._commit(commit=commit)
 
     async def heartbeat_task(self, plan_id: UUID, task_id: str, *, expected_attempt_number: Optional[int] = None) -> None:
         _, row, _ = await self._claimed_attempt(plan_id, task_id, expected_attempt_number)
@@ -928,6 +1007,8 @@ class SqlPlanStore:
         await self._commit()
 
     async def _plan(self, plan_id: UUID, *, lock: bool = False) -> RuntimePlan:
+        if lock and self._durable_fence is not None:
+            await self._durable_fence.fence()
         query = select(RuntimePlan).where(RuntimePlan.id == plan_id)
         if lock:
             query = query.with_for_update().execution_options(populate_existing=True)
@@ -1009,7 +1090,7 @@ class SqlPlanStore:
         return {
             "id": str(plan.id), "goal": plan.goal, "root_run_id": str(plan.root_run_id), "status": plan.status, "contract_version": plan.contract_version, "last_failure": plan.last_failure,
             "scope_context": dict(plan.scope_context or {}), "memory_context": list(plan.memory_context or []),
-            "pauses": [{"task_id": row.task_id, "payload": row.payload, "status": row.status} for row in pauses],
+            "pauses": [{"id": str(row.id), "task_id": row.task_id, "kind": row.kind, "payload": row.payload, "status": row.status} for row in pauses],
             "iterations": [{"id": str(row.id), "sequence": row.sequence, "terminal": row.terminal, "synthesis_brief": row.synthesis_brief, "status": row.status, "checkpoint_status": row.checkpoint_status, "checkpoint_claimed_at": row.checkpoint_claimed_at.isoformat() if row.checkpoint_claimed_at else None} for row in iterations],
             "tasks": {row.task_id: {"task_id": row.task_id, "iteration_id": str(row.iteration_id), "planned_order": row.planned_order, "executor": row.executor, "intent": row.intent, "instructions": row.instructions, "inputs": row.inputs, "expected_outputs": row.expected_outputs, "contract": row.compiled_contract, "freshness_policy": row.freshness_policy, "scope_context": row.scope_context or {}, "continuation_of": row.continuation_of, "memory_context": deepcopy(row.memory_context or []), "depends_on": dependency_map.get(row.id, []), "status": row.status, "result": row.result, "attempts": row.attempts, "next_retry_at": row.next_retry_at.isoformat() if row.next_retry_at else None, "updated_at": row.updated_at.isoformat()} for row in tasks},
             "needs": [{"task_id": next(row.task_id for row in tasks if row.id == need.task_row_id), "ref": need.need_ref, "key": need.need_key, "kind": need.kind, "description": need.description, "schema": need.schema, "context": need.context, "required": need.required} for need in needs],
@@ -1099,7 +1180,7 @@ class SqlPlanStore:
             _remove_bound_output(dependency, binding["output_key"])
         return {"task_id": task_id, "executor": task["executor"], "intent": task["intent"], "instructions": task["instructions"], "inputs": inputs, "dependency_outputs": dependencies, "dependency_bindings": [binding for binding in snapshot.get("bindings", []) if binding["consumer_task_id"] == task_id], "expected_outputs": task["expected_outputs"], "response_spec": task.get("response_spec") or task.get("contract", {}).get("response_spec", {}), "contract": {key: value for key, value in task.get("contract", {}).items() if key not in {"response_spec", "protocol_version"}}, "freshness_policy": task["freshness_policy"], "scope_context": task.get("scope_context", {}), "memory_context": deepcopy(task.get("memory_context") or []), "continuation_of": task.get("continuation_of"), "continuation_context": _continuation_context(task, snapshot, inputs), **_task_interactions(snapshot, task_id)}
 
-    async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction, *, expected_attempt_number: Optional[int] = None) -> None:
+    async def pause_interaction(self, plan_id: UUID, interaction: RuntimeInteraction, *, expected_attempt_number: Optional[int] = None, commit: bool = True) -> None:
         plan = await self._plan(plan_id, lock=True)
         if plan.status == PlanStatus.WAITING_INPUT.value:
             raise PlanValidationError("plan already has an active interaction")
@@ -1116,17 +1197,23 @@ class SqlPlanStore:
             payload={"interaction": interaction.model_dump(mode="json")}))
         plan.status = PlanStatus.WAITING_INPUT.value
         await self._session.flush()
-        await self._commit()
+        await self._commit(commit=commit)
 
-    async def resume_interaction(self, plan_id: UUID, interaction_id: str, response: Any) -> None:
+    async def resume_interaction(self, plan_id: UUID, interaction_id: str, response: Any, *, commit: bool = True, durable: bool = False) -> None:
         plan = await self._plan(plan_id, lock=True)
         pauses = (await self._session.execute(select(RuntimePause).where(
             RuntimePause.plan_id == plan_id, RuntimePause.status == "waiting").with_for_update())).scalars().all()
-        pause = next((row for row in pauses if (row.payload.get("interaction") or {}).get("id") == interaction_id), None)
+        pause = next((row for row in (await self._session.execute(select(RuntimePause).where(
+            RuntimePause.plan_id == plan_id).with_for_update())).scalars().all()
+            if (row.payload.get("interaction") or {}).get("id") == interaction_id), None)
         if pause is None:
             raise PlanValidationError("interaction does not match active pause")
         interaction = RuntimeInteraction.model_validate(pause.payload["interaction"])
         response = interaction.validate_response(response)
+        if durable and pause.status == "answered" and pause.payload.get("response") == response and plan.status == PlanStatus.ACTIVE.value:
+            return
+        if pause.status != "waiting":
+            raise PlanValidationError("interaction does not match active pause")
         task_row = None
         if interaction.requester.task_id:
             task_row = (await self._session.execute(select(RuntimePlanTask).where(
@@ -1148,7 +1235,7 @@ class SqlPlanStore:
                 iteration.checkpoint_status, iteration.checkpoint_claimed_at = "idle", None
         plan.status = PlanStatus.ACTIVE.value
         await self._session.flush()
-        await self._commit()
+        await self._commit(commit=commit)
 
     async def pause_confirmation(self, plan_id: UUID, task_id: str, payload: Dict[str, Any], *, expected_attempt_number: Optional[int] = None) -> None:
         fingerprint = str(payload.get("operation_fingerprint") or "").strip()
@@ -1234,7 +1321,7 @@ class SqlPlanStore:
         await self._session.flush()
         await self._commit()
 
-    async def complete_synthesis(self, plan_id: UUID) -> None:
+    async def complete_synthesis(self, plan_id: UUID, *, commit: bool = True) -> None:
         plan = await self._plan(plan_id, lock=True)
         iteration = await self._active_iteration(plan_id, lock=True)
         if iteration is None or iteration.checkpoint_status != "synthesis_running":
@@ -1243,7 +1330,7 @@ class SqlPlanStore:
         iteration.checkpoint_claimed_at = None
         plan.status = PlanStatus.COMPLETED.value
         await self._session.flush()
-        await self._commit()
+        await self._commit(commit=commit)
 
     async def recover_stale_claims(self, plan_id: UUID, *, stale_before: datetime) -> None:
         await self._plan(plan_id, lock=True)

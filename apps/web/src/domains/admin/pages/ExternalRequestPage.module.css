@@ -1,0 +1,139 @@
+.full-width {
+  grid-column: 1 / -1;
+}
+
+.plain-text {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: var(--line-height-relaxed);
+}
+
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.step {
+  --marker-size: var(--sp-6);
+  --step-color: var(--text-secondary);
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  min-height: var(--marker-size);
+  gap: var(--sp-2);
+  padding: var(--sp-1) 0 var(--sp-4) calc(var(--marker-size) + var(--sp-3));
+  overflow-wrap: anywhere;
+}
+
+.step:last-child {
+  padding-bottom: 0;
+}
+
+.step:not(:last-child)::before {
+  position: absolute;
+  inset: var(--marker-size) auto 0 calc(var(--marker-size) / 2);
+  width: 1px;
+  background: var(--border-color);
+  content: '';
+}
+
+.marker {
+  position: absolute;
+  inset: 0 auto auto 0;
+  display: grid;
+  place-items: center;
+  width: var(--marker-size);
+  height: var(--marker-size);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+  color: var(--step-color);
+}
+
+.step[data-tone='success'] {
+  --step-color: var(--success);
+}
+
+.step[data-tone='warn'] {
+  --step-color: var(--warning);
+}
+
+.step[data-tone='danger'] {
+  --step-color: var(--danger);
+}
+
+.step[data-tone='info'] {
+  --step-color: var(--primary);
+}
+
+.step-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  column-gap: var(--sp-4);
+  row-gap: var(--sp-1);
+}
+
+.step-header h3 {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+
+.sender {
+  margin: var(--sp-1) 0 0;
+}
+
+.sender,
+.step-time,
+.step-details {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.step-time,
+.step-details {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-3);
+}
+
+.step-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.message {
+  padding: var(--sp-3) var(--sp-4);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.step[data-direction='incoming'] .message {
+  background: var(--primary-light);
+}
+
+.step[data-direction='outgoing'] .message {
+  border-inline-start: var(--sp-1) solid var(--step-color);
+}
+
+@media (max-width: 1200px) {
+  .overview-block {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 480px) {
+  .step {
+    --marker-size: var(--sp-5);
+    padding-left: calc(var(--marker-size) + var(--sp-2));
+  }
+
+  .message {
+    padding: var(--sp-2) var(--sp-3);
+  }
+}

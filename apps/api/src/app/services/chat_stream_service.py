@@ -7,7 +7,7 @@ This service acts as a thin transport layer:
 - Delegates agent execution to the v3 RuntimePipeline
 """
 from __future__ import annotations
-from typing import Optional, Dict, Any, List, AsyncGenerator
+from typing import TYPE_CHECKING, Optional, Dict, Any, List, AsyncGenerator
 from datetime import datetime, timezone
 import asyncio
 import hashlib
@@ -39,6 +39,9 @@ from app.services.chat_attachment_service import ChatAttachmentService, ChatAtta
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.services.runtime_tail_event_bus import RuntimeTailSubscriber
 from app.core.db import get_session_factory
+
+if TYPE_CHECKING:
+    from app.services.durable_runtime_execution import DurableExecutionSegment
 
 logger = get_logger(__name__)
 
@@ -198,6 +201,7 @@ class ChatStreamService:
         persist_user_message: bool = True,
         runtime_run_id: Optional[str] = None,
         cancellation_reason: str = "Client disconnected",
+        durable_segment: DurableExecutionSegment | None = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send message and stream response while preserving current chat contract."""
 
@@ -382,6 +386,7 @@ class ChatStreamService:
                 preloaded_context_snapshot=context_snapshot,
                 requested_runtime_run_id=runtime_run_id,
                 cancellation_reason=cancellation_reason,
+                **({"durable_segment": durable_segment} if durable_segment is not None else {}),
             ):
                 yield event
 
@@ -393,6 +398,8 @@ class ChatStreamService:
             )
             yield _safe_stream_error(code, message)
         except Exception as e:
+            if durable_segment is not None:
+                raise
             logger.error(f"Error in send_message_stream: {e}", exc_info=True)
             if resumed_turn_id:
                 await self.session.rollback()
@@ -493,7 +500,7 @@ class ChatStreamService:
                 elif event.type == RuntimeEventType.STOP:
                     stop_payload = dict(event.data or {})
                     paused_payload = RuntimeHitlProtocolService.build_paused_from_stop(stop_payload)
-                    if paused_payload["reason"] not in {"waiting_input", "waiting_confirmation"}:
+                    if paused_payload["reason"] not in {"waiting_input", "waiting_confirmation", "waiting_timer"}:
                         # FAILED/COMPLETED STOP events are terminal markers,
                         # not resumable user interactions. The preceding
                         # ERROR/FINAL event owns their chat representation.
@@ -513,6 +520,13 @@ class ChatStreamService:
                 if isinstance(event.data.get("_progress"), dict):
                     return None
                 return self.event_mapper.map_runtime_event(event)
+
+            if tool_ctx.extra.get("durable_segment") is not None:
+                async for event in pipeline.execute(pipeline_request, tool_ctx):
+                    mapped = await _map_pipeline_event(event)
+                    if mapped:
+                        yield mapped
+                return
 
             try:
                 await tail_subscriber.subscribe()
@@ -601,6 +615,8 @@ class ChatStreamService:
                 "missing_credentials": e.missing.credentials if e.missing else [],
             }
         except Exception as e:
+            if tool_ctx.extra.get("durable_segment") is not None:
+                raise
             await self.session.rollback()
             logger.error(f"Router error: {e}", exc_info=True)
             yield _safe_stream_error("routing_failed", "Routing failed")

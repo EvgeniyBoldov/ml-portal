@@ -1,9 +1,13 @@
-import { useEffect } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { agentRunsApi, type AgentRunListItem } from '@/shared/api/admin';
+import { listExternalRequests, type ExternalRequestListItem } from '@/shared/api/externalRequests';
+import { qk } from '@/shared/api/keys';
 import { DataTable, type DataTableColumn, Badge } from '@/shared/ui';
 import { EntityPageV2, Tab } from '@/shared/ui/EntityPage';
+import { runStatusLabel, runStatusTone } from './agentRunStatus';
+import styles from './AgentRunsPage.module.css';
 
 const formatDate = (value: string): string => new Date(value).toLocaleString('ru-RU');
 const loggingLevelLabel: Record<string, string> = {
@@ -13,25 +17,6 @@ const loggingLevelLabel: Record<string, string> = {
   full: 'Полный',
   none: 'Выключено',
 };
-const runStatusLabel: Record<string, string> = {
-  completed: 'Завершён',
-  failed: 'Ошибка',
-  cancelled: 'Отменён',
-  running: 'Выполняется',
-  queued: 'В очереди',
-  waiting_retry: 'Повтор',
-  waiting_input: 'Ожидает ответа',
-  paused: 'На паузе',
-  unfulfillable: 'Не выполнено',
-};
-const runStatusTone = (status: string): 'neutral' | 'success' | 'warn' | 'danger' | 'info' => {
-  if (status === 'completed') return 'success';
-  if (status === 'failed' || status === 'unfulfillable') return 'danger';
-  if (status === 'cancelled' || status === 'waiting_retry' || status === 'waiting_input' || status === 'paused') return 'warn';
-  if (status === 'running') return 'info';
-  return 'neutral';
-};
-
 export default function AgentRunsPage() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -68,7 +53,7 @@ export default function AgentRunsPage() {
     { key: 'user_name', label: 'ПОЛЬЗОВАТЕЛЬ', width: 180, render: (run) => <span title={run.user_name || undefined}>{run.user_name || '—'}</span> },
   ];
   return (
-    <EntityPageV2 title="Запуски агентов" mode="view" defaultTab="agents" onTabChange={(tab) => {
+    <EntityPageV2 title="Запуски агентов" mode="view" defaultTab={searchParams.get('tab') === 'external-requests' ? 'external-requests' : 'agents'} onTabChange={(tab) => {
       setSearchParams((current) => {
         const next = new URLSearchParams(current);
         next.set('tab', tab);
@@ -80,6 +65,72 @@ export default function AgentRunsPage() {
           emptyText="Нет запусков с включённым логированием." paginated pageSize={20}
           onRowClick={(run) => navigate(`/admin/agent-runs/${run.agent_execution_id}`)} />
       </Tab>
+      <Tab title="Внешние запросы" id="external-requests" layout="full">
+        <ExternalRequestsTable />
+      </Tab>
     </EntityPageV2>
+  );
+}
+
+const externalRequestPath = (id: string) => `/admin/agent-runs/external-requests/${encodeURIComponent(id)}`;
+
+const externalRequestColumns: DataTableColumn<ExternalRequestListItem>[] = [
+  { key: 'source', label: 'Источник', width: 160 },
+  {
+    key: 'text_preview',
+    label: 'Поручение',
+    render: (row) => row.text_preview.length > 180
+      ? `${row.text_preview.slice(0, 180)}…`
+      : row.text_preview || '—',
+  },
+  { key: 'user_name', label: 'Пользователь', width: 180 },
+  {
+    key: 'status', label: 'Статус', width: 190,
+    render: (row) => <Badge tone={runStatusTone(row.status)}>{runStatusLabel[row.status] || row.status}</Badge>,
+  },
+  { key: 'created_at', label: 'Принято', width: 180, render: (row) => formatDate(row.created_at) },
+  { key: 'updated_at', label: 'Обновлено', width: 180, render: (row) => formatDate(row.updated_at) },
+  {
+    key: 'run_id',
+    label: 'ID запуска',
+    render: (row) => (
+      <Link to={externalRequestPath(row.run_id)} onClick={(event) => event.stopPropagation()}>
+        <code>{row.run_id}</code>
+      </Link>
+    ),
+  },
+];
+
+function ExternalRequestsTable() {
+  const navigate = useNavigate();
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const offset = (page - 1) * pageSize;
+  const { data, isPending, isError } = useQuery({
+    queryKey: qk.admin.externalRequests(pageSize, offset),
+    queryFn: () => listExternalRequests(pageSize, offset),
+    placeholderData: keepPreviousData,
+    refetchInterval: 15_000,
+  });
+
+  if (isError && !data) return <p role="alert">Не удалось загрузить внешние запросы.</p>;
+
+  return (
+    <DataTable
+      columns={externalRequestColumns}
+      data={data?.items ?? []}
+      keyField="run_id"
+      rowClassName={() => styles['external-request-row']}
+      onRowClick={(row) => navigate(externalRequestPath(row.run_id))}
+      loading={isPending}
+      emptyText="Внешних поручений пока нет."
+      paginated
+      serverPaginated
+      currentPage={page}
+      pageSize={pageSize}
+      totalItems={data?.total ?? 0}
+      onPageChange={setPage}
+      onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+    />
   );
 }

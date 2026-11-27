@@ -313,6 +313,119 @@ class TestChatTurnOrchestrator:
         assert orchestrator.turn_service.session.commit.await_count == 2
 
     @pytest.mark.asyncio
+    async def test_execute_turn_durable_timer_pause_finishes_segment_with_saved_pause_id(
+        self, orchestrator: ChatTurnOrchestrator
+    ):
+        """The durable worker path must persist the planner's timer pause ID.
+
+        execute_claimed_segment resumes the claimed ChatTurn (persist_user_message=False,
+        resumed_turn_id set) and drives the pipeline with a durable segment. When the
+        planner pauses on a timer, the pause ID saved by plan_store.pause_timer must
+        travel through the STOP -> run_paused mapping into durable_segment.finish and
+        the persisted turn state; a fallback UUID here would orphan the timer pause.
+        """
+        from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
+
+        turn_id = uuid4()
+        run_id = "00000000-0000-0000-0000-000000000040"
+        pause_id = str(uuid4())
+        wake_at = "2026-01-01T12:05:00+00:00"
+        chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")
+        orchestrator.turn_service.get_by_id = AsyncMock(
+            return_value=SimpleNamespace(id=turn_id, user_message_id="user-1")
+        )
+        orchestrator.turn_service.pause_turn = AsyncMock()
+        orchestrator.turn_service.attach_user_message = AsyncMock()
+        orchestrator.turn_service.attach_assistant_message = AsyncMock()
+        orchestrator.persistence_service.create_assistant_message = AsyncMock(
+            return_value=SimpleNamespace(message_id="assistant-1", created_at="2026-01-01T12:00:01Z")
+        )
+
+        # The pipeline emits a STOP for the paused planner; the stream service maps it
+        # through build_paused_from_stop (chat_stream_service._map_pipeline_event).
+        # Build the event with the same mapping so the contract is exercised verbatim.
+        paused_payload = RuntimeHitlProtocolService.build_paused_from_stop({
+            "reason": "waiting_timer",
+            "run_id": run_id,
+            "question": None,
+            "message": "Проверю статус через 5 минут.",
+            "action": None,
+            "context": {
+                "pause_id": pause_id,
+                "wake_at": wake_at,
+                "reason": "waiting_timer",
+                "user_update": "Проверю статус через 5 минут.",
+            },
+        })
+
+        async def fake_run_with_router(**kwargs):
+            yield {"type": "run_paused", **paused_payload}
+
+        durable_segment = AsyncMock()
+        events = [
+            event
+            async for event in orchestrator.execute_turn(
+                chat=chat,
+                chat_id="chat-1",
+                user_id="user-1",
+                content="hello",
+                artifact_ids=[],
+                attachment_meta=[],
+                attachment_contexts=[],
+                idempotency_key=None,
+                continuation_meta={"durable_runtime": True},
+                persist_user_message=False,
+                run_with_router=fake_run_with_router,
+                store_idempotency=AsyncMock(),
+                bind_attachments=AsyncMock(),
+                preloaded_context=[],
+                resumed_turn_id=str(turn_id),
+                requested_runtime_run_id=run_id,
+                durable_segment=durable_segment,
+            )
+        ]
+
+        # The segment is finished exactly once with the planner's saved pause ID.
+        durable_segment.finish.assert_awaited_once()
+        finish_args = durable_segment.finish.await_args
+        assert finish_args.args[0] == "waiting_timer"
+        assert finish_args.kwargs["context"]["pause_id"] == pause_id
+        assert finish_args.kwargs["context"]["wake_at"] == wake_at
+        assert finish_args.kwargs["action"]["pause_id"] == pause_id
+        assert finish_args.kwargs["action"]["transport"] == "messenger"
+
+        # The messenger user_update is persisted before the checkpoint commit.
+        orchestrator.persistence_service.create_assistant_message.assert_awaited_once()
+        message_kwargs = orchestrator.persistence_service.create_assistant_message.await_args.kwargs
+        assert message_kwargs["content"] == "Проверю статус через 5 минут."
+        assert message_kwargs["extra_meta"]["runtime_status"] == "waiting_timer"
+
+        # The same pause identity is checkpointed on the turn.
+        orchestrator.turn_service.pause_turn.assert_awaited_once_with(
+            turn_id,
+            pause_status="waiting_timer",
+            runtime_run_id=run_id,
+            paused_action=ANY,
+            paused_context=ANY,
+        )
+        pause_kwargs = orchestrator.turn_service.pause_turn.await_args.kwargs
+        assert pause_kwargs["paused_action"]["pause_id"] == pause_id
+        assert pause_kwargs["paused_action"]["transport"] == "messenger"
+        assert pause_kwargs["paused_context"]["pause_id"] == pause_id
+        assert pause_kwargs["paused_context"]["wake_at"] == wake_at
+
+        # The consumer sees the resumable timer stop frame with the pause identity.
+        stop_event = next(event for event in events if event["type"] == "stop")
+        assert stop_event["reason"] == "waiting_timer"
+        assert stop_event["context"]["pause_id"] == pause_id
+        assert stop_event["context"]["wake_at"] == wake_at
+        state_events = [event for event in events if event.get("type") == "state"]
+        assert any(event.get("status") == "waiting_timer" for event in state_events)
+        # The durable worker owns the turn: no user message is re-persisted.
+        orchestrator.persistence_service.create_user_message.assert_not_awaited()
+        orchestrator.turn_service.resume_turn.assert_not_awaited()
+
+    @pytest.mark.asyncio
     @pytest.mark.asyncio
     async def test_execute_turn_persists_failed_assistant_message_on_runtime_error(self, orchestrator: ChatTurnOrchestrator):
         chat = SimpleNamespace(tenant_id="00000000-0000-0000-0000-000000000001", name="Chat")

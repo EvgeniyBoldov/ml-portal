@@ -280,6 +280,10 @@ def _build_continuation_state(
     }
     if "interaction_response" in checkpoint:
         structured["interaction_response"] = checkpoint["interaction_response"]
+    if structured["resume_action"] == "timer_elapsed":
+        for key in ("pause_id", "planned_wake_at", "actual_wake_at"):
+            if checkpoint.get(key) is not None:
+                structured[key] = checkpoint[key]
     history = [dict(item) for item in paused_context.get("clarification_history", []) if isinstance(item, dict)]
     interaction = interaction_from_context(paused_context)
     if interaction is not None and "interaction_response" in checkpoint:
@@ -546,6 +550,10 @@ class RuntimePipeline:
 
         resume_checkpoint = _extract_resume_checkpoint(request)
         continuation_state = _build_continuation_state(request, resume_checkpoint)
+        if request.continuation_meta.get("durable_runtime") is True:
+            continuation_state["durable_runtime"] = True
+            if request.continuation_meta.get("durable_timezone"):
+                continuation_state["durable_timezone"] = request.continuation_meta["durable_timezone"]
         run_id_str = str(ctx.extra["runtime_root_run_id"])
         run_id = UUID(run_id_str)
         sandbox_run = bool((request.sandbox_overrides or {}).get("sandbox_run_id"))
@@ -753,7 +761,9 @@ class RuntimePipeline:
         resuming_interaction = interaction_from_context(continuation_state.get("paused_context"))
         # Old signed confirmation checkpoints also belong to a saved task.
         resume_graph = (resuming_interaction is not None and resuming_interaction.requester.stage in {"planner", "agent"}) or (
-            resuming_interaction is None and continuation_state.get("resume_action") == "confirm")
+            resuming_interaction is None and continuation_state.get("resume_action") == "confirm") or (
+            continuation_state.get("durable_runtime") is True
+            and continuation_state.get("resume_action") in {"timer_elapsed", "segment_recovered"})
         root_route_recommendation = None
         preflight_started = False
         recent_dialogue = _recent_dialogue(list(request.messages or []))
@@ -1188,7 +1198,7 @@ class RuntimePipeline:
                         terminal_state="completed", project_context=turn_mem.project_context,
                         term_bindings=lookup.get("glossary") or [])
                     ctx.extra["runtime_terminal_delegated"] = True
-                    self._dispatch_chat_post_final_tail(
+                    tail_task = self._dispatch_chat_post_final_tail(
                         turn_mem=turn_mem, runtime_state=runtime_state, request=request,
                         stop_reason=PipelineStopReason.COMPLETED, emitter=emitter,
                         branch_id=branch_id,
@@ -1198,6 +1208,7 @@ class RuntimePipeline:
                         start_event=ctx.extra.get("chat_post_final_tail_ready"),
                         logging_level=run_logging_level,
                     )
+                    ctx.extra["chat_post_final_tail_task"] = tail_task
                     # The user-visible chat stream ends on synthesizer FINAL.
                     # Fact writeback and run observability continue detached.
                     return
@@ -1327,7 +1338,7 @@ class RuntimePipeline:
         ):
             terminal_status = (planning_outcome.stop_reason.value if planning_outcome.stop_reason else "failed")
             runtime_state.set_lifecycle_status(
-                terminal_status if terminal_status in {"waiting_input", "waiting_confirmation"} else "failed"
+                terminal_status if terminal_status in {"waiting_input", "waiting_confirmation", "waiting_timer"} else "failed"
             )
             yield await emitter.emit(
                 RuntimeEvent.orchestrator_end(
@@ -1377,7 +1388,7 @@ class RuntimePipeline:
                     )
             await self._apply_chat_context_outcome(
                 request=request, runtime_state=runtime_state, branch_id=branch_id,
-                terminal_state=("waiting_confirmation" if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value else "waiting_input" if terminal_status == PipelineStopReason.WAITING_INPUT.value else "failed"),
+                terminal_state=("waiting_confirmation" if terminal_status == PipelineStopReason.WAITING_CONFIRMATION.value else "waiting_input" if terminal_status == PipelineStopReason.WAITING_INPUT.value else "waiting_timer" if terminal_status == PipelineStopReason.WAITING_TIMER.value else "failed"),
                 project_context=turn_mem.project_context,
                 clarification={"question": planning_outcome.pause_question, "message": planning_outcome.pause_message} if planning_outcome.kind == GraphPlanningOutcomeKind.PAUSED else None,
                 term_bindings=lookup.get("glossary") or [],
@@ -1436,7 +1447,7 @@ class RuntimePipeline:
                 terminal_state="completed", project_context=turn_mem.project_context,
                 term_bindings=lookup.get("glossary") or [])
             ctx.extra["runtime_terminal_delegated"] = True
-            self._dispatch_chat_post_final_tail(
+            tail_task = self._dispatch_chat_post_final_tail(
                 turn_mem=turn_mem,
                 runtime_state=runtime_state,
                 request=request,
@@ -1452,6 +1463,7 @@ class RuntimePipeline:
                 recall_tenant_id=tenant_id,
                 logging_level=run_logging_level,
             )
+            ctx.extra["chat_post_final_tail_task"] = tail_task
             return
 
     async def _apply_chat_context_outcome(
@@ -1620,7 +1632,7 @@ class RuntimePipeline:
         recall_item: dict[str, Any] | None = None,
         recall_tenant_id: UUID | None = None,
         logging_level: Optional[str] = None,
-    ) -> None:
+    ) -> asyncio.Task[None]:
         """Detach non-user-visible work after a chat synthesis FINAL.
 
         A streaming request owns the session used to synthesize and persist the
@@ -1665,6 +1677,7 @@ class RuntimePipeline:
                 logger.exception("chat_runtime_tail_failed", extra={"run_id": str(runtime_state.run_id)})
 
         task.add_done_callback(_finished)
+        return task
 
     async def _run_chat_post_final_tail(
         self,

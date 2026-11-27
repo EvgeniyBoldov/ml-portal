@@ -262,7 +262,13 @@ export function useChatStreaming({
               );
             } else if (event.type === 'state') {
               const activeStatus = event.status;
-              if (activeStatus === 'running' || activeStatus === 'waiting_input' || activeStatus === 'waiting_confirmation') {
+              if (
+                activeStatus === 'queued' ||
+                activeStatus === 'running' ||
+                activeStatus === 'waiting_timer' ||
+                activeStatus === 'waiting_input' ||
+                activeStatus === 'waiting_confirmation'
+              ) {
                 setActiveRun(current => current ? {
                   ...current,
                   runId: event.runId,

@@ -26,6 +26,7 @@ from app.runtime.task_result_reducer import TaskAttemptResultReducer
 from app.runtime.memory.effective_scope import EffectiveScopeContext, ScopeSelection, task_scope, scope_selection_changes
 from app.runtime.memory.document_memory import DOCUMENT_MEMORY_TYPES, document_memory
 from app.runtime.memory.execution_context import memory_execution_context
+from app.runtime.planner.graph_planner import TimerPauseRequired
 
 
 def _context_failure_event(exc: BaseException) -> Optional[RuntimeEvent]:
@@ -155,6 +156,7 @@ class OrchestratorEvent(dict):
                 "completed": RuntimeEventType.PLAN_COMPLETED,
                 "failed": RuntimeEventType.PLAN_FAILED,
                 "waiting_input": RuntimeEventType.PLAN_WAITING_INPUT,
+                "waiting_timer": RuntimeEventType.PLAN_WAITING_TIMER,
             }.get(status)
             if event_type is not None:
                 return RuntimeEvent.plan_lifecycle(
@@ -163,6 +165,12 @@ class OrchestratorEvent(dict):
                     status=status,
                     error_code=(self.get("error_code") or "runtime_execution_failed") if status == "failed" else None,
                 )
+        if event_name == "timer_pause":
+            return RuntimeEvent.status(
+                "timer_paused", entity_type="plan", entity_id=plan_id,
+                pause_id=self.get("pause_id"), wake_at=self.get("wake_at"),
+                reason=self.get("reason"), user_update=self.get("user_update"),
+            )
         if event_name in {"task_started", "task_completed", "task_needs_dependency", "task_unfulfillable"}:
             outcome = str(self.get("outcome") or "")
             lifecycle_type = {
@@ -378,7 +386,8 @@ class GraphOrchestrator:
                                    memory_context=list(snapshot.get("memory_context", planner_kwargs.get("planner_memory_context")) or []),
                                    task_brief=dict(getattr(getattr(runtime_state, "run_context", None), "task_brief", {})
                                                    or planner_kwargs.get("task_brief") or {}),
-                                   scope_context=dict(snapshot.get("scope_context") or planner_kwargs.get("scope_context") or {})),
+                                   scope_context=dict(snapshot.get("scope_context") or planner_kwargs.get("scope_context") or {}),
+                                   timer_resume=dict(planner_kwargs.get("timer_resume") or {})),
             plan_id=plan_id,
             run_id=UUID(str(snapshot["root_run_id"])),
         )
@@ -819,7 +828,12 @@ class GraphOrchestrator:
                              expected_attempt_number: int | None = None) -> OrchestratorEvent:
             requester = interaction.requester.model_copy(update={"plan_id": str(plan_id), "task_id": task_id})
             interaction = interaction.model_copy(update={"requester": requester})
-            await self.store.pause_interaction(plan_id, interaction, expected_attempt_number=expected_attempt_number)
+            durable_segment = getattr(planner_kwargs.get("ctx"), "extra", {}).get("durable_segment")
+            if durable_segment is not None:
+                await durable_segment.fence()
+            await self.store.pause_interaction(plan_id, interaction,
+                expected_attempt_number=expected_attempt_number,
+                commit=planner_kwargs.get("timer_enabled") is not True)
             event_type = (RuntimeEventType.CONFIRMATION_REQUIRED if interaction.reason == "waiting_confirmation"
                           else RuntimeEventType.WAITING_INPUT)
             return OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent(event_type, {
@@ -830,6 +844,17 @@ class GraphOrchestrator:
                 "interaction": interaction.model_dump(mode="json"),
                 **(interaction.operation or {}),
             }))
+        async def pause_timer(exc: TimerPauseRequired) -> OrchestratorEvent:
+            if planner_kwargs.get("timer_enabled") is not True:
+                raise PlanValidationError("timer pause is only available for durable runs")
+            pause_context = {**exc.payload, "checkpoint": exc.checkpoint}
+            durable_segment = getattr(planner_kwargs.get("ctx"), "extra", {}).get("durable_segment")
+            if durable_segment is not None:
+                await durable_segment.fence()
+            pause_id = await self.store.pause_timer(plan_id, pause_context, commit=False)
+            return OrchestratorEvent(type="timer_pause", plan_id=str(plan_id), pause_id=pause_id,
+                                     wake_at=exc.payload["wake_at"], reason=exc.payload["reason"],
+                                     user_update=exc.payload.get("user_update"), checkpoint=exc.checkpoint)
         async def fail(code: str, exc: BaseException | str) -> None:
             await self.store.mark_failed(plan_id, code, str(exc))
         runtime_limits = planner_kwargs.get("runtime_limits") if isinstance(planner_kwargs.get("runtime_limits"), dict) else {}
@@ -856,7 +881,8 @@ class GraphOrchestrator:
                 iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1,
             ))
             try:
-                proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger="initial", available_agents=available_agents,
+                initial_trigger = "timer_elapsed" if planner_kwargs.get("timer_resume") else "initial"
+                proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger=initial_trigger, available_agents=available_agents,
                                                       available_artifacts=artifacts, planner_kwargs=planner_kwargs)
                 applied_snapshot = await self.store.snapshot(plan_id)
                 applied_iteration_id = str(applied_snapshot["iterations"][-1]["id"])
@@ -870,6 +896,13 @@ class GraphOrchestrator:
             except InteractionRequired as exc:
                 yield await pause_user(exc.interaction)
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
+                return
+            except TimerPauseRequired as exc:
+                yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                    iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=1,
+                    status="paused", outcome="waiting_timer"))
+                yield await pause_timer(exc)
+                yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_timer")
                 return
             except Exception as exc:
                 # Another delivery may have won the initial apply race.  It
@@ -980,7 +1013,8 @@ class GraphOrchestrator:
                     iteration_id=trace_iteration_id, orchestrator_id=planner_parent, iteration=next_iteration_number,
                 ))
                 try:
-                    proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger=decision.reason or "planner_checkpoint",
+                    planner_trigger = "timer_elapsed" if planner_kwargs.get("timer_resume") else (decision.reason or "planner_checkpoint")
+                    proposal = await self._invoke_planner(plan_id=plan_id, goal=goal, trigger=planner_trigger,
                                                           available_agents=available_agents, available_artifacts=artifacts, planner_kwargs=planner_kwargs)
                     applied_snapshot = await self.store.snapshot(plan_id)
                     applied_iteration_id = str(applied_snapshot["iterations"][-1]["id"])
@@ -993,6 +1027,13 @@ class GraphOrchestrator:
                     ):
                         yield graph_event
                     continue
+                except TimerPauseRequired as exc:
+                    yield OrchestratorEvent(type="_runtime_event", runtime_event=RuntimeEvent.planner_iteration_end(
+                        iteration_id=trace_iteration_id, orchestrator_id=planner_parent,
+                        iteration=next_iteration_number, status="paused", outcome="waiting_timer"))
+                    yield await pause_timer(exc)
+                    yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_timer")
+                    return
                 except InteractionRequired as exc:
                     yield await pause_user(exc.interaction)
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="waiting_input")
@@ -1092,7 +1133,12 @@ class GraphOrchestrator:
                     await fail("synthesis_failed", "synthesis did not produce a final answer")
                     yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="failed", error_code="synthesis_failed")
                     return
-                await self.store.complete_synthesis(plan_id)
+                durable_segment = getattr(planner_kwargs.get("ctx"), "extra", {}).get("durable_segment")
+                if durable_segment is None:
+                    await self.store.complete_synthesis(plan_id)
+                else:
+                    await durable_segment.fence()
+                    await self.store.complete_synthesis(plan_id, commit=False)
                 yield OrchestratorEvent(type="plan_terminal", plan_id=str(plan_id), status="completed")
                 return
             if decision.kind == SchedulerActionKind.EXECUTE_TASK:

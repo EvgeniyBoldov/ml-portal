@@ -1,20 +1,21 @@
 /**
  * PlatformSettingsPage - Global platform configuration (singleton)
  *
- * Tabs: Модели | Ограничения | Фолбеки | Лимиты | Общие доступы | RBAC
+ * Tabs: Модели | Ограничения | Фолбеки | Лимиты | Общие доступы | Интеграции
  * Uses EntityPageV2 + Tab architecture.
  */
 import { modelTableColumns } from './ModelTableColumns';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { credentialsApi } from '@/shared/api/credentials';
 import { adminApi, type Model, type ModelListResponse, type PlatformSettings, type PlatformSettingsUpdate } from '@/shared/api/admin';
 import { qk } from '@/shared/api/keys';
-import { DataTable, Button } from '@/shared/ui';
+import { Badge, DataTable, Button, type DataTableColumn } from '@/shared/ui';
 import { EntityPageV2, Tab } from '@/shared/ui';
 import { buildEntityCrudActions } from '@/shared/ui/EntityPage/entityCrudActions';
 import { ADMIN_ACTION_LABELS, ADMIN_ENTITY_LABELS } from '@/shared/constants/adminLabels';
-import { RBACRulesTable } from '@/shared/ui/RBACRulesTable/RBACRulesTable';
+import { assignmentIntegrationsApi, type AssignmentIntegration } from '@/shared/api/assignmentIntegrations';
+import { useIntegrationConnectors } from './IntegrationPage';
 import { CredentialsPanel } from '@/shared/ui/CredentialsPanel';
 import { Block, type FieldConfig } from '@/shared/ui/GridLayout';
 import { usePlatformSettings, useUpdatePlatformSettings, useFillPlatformSettingsDefaults, usePlatformExecutionLimits, useUpdatePlatformExecutionLimits, useAgentDefaultExecutionLimits, useUpdateAgentDefaultExecutionLimits, useOrchestratorDefaultExecutionLimits, useUpdateOrchestratorDefaultExecutionLimits } from '@/shared/api/hooks/usePlatformSettings';
@@ -141,6 +142,27 @@ const CHAT_UPLOAD_FIELDS: FieldConfig[] = [
 
 export function PlatformSettingsPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const integrations = useQuery({
+    queryKey: qk.assignmentIntegrations.list,
+    queryFn: assignmentIntegrationsApi.list,
+  });
+  const { data: integrationConnectors = [] } = useIntegrationConnectors();
+  const integrationColumns: DataTableColumn<AssignmentIntegration>[] = [
+    { key: 'name', label: 'Название' },
+    { key: 'source', label: 'Идентификатор', render: (row) => <code>{row.source}</code> },
+    {
+      key: 'connector_id',
+      label: 'Коннектор для ответа',
+      render: (row) => integrationConnectors.find((connector) => connector.id === row.connector_id)?.name ?? '—',
+    },
+    {
+      key: 'is_active', label: 'Статус',
+      render: (row) => row.is_active
+        ? <Badge tone="success">Активна</Badge>
+        : <Badge tone="neutral">Отключена</Badge>,
+    },
+  ];
   const [showConfirmDialog, setShowConfirmDialog] = useState(false);
   const [pendingUpdates, setPendingUpdates] = useState<PlatformSettingsUpdate | null>(null);
   const [mode, setMode] = useState<'view' | 'edit'>('view');
@@ -247,6 +269,7 @@ export function PlatformSettingsPage() {
     <>
       <EntityPageV2
         title="Настройки платформы"
+        defaultTab={searchParams.get('tab') === 'integrations' ? 'integrations' : undefined}
         mode={mode}
         breadcrumbs={[{ label: 'Настройки платформы' }]}
       >
@@ -425,11 +448,25 @@ export function PlatformSettingsPage() {
       </Tab>
 
       <Tab
-        title="RBAC"
+        title="Интеграции"
         layout="full"
-        id="rbac"
+        id="integrations"
+        badge={integrations.data?.length}
+        actions={[
+          <Button key="create-integration" variant="primary" onClick={() => navigate('/admin/integrations/new')}>
+            Создать интеграцию
+          </Button>,
+        ]}
       >
-        <RBACRulesTable mode="platform" />
+        {integrations.isError && <p role="alert">Не удалось загрузить интеграции.</p>}
+        <DataTable
+          columns={integrationColumns}
+          data={integrations.data ?? []}
+          keyField="id"
+          loading={integrations.isLoading}
+          emptyText="Интеграции ещё не созданы."
+          onRowClick={(row) => navigate(`/admin/integrations/${row.id}`)}
+        />
       </Tab>
     </EntityPageV2>
 

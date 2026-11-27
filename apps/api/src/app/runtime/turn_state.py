@@ -55,7 +55,7 @@ class RuntimeTurnState(BaseModel):
 
     # This is a lifecycle projection, not an execution stage or progress event.
     status: Literal[
-        "running", "waiting_input", "waiting_confirmation",
+        "running", "waiting_input", "waiting_confirmation", "waiting_timer",
         "completed", "failed", "cancelled",
     ] = "running"
     final_answer: Optional[str] = None
@@ -129,7 +129,7 @@ class RuntimeTurnState(BaseModel):
 
     def set_lifecycle_status(self, status: str) -> None:
         allowed = {
-            "running", "waiting_input", "waiting_confirmation",
+            "running", "waiting_input", "waiting_confirmation", "waiting_timer",
             "completed", "failed", "cancelled",
         }
         if status not in allowed:

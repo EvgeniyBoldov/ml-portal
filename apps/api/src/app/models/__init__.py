@@ -74,6 +74,10 @@ from .runtime_plan import (
     RuntimePlanTask, RuntimeTaskAttempt, RuntimeToolResult, RuntimeTaskDependency, RuntimeTaskNeed,
     RuntimeTaskResolution,
 )
+from .durable_runtime import (
+    DurableRuntimeCommand, DurableRuntimeEvent, DurableRuntimePause,
+    DurableRuntimeRun, DurableRuntimeSegment,
+)
 
 __all__ = [
     "Base",
@@ -190,3 +194,6 @@ from .long_memory_document import LongMemoryDocumentOperation
 from .runtime_context import ChatArtifactRepresentation, RuntimeRunContext
 from .shadow_invocation import ShadowInvocation
 from .shadow_execution_guard import ShadowExecutionGuard
+
+from .external_assignment_identity import ExternalAssignmentIdentity
+from .assignment_integration import AssignmentIntegration, AssignmentIntegrationToken

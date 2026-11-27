@@ -37,6 +37,7 @@ class ConnectorType(str, Enum):
     DATA = "data"
     MCP = "mcp"
     MODEL = "model"
+    INTEGRATION = "integration"
 
 
 class InstancePlacement(str, Enum):
@@ -78,7 +79,7 @@ class ToolInstance(Base):
     )
     connector_type: Mapped[str] = mapped_column(
         String(20), nullable=False, server_default='data',
-        comment="Connector type: data | mcp | model"
+        comment="Connector type: data | mcp | model | integration"
     )
     connector_subtype: Mapped[Optional[str]] = mapped_column(
         String(20), nullable=True,
@@ -137,7 +138,7 @@ class ToolInstance(Base):
             name="ck_instance_kind"
         ),
         CheckConstraint(
-            "connector_type IN ('data', 'mcp', 'model')",
+            "connector_type IN ('data', 'mcp', 'model', 'integration')",
             name="ck_connector_type"
         ),
         CheckConstraint(
