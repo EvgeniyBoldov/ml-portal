@@ -78,7 +78,7 @@ class DecisionPayload(_Payload):
 class RecentAnchorPayload(_Payload):
     user_intent: str = Field(default="", max_length=1200)
     assistant_outcome: str = Field(default="", max_length=1200)
-    terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "failed"]
+    terminal_state: Literal["completed", "waiting_input", "waiting_confirmation", "waiting_timer", "failed"]
 
 
 from app.agents.runtime.result_context import ResultObservation as ResultObservationPayload

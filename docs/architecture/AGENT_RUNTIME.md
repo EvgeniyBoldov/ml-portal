@@ -38,6 +38,12 @@ runtime добавляет идентификаторы и транзакцио�
 - sub-agent operation loop,
 - canonical event journal and pause handling.
 
+Messenger integrations can opt into [durable runtime](./DURABLE_RUNTIME.md).
+The worker enters the ordinary root pipeline for the initial segment. A
+durable PlannerStep can request a scheduled pause. Its continuation
+preserves the plan and run identity and returns to the saved planner
+checkpoint with an explicit timer signal.
+
 ## Shadow API invocation
 
 `Agent.agent_type` is `regular` (default, including existing agents) or `shadow`.
@@ -740,6 +746,16 @@ requester; the client sends only the interaction ID and response.
 - Chat and sandbox accept `{ "action": "answer", "pause_id": "...", "response": ... }`.
   Signed operation confirmation tokens remain runtime-owned. Old `input`/`confirm`
   payloads are adapters for existing clients.
+
+Trusted durable runs may also pause on `PlannerStep.kind=wait_until`. The
+planner contract carries an absolute timezone-aware `wake_at`, a reason, and
+optional next-check/user-update text. Runtime validates configured delay
+bounds, persists the private planner checkpoint in `runtime_pauses`, and
+transitions the plan to `waiting_timer`. User-facing STOP context contains only
+the pause ID, wake time, reason, and update. A timer continuation must match
+that pause ID and carry the planned and actual wake times; replaying an already
+elapsed pause is idempotent. Ordinary chat and sandbox runs do not enable this
+planner option.
 
 The full contract, persistence, policy and trace behavior are described in
 [Runtime Interactions](./RUNTIME_INTERACTIONS.md).

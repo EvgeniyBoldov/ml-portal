@@ -15,6 +15,7 @@ interface ChatComposerProps {
   ) => void | boolean | Promise<void | boolean>;
   onStop?: () => void;
   isStreaming?: boolean;
+  canStopScheduledRun?: boolean;
   disabled?: boolean;
   placeholder?: string;
   previousMessage?: string;
@@ -24,6 +25,7 @@ export function ChatComposer({
   onSend,
   onStop,
   isStreaming,
+  canStopScheduledRun,
   disabled,
   placeholder,
   previousMessage,
@@ -232,7 +234,7 @@ export function ChatComposer({
   }, [revokePreviews]);
 
   const locked = disabled || isStreaming || isSending;
-  const canStop = (isStreaming || isSending) && !!onStop;
+  const canStop = (isStreaming || isSending || canStopScheduledRun) && !!onStop;
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !locked;
   const acceptValue = useMemo(() => {
     const list = uploadPolicy?.allowed_extensions ?? [

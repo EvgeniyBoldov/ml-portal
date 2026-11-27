@@ -101,6 +101,7 @@ class PipelineStopReason(str, Enum):
     COMPLETED = "completed"
     WAITING_INPUT = "waiting_input"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    WAITING_TIMER = "waiting_timer"
     FAILED = "failed"
     LOOP_DETECTED = "loop_detected"
     BUDGET_EXCEEDED = "budget_exceeded"

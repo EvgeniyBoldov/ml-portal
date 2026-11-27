@@ -31,6 +31,15 @@ vi.mock('@tanstack/react-query', () => ({
         health_status: 'unknown',
         created_at: '2026-01-02T00:00:00Z',
       },
+      {
+        id: 'conn-3',
+        name: 'Clouds Bot',
+        slug: 'clouds-bot',
+        connector_type: 'integration',
+        connector_subtype: null,
+        is_active: true,
+        created_at: '2026-01-03T00:00:00Z',
+      },
     ],
     isLoading: false,
     error: null,
@@ -88,6 +97,20 @@ afterEach(() => {
 });
 
 describe('InstancesListPage', () => {
+  it('finds integration connectors by type', () => {
+    render(
+      <MemoryRouter>
+        <InstancesListPage />
+      </MemoryRouter>
+    );
+
+    fireEvent.change(screen.getByPlaceholderText('Поиск коннекторов...'), {
+      target: { value: 'integration' },
+    });
+    expect(screen.getByRole('button', { name: 'Clouds Bot' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Billing MCP' })).not.toBeInTheDocument();
+  });
+
   it('filters connectors by name and navigates to the selected connector', () => {
     render(
       <MemoryRouter>

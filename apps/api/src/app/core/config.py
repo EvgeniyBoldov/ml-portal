@@ -1,9 +1,13 @@
 from __future__ import annotations
 from functools import lru_cache
 from pydantic_settings import BaseSettings
-from pydantic import Field, ConfigDict, field_validator, ValidationInfo
+from pydantic import Field, SecretStr, ConfigDict, field_validator, ValidationInfo
 
 class Settings(BaseSettings):
+    ASSIGNMENT_CONNECTOR_TOKENS: dict[str, SecretStr] = Field(default_factory=dict)
+    ASSIGNMENT_REPLY_ROUTES: dict[str, list[str]] = Field(default_factory=dict)
+    DURABLE_RUNTIME_ENABLED: bool = False
+    DURABLE_RUNTIME_LEASE_SECONDS: int = Field(default=900, ge=60, le=86400)
     # Environment
     # Default to the locked-down mode. Local development must opt in explicitly.
     ENV: str = Field(default="production")

@@ -195,6 +195,12 @@ class TurnPreflight:
         system_prompt = (self._llm._compile_role_prompt(role_config,
             role_override if isinstance(role_override, dict) else None, schema=TurnPreflightDecision)
             if role_config is not None else "")
+        if (continuation or {}).get("durable_runtime") is True:
+            system_prompt += (
+                "\nDurable scheduled work is enabled for this trusted run. Preserve any needed clarification, "
+                "and route monitoring, repeated checks, or future follow-up to planner so it can schedule a "
+                "durable timer. Route immediate answer requests normally."
+            )
         resumed = interaction_from_context((continuation or {}).get("paused_context"))
         checkpoint_results = list(resumed.checkpoint.get("memory_tool_results") or []) if resumed else []
         # File contents are an access-controlled read result. A paused

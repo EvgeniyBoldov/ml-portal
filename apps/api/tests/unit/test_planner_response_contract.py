@@ -1,6 +1,8 @@
 """The provider must see the same planner envelope rules as local validation."""
 from __future__ import annotations
 
+import json
+
 import pytest
 from copy import deepcopy
 from types import SimpleNamespace
@@ -75,6 +77,124 @@ def test_provider_schema_requires_only_the_selected_payload(response):
     with pytest.raises(ValidationError):
         PlannerStep.model_validate(response)
     assert not Draft202012Validator(PlannerStep.model_json_schema()).is_valid(response)
+
+
+def test_timer_pause_requires_timezone_and_is_a_single_typed_payload():
+    response = {"kind": "wait_until", "wait_until": {
+        "wake_at": "2026-11-27T15:00:00+03:00", "reason": "Check again",
+        "next_check": "Read the application status", "user_update": "I will check tomorrow.",
+    }}
+    step = PlannerStep.model_validate(response)
+    assert step.wait_until.wake_at.isoformat() == "2026-11-27T12:00:00+00:00"
+    Draft202012Validator(PlannerStep.model_json_schema()).validate(response)
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate({"kind": "wait_until", "wait_until": {
+            "wake_at": "2026-11-27T15:00:00", "reason": "Check again",
+        }})
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate({**response, "proposal": {"terminal": "planner"}})
+
+
+def test_missing_kind_is_inferred_from_a_single_root_payload():
+    """Models sometimes emit the payload without their discriminator.
+
+    A single root payload identifies the step unambiguously; recover the
+    kind instead of failing the whole planning decision, and journal the
+    normalization exactly like the legacy proposal envelopes.
+    """
+    notes: list[dict[str, str]] = []
+    tool_step = StructuredLLMCall._parse_and_validate(
+        json.dumps({"tool_call": {"tool": "memory.search", "arguments": {"query": "status", "limit": 5}}}),
+        PlannerStep, normalizations=notes,
+    )
+    assert tool_step.kind == "tool_call"
+    assert tool_step.tool_call is not None and tool_step.tool_call.tool == "memory.search"
+
+    wait_step = PlannerStep.model_validate({"wait_until": {
+        "wake_at": "2026-11-27T15:00:00+03:00", "reason": "Check again",
+    }})
+    assert wait_step.kind == "wait_until" and wait_step.wait_until is not None
+
+    # Ambiguous or mixed payloads must not be silently reinterpreted.
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate({"tool_call": {"tool": "memory.search", "arguments": {"query": "x"}},
+                                    "wait_until": {"wake_at": "2026-11-27T15:00:00+03:00", "reason": "Check"}})
+    with pytest.raises(ValidationError):
+        PlannerStep.model_validate({"tool_call": {"tool": "memory.search", "arguments": {"query": "x"}},
+                                    "kind": "wait_until"})
+    assert notes == [{"path": "$", "operation": "infer_kind_from_payload"}]
+
+
+def test_timer_bounds_are_measured_against_the_clock_given_to_the_model():
+    """The LLM roundtrip must not eat the requested short-timer margin.
+
+    durable_clock is captured before the planner call; wake_at bounds have
+    to use that base, otherwise a 65-second timer with a 60-second minimum
+    always fails once the model answers a few seconds later.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.runtime.planner.graph_planner import GraphPlanner
+
+    given = datetime(2026, 11, 27, 12, 0, 0, tzinfo=timezone.utc)
+    after_roundtrip = given + timedelta(seconds=30)
+    payload = {"durable_clock": {"current_utc_time": given.isoformat()}}
+
+    base = GraphPlanner.timer_delay_base(payload, now=after_roundtrip)
+    assert base == given
+    # A wake requested 65 seconds from the supplied clock stays valid even
+    # though only 35 seconds remain on the post-response wall clock.
+    assert (given + timedelta(seconds=65) - base).total_seconds() == 65
+
+    # Missing or malformed clocks fall back to the wall clock.
+    assert GraphPlanner.timer_delay_base({}, now=after_roundtrip) == after_roundtrip
+    assert GraphPlanner.timer_delay_base(
+        {"durable_clock": {"current_utc_time": "not-a-time"}}, now=after_roundtrip
+    ) == after_roundtrip
+
+
+@pytest.mark.asyncio
+async def test_planner_payload_tells_the_model_which_timer_wake_it_is(monkeypatch):
+    """Multi-step schedules need the wake counter in the request payload.
+
+    The stage already computes timer_pause_count for the pause limit; the
+    planner must forward it so the model continues at the right step instead
+    of repeating the middle instruction on every wake.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from app.runtime.orchestrator_contracts import PlannerContext, PlanRequest
+    from app.runtime.planner import graph_planner
+    from app.runtime.planner.graph_planner import GraphPlanner, PlannerStep
+
+    proposal = {"terminal": "planner", "tasks": [
+        {"task_id": "t", "executor": "worker", "intent": "check", "instructions": "Check"}]}
+    planner = GraphPlanner(session=object(), llm_client=AsyncMock())
+    captured = {}
+
+    async def invoke(*, payload, schema, output_validator, **kwargs):
+        captured.update(payload)
+        return SimpleNamespace(value=PlannerStep(kind="proposal", proposal=proposal))
+
+    planner._llm = SimpleNamespace(
+        role_service=SimpleNamespace(get_role_config=AsyncMock(return_value={})),
+        _compile_role_prompt=Mock(return_value="prompt"),
+        invoke=invoke,
+    )
+    tools = SimpleNamespace(descriptors=AsyncMock(return_value=[]), execute=AsyncMock())
+    factory = lambda **kwargs: tools
+    factory.MAX_CALLS = 0
+    monkeypatch.setattr(graph_planner, "RoleMemoryTools", factory)
+    request = PlanRequest(context=PlannerContext(
+        goal="goal", trigger="timer_elapsed", execution_ledger={}, scope_context={"keys": ["company"]}))
+
+    await planner.plan(request=request, timer_enabled=True, timer_pause_count=2)
+    assert captured["timer_wake_count"] == 2
+    # The initial round (no completed pauses yet) must not carry the counter.
+    captured.clear()
+    await planner.plan(request=request, timer_enabled=True, timer_pause_count=0)
+    assert "timer_wake_count" not in captured
 
 
 @pytest.mark.parametrize("terminal", ["planner", "synthesis"])

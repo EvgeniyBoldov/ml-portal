@@ -38,6 +38,7 @@ app = Celery(
         # Shadow document study tasks
         "app.workers.tasks_shadow_document_memory",
         "app.workers.tasks_shadow_invocations",
+        "app.workers.tasks_durable_runtime",
         "app.workers.tasks_hipporag_document",
         "app.workers.tasks_long_memory_documents",
     ],
@@ -54,6 +55,11 @@ def build_default_beat_schedule() -> dict:
         "shadow-invocation-dispatch": {
             "task": "app.workers.tasks_shadow_invocations.dispatch_shadow_invocations",
             "schedule": 15.0,
+            "options": {"queue": "maintenance.default"},
+        },
+        "durable-runtime-dispatch": {
+            "task": "app.workers.tasks_durable_runtime.dispatch_durable_runtime",
+            "schedule": 5.0,
             "options": {"queue": "maintenance.default"},
         },
         "long-memory-document-operations": {
@@ -215,6 +221,8 @@ app.conf.task_queues = (
 
 # Маршрутизация задач по очередям
 app.conf.task_routes = {
+    "app.workers.tasks_durable_runtime.execute_durable_runtime_segment": {"queue": "chat_critical", "priority": 10},
+    "app.workers.tasks_durable_runtime.dispatch_durable_runtime": {"queue": "maintenance.default", "priority": 2},
     "app.workers.tasks_shadow_invocations.execute_shadow_invocation": {"queue": "maintenance.default", "priority": 1},
     "app.workers.tasks_shadow_invocations.dispatch_shadow_invocations": {"queue": "maintenance.default", "priority": 1},
     # RAG ingest pipeline tasks
@@ -310,6 +318,7 @@ else:
     # with general periodic maintenance disabled.
     app.conf.beat_schedule = {
         "shadow-invocation-dispatch": build_default_beat_schedule()["shadow-invocation-dispatch"],
+        "durable-runtime-dispatch": build_default_beat_schedule()["durable-runtime-dispatch"],
         "long-memory-embedding-reindex": build_default_beat_schedule()["long-memory-embedding-reindex"],
         "long-memory-document-operations": build_default_beat_schedule()["long-memory-document-operations"],
         "memory-finalize-outbox-reconcile": build_default_beat_schedule()["memory-finalize-outbox-reconcile"],

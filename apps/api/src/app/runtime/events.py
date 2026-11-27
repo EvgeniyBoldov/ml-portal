@@ -90,6 +90,7 @@ class RuntimeEventType(str, Enum):
     PLAN_CREATED = "plan_created"
     PLAN_ITERATION_APPLIED = "plan_iteration_applied"
     PLAN_WAITING_INPUT = "plan_waiting_input"
+    PLAN_WAITING_TIMER = "plan_waiting_timer"
     PLAN_COMPLETED = "plan_completed"
     PLAN_FAILED = "plan_failed"
     TASK_PLANNED = "task_planned"
@@ -419,6 +420,7 @@ class RuntimeEvent:
             RuntimeEventType.PLAN_CREATED,
             RuntimeEventType.PLAN_ITERATION_APPLIED,
             RuntimeEventType.PLAN_WAITING_INPUT,
+            RuntimeEventType.PLAN_WAITING_TIMER,
             RuntimeEventType.PLAN_COMPLETED,
             RuntimeEventType.PLAN_FAILED,
         }:

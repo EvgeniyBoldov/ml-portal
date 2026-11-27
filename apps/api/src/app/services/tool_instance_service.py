@@ -15,13 +15,15 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import (
+    ConflictError,
     ToolInstanceNotFoundError,
     LocalInstanceProtectedError,
     AppError as ToolInstanceError,
 )
 from app.core.logging import get_logger
-from app.models.tool_instance import ToolInstance, InstancePlacement, InstanceKind
+from app.models.tool_instance import ConnectorType, ToolInstance, InstancePlacement, InstanceKind
 from app.models.collection import Collection
+from app.repositories.assignment_integrations import AssignmentIntegrationsRepository
 from app.repositories.tool_instance_repository import ToolInstanceRepository
 from app.services.collection_linking import resolve_bound_collection_by_instance_id
 from app.services.connector_templates import (
@@ -92,12 +94,14 @@ class ToolInstanceService:
     @staticmethod
     def _validate_config_requirements(
         *,
+        connector_type: str,
         instance_kind: str,
         placement: str,
         url: str,
         config: Optional[Dict[str, Any]],
     ) -> None:
         ToolInstanceValidationService.validate_config_requirements(
+            connector_type=connector_type,
             instance_kind=instance_kind,
             placement=placement,
             url=url,
@@ -219,6 +223,8 @@ class ToolInstanceService:
             normalized_domain = normalized_domain or "mcp"
         elif connector_type == "model":
             normalized_domain = normalized_domain or "llm"
+        elif connector_type == ConnectorType.INTEGRATION:
+            normalized_domain = ConnectorType.INTEGRATION.value
 
         await self._validate_access_link(
             connector_type=connector_type,
@@ -246,6 +252,7 @@ class ToolInstanceService:
             config=normalized_config,
         )
         self._validate_config_requirements(
+            connector_type=connector_type,
             instance_kind=instance_kind,
             placement=placement,
             url=url if placement == InstancePlacement.REMOTE.value else "",
@@ -299,13 +306,19 @@ class ToolInstanceService:
             )
 
         if connector_type is None and instance_kind is not None:
-            inferred = "mcp"
+            inferred = (
+                instance.connector_type
+                if instance.connector_type == ConnectorType.INTEGRATION
+                else ConnectorType.MCP.value
+            )
             connector_type = inferred if instance_kind == InstanceKind.SERVICE.value else "data"
         next_connector_type = (
             ToolInstanceValidationService.normalize_connector_type(connector_type)
             if connector_type is not None
             else instance.connector_type
         )
+        if instance.connector_type == ConnectorType.INTEGRATION and next_connector_type != instance.connector_type:
+            await self._ensure_integration_connector_unused(instance.id)
         subtype_candidate = (
             connector_subtype
             if connector_subtype is not None
@@ -324,6 +337,8 @@ class ToolInstanceService:
             next_domain = next_domain or "mcp"
         elif next_connector_type == "model":
             next_domain = next_domain or "llm"
+        elif next_connector_type == ConnectorType.INTEGRATION:
+            next_domain = ConnectorType.INTEGRATION.value
         next_url = url if url is not None else instance.url
         next_access_via = (
             access_via_instance_id
@@ -359,6 +374,7 @@ class ToolInstanceService:
             config=normalized_config,
         )
         self._validate_config_requirements(
+            connector_type=next_connector_type,
             instance_kind=next_kind,
             placement=instance.placement,
             url=next_url if instance.placement == InstancePlacement.REMOTE.value else "",
@@ -407,7 +423,13 @@ class ToolInstanceService:
             raise LocalInstanceProtectedError(
                 "System-managed instances are managed by platform internals and cannot be deleted manually"
             )
+        if instance.connector_type == ConnectorType.INTEGRATION:
+            await self._ensure_integration_connector_unused(instance_id)
         await self.repo.delete(instance)
+
+    async def _ensure_integration_connector_unused(self, instance_id: UUID) -> None:
+        if await AssignmentIntegrationsRepository(self.session).has_connector(instance_id):
+            raise ConflictError("Выберите другой коннектор в связанных интеграциях")
     
     async def _invalidate_discovered_tools(self, instance_id: UUID) -> None:
         """Mark all discovered tools from an MCP provider as inactive."""

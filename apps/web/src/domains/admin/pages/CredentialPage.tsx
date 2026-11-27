@@ -6,6 +6,7 @@
  */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useSearchParams } from 'react-router-dom';
 import { credentialsApi, type Credential, type CredentialCreate } from '@/shared/api/credentials';
 import { toolInstancesApi, type ToolInstance } from '@/shared/api/toolInstances';
 import { qk } from '@/shared/api/keys';
@@ -128,6 +129,9 @@ function prefixedPayload(payload: Record<string, string> | Record<string, unknow
 /* ─── Component ─── */
 
 export default function CredentialPage() {
+  const [searchParams] = useSearchParams();
+  const linkedInstanceId = searchParams.get('instance_id') ?? '';
+
   const {
     mode,
     isNew,
@@ -162,7 +166,7 @@ export default function CredentialPage() {
       detail: (id) => qk.credentials.detail(id),
     },
     getInitialFormData: (cred) => ({
-      instance_id: cred?.instance_id ?? '',
+      instance_id: cred ? (cred.instance_id ?? '') : linkedInstanceId,
       auth_type: cred?.auth_type ?? 'token',
       payload: cred ? getPayloadTemplate(cred.auth_type) : getPayloadTemplate('token'),
       owner_platform: cred?.owner_platform ?? true,

@@ -3,13 +3,15 @@
 ## Persisted lifecycle
 
 `chat_turns.status` is the authoritative lifecycle for one logical user turn.
-Revision `0206` normalizes persisted values to:
+Revision `0206` normalizes legacy values. Durable runs add two states in revision `0217`.
 
 | Status | Meaning | Terminal |
 | --- | --- | --- |
+| `queued` | A durable execution segment is waiting for a worker claim | No |
 | `running` | The turn is executing, including a resumed continuation | No |
 | `waiting_input` | The turn is paused for a user answer | No |
 | `waiting_confirmation` | The turn is paused for an explicit confirmation | No |
+| `waiting_timer` | A durable turn is paused at a planner checkpoint until a scheduled time | No |
 | `completed` | The assistant answer was persisted successfully | Yes |
 | `failed` | Execution or final persistence failed | Yes |
 | `cancelled` | An explicit Stop or paused-run cancel ended the turn | Yes |
@@ -178,3 +180,20 @@ sets the expected upper bound for status update latency while connected.
 `ChatTurnState` is an in-memory execution-phase tracker only. `RuntimeTurnState`
 has a lifecycle projection with the same canonical vocabulary. Neither replaces
 the persisted `ChatTurn` lifecycle.
+
+## Durable messenger runs
+
+The messenger integration creates a dedicated chat and persists its original
+message and run before acknowledging acceptance. A logical turn keeps its
+run ID across all execution segments. Its public lifecycle also includes
+`queued` for a segment awaiting a worker and `waiting_timer` for a planner
+checkpoint awaiting a scheduled time. These statuses are nonterminal.
+A durable turn is owned by its worker claim and lease. API-process heartbeat
+expiry applies to the interactive runner. Messenger answers use the durable
+integration endpoint with the active pause ID.
+
+The portal may observe and cancel its owner's durable run. Timer pauses
+expose only the pause identity and wake time in the public pause context.
+The database holds the private continuation. The integration event feed
+supports replay by sequence and acknowledges delivery independently of
+execution success. See [durable runtime](DURABLE_RUNTIME.md).

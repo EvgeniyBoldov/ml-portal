@@ -5,9 +5,11 @@ from enum import Enum
 
 
 class ChatTurnStatus(str, Enum):
+    QUEUED = "queued"
     RUNNING = "running"
     WAITING_INPUT = "waiting_input"
     WAITING_CONFIRMATION = "waiting_confirmation"
+    WAITING_TIMER = "waiting_timer"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -46,6 +48,6 @@ def normalize_chat_turn_status(status: str, pause_status: str | None = None) -> 
 
 
 def waiting_status_for_pause(pause_status: str | None) -> str:
-    if pause_status == ChatTurnStatus.WAITING_CONFIRMATION.value:
-        return ChatTurnStatus.WAITING_CONFIRMATION.value
+    if pause_status in {ChatTurnStatus.WAITING_CONFIRMATION.value, ChatTurnStatus.WAITING_TIMER.value}:
+        return pause_status
     return ChatTurnStatus.WAITING_INPUT.value

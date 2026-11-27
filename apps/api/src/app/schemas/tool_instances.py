@@ -2,7 +2,7 @@
 Pydantic schemas for ToolInstance API (v3).
 
 Instance v3 classification axes:
-- connector_type: data | mcp | model
+- connector_type: data | mcp | model | integration
 - connector_subtype: sql | api (for data connectors)
 - placement: local | remote
 
@@ -32,8 +32,8 @@ class ToolInstanceCreate(BaseModel):
     instance_kind: str = Field("data", pattern="^(data|service)$", description="data | service")
     connector_type: str = Field(
         "data",
-        pattern="^(data|mcp|model)$",
-        description="Connector type: data | mcp | model",
+        pattern="^(data|mcp|model|integration)$",
+        description="Connector type: data | mcp | model | integration",
     )
     connector_subtype: Optional[str] = Field(
         default=None,
@@ -61,7 +61,7 @@ class ToolInstanceUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     instance_kind: Optional[str] = Field(default=None, pattern="^(data|service)$")
-    connector_type: Optional[str] = Field(default=None, pattern="^(data|mcp|model)$")
+    connector_type: Optional[str] = Field(default=None, pattern="^(data|mcp|model|integration)$")
     connector_subtype: Optional[str] = Field(default=None, pattern="^(sql|api)$")
     url: Optional[str] = None
     provider_kind: Optional[str] = None

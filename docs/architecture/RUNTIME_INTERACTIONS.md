@@ -156,3 +156,13 @@ completed-tool preservation and policy denial. It does not replace
 `test_runtime_interactions_pg.py` checks migration and checkpoint/answer
 persistence across PostgreSQL sessions in isolated schemas; set
 `RUNTIME_INTERACTION_TEST_URL` to an asyncpg SQLAlchemy URL to run it.
+
+## Durable segments
+
+Messenger runs use the same typed question and requester contracts. An
+accepted answer consumes the matching pause and queues a continuation in
+one database transaction. A duplicate delivery with the same event identity
+returns the existing run. A stale pause identity cannot advance a newer
+question. The worker resumes the saved requester and retains the same root
+run ID. Scheduled planner pauses accept a timer signal from the dispatcher.
+See [durable runtime](DURABLE_RUNTIME.md).

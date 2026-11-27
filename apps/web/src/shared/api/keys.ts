@@ -40,6 +40,8 @@ export const qk = {
   },
   admin: {
     all: () => ['admin'] as const,
+    externalRequest: (id: string) => ['admin', 'external-requests', id] as const,
+    externalRequests: (limit: number, offset: number) => ['admin', 'external-requests', limit, offset] as const,
     dashboard: (days: 1 | 7 | 30) => ['admin', 'dashboard', days] as const,
     glossary: {
       all: () => ['admin', 'glossary'] as const,
@@ -175,6 +177,11 @@ export const qk = {
       skip?: number;
     }) => ['connectors', 'list', params] as const,
     detail: (id: string) => ['connectors', 'detail', id] as const,
+  },
+  assignmentIntegrations: {
+    list: ['assignment-integrations', 'list'] as const,
+    detail: (id: string) => ['assignment-integrations', 'detail', id] as const,
+    tokens: (id: string) => ['assignment-integrations', 'tokens', id] as const,
   },
   credentials: {
     all: () => ['credentials'] as const,

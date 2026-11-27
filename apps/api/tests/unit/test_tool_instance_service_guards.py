@@ -50,6 +50,44 @@ async def test_create_remote_instance_requires_url():
 
 
 @pytest.mark.asyncio
+async def test_integration_connector_updates_endpoint_without_probing_it(monkeypatch):
+    service = ToolInstanceService(session=MagicMock(flush=AsyncMock()))
+    service.repo.get_by_slug = AsyncMock(return_value=None)
+    service.repo.create = AsyncMock(side_effect=lambda instance: instance)
+    service.repo.update = AsyncMock(side_effect=lambda instance: instance)
+    http_client = MagicMock()
+    monkeypatch.setattr("httpx.AsyncClient", http_client)
+    endpoint = "https://clouds.example.test/api/v1/integrations/assignments/events"
+
+    instance = await service.create_instance(
+        slug="clouds-bot",
+        name="Clouds Bot",
+        connector_type="integration",
+        url=endpoint,
+    )
+    assert instance.connector_type == "integration"
+    assert instance.instance_kind == "service"
+    assert instance.placement == "remote"
+    assert instance.connector_subtype is None
+    assert instance.url == endpoint
+
+    service.get_instance = AsyncMock(return_value=instance)
+    result = await service.health.check_health(instance.id)
+    assert result.status == "unknown"
+    http_client.assert_not_called()
+
+    with pytest.raises(ToolInstanceError, match="absolute HTTP"):
+        await service.update_instance(instance.id, url="https://user:secret@clouds.example.test/events")
+    assert instance.url == endpoint
+
+    updated = await service.update_instance(
+        instance.id, instance_kind="service", url="http://clouds:8080/events"
+    )
+    assert updated.url == "http://clouds:8080/events"
+    assert updated.connector_type == "integration"
+
+
+@pytest.mark.asyncio
 async def test_create_manual_local_instance_is_blocked():
     service = ToolInstanceService(session=MagicMock())
     service.repo.get_by_slug = AsyncMock(return_value=None)

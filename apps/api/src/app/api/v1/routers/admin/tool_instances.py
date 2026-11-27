@@ -141,7 +141,7 @@ async def list_tool_instances(
     limit: int = 100,
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     instance_kind: Optional[str] = Query(None, description="Filter: data|service"),
-    connector_type: Optional[str] = Query(None, description="Filter: data|mcp|model"),
+    connector_type: Optional[str] = Query(None, description="Filter: data|mcp|model|integration"),
     placement: Optional[str] = Query(None, description="Filter: local|remote"),
     connector_subtype: Optional[str] = Query(None, description="Filter: sql|api"),
     db: AsyncSession = Depends(db_session),

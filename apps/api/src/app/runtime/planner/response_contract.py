@@ -1,6 +1,7 @@
 """LLM-facing planner declarations and lossless envelope compatibility."""
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any, Literal
 from pydantic import BaseModel, Field, GetJsonSchemaHandler, ValidationInfo, field_validator, model_validator
 from pydantic.json_schema import JsonSchemaValue
@@ -43,12 +44,29 @@ class PlannerProposalInput(IterationProposal):
 PlannerMemoryToolCall = MemoryToolCall
 
 
+class PlannerWaitUntil(BaseModel):
+    """A requested durable wake time; authorization and bounds are runtime-owned."""
+    wake_at: datetime
+    reason: str = Field(..., min_length=1, max_length=500)
+    next_check: str | None = Field(default=None, max_length=1_000)
+    user_update: str | None = Field(default=None, max_length=2_000)
+    model_config = {"extra": "forbid"}
+
+    @field_validator("wake_at")
+    @classmethod
+    def require_timezone(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("wake_at must include a timezone")
+        return value.astimezone(timezone.utc)
+
+
 class PlannerStep(BaseModel):
     """One direct planner decision: contextual read or persisted proposal."""
-    kind: Literal["tool_call", "proposal", "interaction"]
+    kind: Literal["tool_call", "proposal", "interaction", "wait_until"]
     tool_call: PlannerMemoryToolCall | None = None
     proposal: PlannerProposalInput | None = None
     interaction: InteractionQuestion | None = None
+    wait_until: PlannerWaitUntil | None = None
     model_config = {"extra": "forbid"}
 
     @field_validator("proposal", mode="before")
@@ -70,12 +88,13 @@ class PlannerStep(BaseModel):
                     payload: {"type": "object"},
                     **{
                         other: {"type": "null"}
-                        for other in ("tool_call", "proposal", "interaction") if other != payload
+                        for other in ("tool_call", "proposal", "interaction", "wait_until") if other != payload
                     },
                 },
                 "required": [payload],
             }
-            for kind, payload in (("tool_call", "tool_call"), ("proposal", "proposal"), ("interaction", "interaction"))
+            for kind, payload in (("tool_call", "tool_call"), ("proposal", "proposal"),
+                                  ("interaction", "interaction"), ("wait_until", "wait_until"))
         ]
         return schema
 
@@ -87,7 +106,17 @@ class PlannerStep(BaseModel):
         adapted = value
         operation = None
         # Accept one extra envelope only; never search inside arbitrary data.
-        if set(value) == {"proposal"} and isinstance(value["proposal"], dict):
+        single_payload = next(
+            (key for key in ("tool_call", "interaction", "wait_until") if set(value) == {key}),
+            None,
+        )
+        if single_payload is not None:
+            # Some models emit the payload object without its discriminator.
+            # A single root payload identifies the step unambiguously, so
+            # recover the kind instead of failing the whole decision.
+            adapted = {"kind": single_payload, single_payload: value[single_payload]}
+            operation = "infer_kind_from_payload"
+        elif set(value) == {"proposal"} and isinstance(value["proposal"], dict):
             inner = value["proposal"]
             if inner.get("kind") == "proposal" and "proposal" in inner:
                 adapted, operation = dict(inner), "unwrap_proposal_envelope"
@@ -150,11 +179,17 @@ class PlannerStep(BaseModel):
     @model_validator(mode="after")
     def validate_shape(self) -> "PlannerStep":
         if self.kind == "interaction":
-            if self.interaction is None or self.tool_call is not None or self.proposal is not None:
+            if self.interaction is None or any((self.tool_call is not None, self.proposal is not None, self.wait_until is not None)):
                 raise ValueError("interaction step requires only an interaction question")
+            return self
+        if self.kind == "wait_until":
+            if self.wait_until is None or any((self.tool_call is not None, self.proposal is not None, self.interaction is not None)):
+                raise ValueError("wait_until step requires only a wait_until payload")
             return self
         if self.interaction is not None:
             raise ValueError("interaction question requires kind=interaction")
+        if self.wait_until is not None:
+            raise ValueError("wait_until payload requires kind=wait_until")
         if self.kind == "tool_call" and self.tool_call is None:
             raise ValueError("tool_call step requires tool_call")
         if self.kind == "proposal" and self.proposal is None:

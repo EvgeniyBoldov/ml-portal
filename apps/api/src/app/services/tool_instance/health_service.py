@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.parse import quote, urlparse
 
 from app.core.http.tls import outbound_http_verify
+from app.models.tool_instance import ConnectorType
 from app.services.credential_service import CredentialService
 from app.services.mcp_jsonrpc_client import (
     mcp_call_tool,
@@ -45,6 +46,9 @@ class ToolInstanceHealthService:
     async def perform_health_check(self, instance):
         connector_type = str(getattr(instance, "connector_type", "") or "").strip().lower()
         connector_subtype = str(getattr(instance, "connector_subtype", "") or "").strip().lower()
+
+        if connector_type == ConnectorType.INTEGRATION:
+            return HealthCheckResult(status="unknown", message="Integration has no configured health probe")
 
         if connector_type == "mcp":
             return await self._check_mcp_connector(instance)

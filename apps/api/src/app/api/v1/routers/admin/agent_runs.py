@@ -7,6 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import db_session, require_admin
 from app.core.security import UserCtx
+from app.repositories.external_requests import get_external_request, list_external_requests
+from app.schemas.admin_external_requests import ExternalRequestDetail, ExternalRequestPage
 from app.schemas.runtime_events import RuntimeJournalEventResponse
 from app.services.runtime_event_journal_service import RuntimeEventJournalService
 from app.models.agent import Agent
@@ -113,6 +115,28 @@ async def list_agent_runs(
         "logging_level": row.logging_level,
         "started_at": row.occurred_at,
     } for row in rows]
+
+
+@router.get("/external-requests", response_model=ExternalRequestPage)
+async def list_external_assignment_runs(
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> ExternalRequestPage:
+    return await list_external_requests(db, limit=limit, offset=offset)
+
+
+@router.get("/external-requests/{run_id}", response_model=ExternalRequestDetail)
+async def get_external_assignment_run(
+    run_id: UUID,
+    db: AsyncSession = Depends(db_session),
+    _: UserCtx = Depends(require_admin),
+) -> ExternalRequestDetail:
+    request = await get_external_request(db, run_id)
+    if request is None:
+        raise HTTPException(status_code=404, detail="External assignment not found")
+    return request
 
 
 @router.get("/{agent_execution_id}")

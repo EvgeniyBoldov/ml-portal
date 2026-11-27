@@ -54,6 +54,7 @@ from app.services.chat_runtime_runner import (
 from app.services.runtime_tail_event_bus import RuntimeRunControlBus, RuntimeTailEventBus, RuntimeTailSubscriber
 from app.core.chat_lifecycle import (
     ACTIVE_STATUSES,
+    ChatTurnStatus,
     WAITING_STATUSES,
     normalize_chat_turn_status,
 )
@@ -70,6 +71,9 @@ router = APIRouter()
 logger = get_logger(__name__)
 CHAT_STATUS_POLL_SECONDS = 2.0
 CHAT_STATUS_KEEPALIVE_SECONDS = 15.0
+OBSERVABLE_RUN_STATUSES = ACTIVE_STATUSES + (
+    ChatTurnStatus.QUEUED.value, ChatTurnStatus.WAITING_TIMER.value,
+)
 
 
 async def _saved_run_events(
@@ -89,11 +93,11 @@ async def _saved_run_events(
             return []
         turn, answer = row
         status = normalize_chat_turn_status(turn.status, turn.pause_status)
-        if status == "running":
+        if status in {"running", "queued"}:
             return []
         events = [{"type": "state", "run_id": str(run_id), "status": status,
                    "pause_reason": turn.pause_status, "user_message_id": turn.user_message_id}]
-        if status in WAITING_STATUSES:
+        if status in WAITING_STATUSES or status == "waiting_timer":
             events.append({"type": "run_paused", "run_id": str(run_id), "reason": status,
                            "action": turn.paused_action or {}, "context": turn.paused_context or {}})
         elif status == "cancelled":
@@ -289,7 +293,7 @@ async def get_paused_run(
         .where(
             ChatTurn.chat_id == chat_uuid,
             ChatTurn.user_id == uuid.UUID(str(current_user.id)),
-            ChatTurn.status.in_(WAITING_STATUSES),
+            ChatTurn.status.in_(WAITING_STATUSES + ("waiting_timer",)),
         )
         .order_by(ChatTurn.paused_at.desc(), ChatTurn.started_at.desc())
         .limit(1)
@@ -323,7 +327,7 @@ async def get_active_chat_run(
         .where(
             ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
             ChatTurn.user_id == uuid.UUID(str(current_user.id)),
-            ChatTurn.status.in_(ACTIVE_STATUSES),
+            ChatTurn.status.in_(OBSERVABLE_RUN_STATUSES),
         )
         .order_by(ChatTurn.started_at.desc())
         .limit(1)
@@ -370,7 +374,7 @@ async def global_chat_status_events(
                     for turn in turns:
                         if not turn.runtime_run_id or normalize_chat_turn_status(
                             turn.status, turn.pause_status,
-                        ) not in ACTIVE_STATUSES + WAITING_STATUSES:
+                        ) not in OBSERVABLE_RUN_STATUSES + WAITING_STATUSES:
                             continue
                         try:
                             activity = await read_chat_stage_snapshot(redis, str(turn.runtime_run_id))
@@ -431,7 +435,7 @@ async def attach_chat_run_events(
                 ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
                 ChatTurn.user_id == uuid.UUID(str(current_user.id)),
                 ChatTurn.runtime_run_id == run_uuid,
-                ChatTurn.status.in_(ACTIVE_STATUSES),
+                ChatTurn.status.in_(OBSERVABLE_RUN_STATUSES),
             ).limit(1)
         )
         turn = result.scalar_one_or_none()
@@ -485,6 +489,24 @@ async def cancel_active_chat_run(
         raise HTTPException(status_code=400, detail="Invalid run ID") from exc
     if str(chat_ctx.chat_id) != str(chat_id):
         raise HTTPException(status_code=404, detail="Chat not found")
+    from app.models.durable_runtime import DurableRuntimeRun
+    from app.services.durable_runtime_service import DurableRuntimeService
+
+    if await session.get(DurableRuntimeRun, run_uuid) is not None:
+        durable_turn = await session.scalar(select(ChatTurn.id).where(
+            ChatTurn.chat_id == uuid.UUID(chat_ctx.chat_id),
+            ChatTurn.user_id == uuid.UUID(str(current_user.id)),
+            ChatTurn.runtime_run_id == run_uuid,
+        ))
+        if durable_turn is None:
+            raise HTTPException(status_code=404, detail="Active run not found")
+        outcome = await DurableRuntimeService(session).cancel(
+            run_uuid, event_key=f"portal-cancel:{run_uuid}", actor_user_id=uuid.UUID(str(current_user.id)),
+        )
+        status = outcome.status
+        await session.commit()
+        return {"run_id": str(run_uuid), "accepted": status == "cancelled"}
+
     result = await session.execute(
         select(ChatTurn).where(
             ChatTurn.chat_id == uuid.UUID(str(chat_ctx.chat_id)),
@@ -602,6 +624,14 @@ async def send_message_stream(
     _rl: None = Depends(rate_limit_dependency(key_prefix="chat_messages", rpm=30, rph=600)),
 ) -> StreamingResponse:
     """Send a message to a chat with SSE streaming."""
+    from app.models.durable_runtime import DurableRuntimeRun
+
+    durable_turn = await session.scalar(
+        select(DurableRuntimeRun.id).join(ChatTurn, ChatTurn.id == DurableRuntimeRun.chat_turn_id)
+        .where(ChatTurn.chat_id == uuid.UUID(chat_ctx.chat_id)).limit(1)
+    )
+    if durable_turn is not None:
+        raise HTTPException(status_code=409, detail="Этот чат связан с поручением из мессенджера")
     content = body.content
     artifact_ids = [str(item) for item in body.artifact_ids or []]
 
@@ -739,8 +769,10 @@ async def resume_run(
         session=session,
         current_user=current_user,
     )
-    tenant_uuid_val = uuid.UUID(chat_ctx.tenant_id)
     paused_action = turn.paused_action
+    if isinstance(paused_action, dict) and paused_action.get("transport") == "messenger":
+        raise HTTPException(status_code=409, detail="Ответьте на вопрос в исходном треде")
+    tenant_uuid_val = uuid.UUID(chat_ctx.tenant_id)
     paused_context = turn.paused_context
 
     expected_pause_id = (paused_action or {}).get("pause_id")

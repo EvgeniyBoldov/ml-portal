@@ -18,7 +18,13 @@ function getRecentDistinctProgress(run: ActiveChatRun, limit = 2) {
   return recent;
 }
 
-function getStatusLabel(status: ActiveChatRun['status']) {
+export function getChatRunStatusLabel({ status, wakeAt }: ActiveChatRun) {
+  if (status === 'queued') return 'В очереди';
+  if (status === 'waiting_timer') {
+    return wakeAt
+      ? `Продолжение ${new Date(wakeAt).toLocaleString()}`
+      : 'Ожидает времени продолжения';
+  }
   if (status === 'waiting_confirmation') return 'Ожидается подтверждение';
   if (status === 'waiting_input') return 'Ожидается ваш ответ';
   return 'Выполняется';
@@ -64,7 +70,7 @@ export function ChatRunStatus({ run }: { run: ActiveChatRun }) {
         }
       >
         <Icon name={run.status === 'running' ? 'loader' : 'clock'} size={16} />
-        <span className={styles.status}>{getStatusLabel(run.status)}</span>
+        <span className={styles.status}>{getChatRunStatusLabel(run)}</span>
         <span className={styles.toggle}>
           {expanded ? 'Свернуть' : 'Подробнее'}
         </span>

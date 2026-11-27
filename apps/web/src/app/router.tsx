@@ -40,6 +40,7 @@ const PlatformSettingsPage = lazy(() => import('@/domains/admin/pages/PlatformSe
 const OrchestrationPage = lazy(() => import('@/domains/admin/pages/OrchestrationPage').then(m => ({ default: m.OrchestrationPage })));
 const PeriodicTaskPage = lazy(() => import('@/domains/admin/pages/PeriodicTaskPage'));
 const PeriodicTasksPage = lazy(() => import('@/domains/admin/pages/PeriodicTasksPage'));
+const IntegrationPage = lazy(() => import('@/domains/admin/pages/IntegrationPage'));
 const CredentialPage = lazy(() => import('@/domains/admin/pages/CredentialPage').then(m => ({ default: m.default })));
 const MemoryPage = lazy(() => import('@/domains/admin/pages/MemoryPage'));
 const MemoryTermPage = lazy(() => import('@/domains/admin/pages/MemoryTermPage'));
@@ -47,6 +48,7 @@ const MemoryItemPage = lazy(() => import('@/domains/admin/pages/MemoryItemPage')
 const LongMemoryDocumentPage = lazy(() => import('@/domains/admin/pages/LongMemoryDocumentPage'));
 const AgentRunsPage = lazy(() => import('@/domains/admin/pages/AgentRunsPage'));
 const AgentRunPage = lazy(() => import('@/domains/admin/pages/AgentRunPage'));
+const ExternalRequestPage = lazy(() => import('@/domains/admin/pages/ExternalRequestPage'));
 const MemoryJobPage = lazy(() => import('@/domains/admin/pages/MemoryJobPage'));
 
 // Sandbox pages
@@ -123,6 +125,7 @@ const router = createBrowserRouter([
       { path: 'agent-runs', element: withSuspense(<AgentRunsPage />) },
       { path: 'agent-runs/memory/:id', element: withSuspense(<MemoryJobPage />) },
       { path: 'agent-runs/:id', element: withSuspense(<AgentRunPage />) },
+      { path: 'agent-runs/external-requests/:id', element: withSuspense(<ExternalRequestPage />) },
       { path: 'collections', element: withSuspense(<CollectionListPage />) },
       { path: 'memory', element: withSuspense(<MemoryPage />) },
       { path: 'memory/long-memory/:documentId', element: withSuspense(<LongMemoryDocumentPage />) },
@@ -146,6 +149,7 @@ const router = createBrowserRouter([
       { path: 'rbac', element: <LegacyAccessRedirect /> },
       { path: 'rbac/:id', element: <LegacyAccessRedirect /> },
       { path: 'platform', element: withSuspense(<PlatformSettingsPage />) },
+      { path: 'integrations/:id', element: withSuspense(<IntegrationPage />) },
       { path: 'credentials/new', element: withSuspense(<CredentialPage />) },
       { path: 'credentials/:id', element: withSuspense(<CredentialPage />) },
       { path: 'orchestration', element: withSuspense(<OrchestrationPage />) },

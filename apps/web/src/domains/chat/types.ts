@@ -79,11 +79,14 @@ export interface ActiveChatRun {
   assistantMessageId: string;
   runId?: string;
   progress: ChatRuntimeProgress[];
-  status: 'running' | 'waiting_confirmation' | 'waiting_input';
+  status: 'queued' | 'running' | 'waiting_confirmation' | 'waiting_input' | 'waiting_timer';
+  wakeAt?: string;
 }
 
 export type ChatLifecycleStatus =
+  | 'queued'
   | 'running'
+  | 'waiting_timer'
   | 'waiting_input'
   | 'waiting_confirmation'
   | 'completed'

@@ -37,6 +37,7 @@ interface ResumePausedState {
   message?: string | null;
   action?: Record<string, unknown> | null;
   interaction?: Record<string, unknown>;
+  wakeAt?: string;
 }
 
 interface ChatState {
@@ -235,6 +236,21 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     const interactionQuestion =
       question || message || actionQuestion || actionMessage || actionSummary;
 
+    if (reason === 'waiting_timer' || action.transport === 'messenger') {
+      pauseLookupVersionRef.current += 1;
+      setPendingConfirmations([]);
+      setPendingInput(null);
+      setHasInteraction(false);
+      setPausedRunId(null);
+      setPausedInteractionId(null);
+      setActiveRun(current =>
+        current && (reason === 'waiting_timer' || reason === 'waiting_input' || reason === 'waiting_confirmation')
+          ? { ...current, status: reason, wakeAt: resumeState.wakeAt }
+          : current
+      );
+      return;
+    }
+
     // The public pause contract admits only explicit HITL states. Be
     // defensive for historical/buggy streams: a terminal failure must never
     // turn into a clarification form in the chat UI.
@@ -314,6 +330,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
               ? pause.context.message
               : undefined,
           action: pause.action,
+          wakeAt: typeof pause.context?.wake_at === 'string' ? pause.context.wake_at : undefined,
           interaction:
             pause.context?.interaction &&
             typeof pause.context.interaction === 'object'

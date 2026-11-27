@@ -4,7 +4,8 @@ import type { ChatLifecycleStatus, ChatRuntimeProgress } from './types';
 
 export interface ChatStreamPause {
   runId: string;
-  reason: 'waiting_confirmation' | 'waiting_input';
+  reason: 'waiting_confirmation' | 'waiting_input' | 'waiting_timer';
+  wakeAt?: string;
   question?: string;
   message?: string;
   action: Record<string, unknown>;
@@ -46,7 +47,7 @@ function record(value: unknown): Record<string, unknown> {
 }
 
 const lifecycleStatuses = new Set<ChatLifecycleStatus>([
-  'running', 'waiting_input', 'waiting_confirmation', 'completed', 'failed', 'cancelled',
+  'queued', 'running', 'waiting_input', 'waiting_confirmation', 'waiting_timer', 'completed', 'failed', 'cancelled',
 ]);
 const executionStages = new Set<ChatRuntimeProgress['stage']>([
   'preparing', 'planning', 'executing', 'synthesizing', 'finalizing',
@@ -203,7 +204,8 @@ export async function consumeChatStream(
     } else if (event === 'pause') {
       if (
         (payload.reason !== 'waiting_input' &&
-          payload.reason !== 'waiting_confirmation') ||
+          payload.reason !== 'waiting_confirmation' &&
+          payload.reason !== 'waiting_timer') ||
         typeof payload.run_id !== 'string'
       ) {
         throw new Error('Некорректное событие паузы');
@@ -215,6 +217,7 @@ export async function consumeChatStream(
         pause: {
           runId: payload.run_id,
           reason: payload.reason,
+          wakeAt: typeof context.wake_at === 'string' ? context.wake_at : undefined,
           action: record(payload.action),
           interaction:
             typeof record(context.interaction).id === 'string'

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncGenerator, Dict, Optional
+import json
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Optional
 import uuid
 
 from app.agents import ToolContext
@@ -17,7 +18,11 @@ from app.services.chat_turn_state import ChatTurnState, TurnPhase
 from app.services.runtime_hitl_protocol_service import RuntimeHitlProtocolService
 from app.repositories.chat_context_repository import ChatContextRepository
 
+if TYPE_CHECKING:
+    from app.services.durable_runtime_execution import DurableExecutionSegment
+
 logger = get_logger(__name__)
+DURABLE_POST_FINAL_TAIL_TIMEOUT_SECONDS = 15
 _COMPACTION_DISPATCH_TASKS: set[asyncio.Task[Any]] = set()
 
 
@@ -188,6 +193,7 @@ class ChatTurnOrchestrator:
         resumed_turn_id: Optional[str] = None,
         requested_runtime_run_id: Optional[str] = None,
         cancellation_reason: str = "Client disconnected",
+        durable_segment: DurableExecutionSegment | None = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         turn = ChatTurnState(chat_id=chat_id, request_id=idempotency_key)
         continuation_run_id = (continuation_meta or {}).get("resumed_from_run_id")
@@ -254,7 +260,7 @@ class ChatTurnOrchestrator:
                 }
             else:
                 turn.transition(TurnPhase.USER_PERSISTED)
-                if resumed_turn_id:
+                if resumed_turn_id and durable_segment is None:
                     await self.turn_service.resume_turn(turn_id)
                     await self.turn_service.session.commit()
 
@@ -272,7 +278,21 @@ class ChatTurnOrchestrator:
                 else await self.context_service.load_chat_context(chat_id, limit=get_settings().CHAT_CONTEXT_HISTORY_LIMIT)
             )
             # Keep the pre-turn history immutable for the runtime input.
-            llm_messages = [*context, {"role": "user", "content": str(content)}]
+            llm_messages = context if durable_segment is not None else [
+                *context, {"role": "user", "content": str(content)},
+            ]
+            if durable_segment is not None:
+                referenced_context = (continuation_meta or {}).get("durable_reference_context")
+                if referenced_context:
+                    llm_messages = [{
+                        "role": "user",
+                        "content": "Цитата из исходного треда (справочные данные): "
+                        + json.dumps(referenced_context, ensure_ascii=False),
+                    }, *llm_messages]
+                durable_turn = await self.turn_service.get_by_id(turn_id)
+                if durable_turn is None:
+                    raise ValueError("Durable chat turn no longer exists")
+                user_message_id = str(durable_turn.user_message_id) if durable_turn.user_message_id else None
             loaded_snapshot = preloaded_context_snapshot or await self.context_service.load_snapshot(
                 chat_id=chat_id, owner_id=user_id, tenant_id=tenant_id,
             )
@@ -288,6 +308,7 @@ class ChatTurnOrchestrator:
                     "continuation_meta": continuation_meta or {},
                     "confirmation_tokens": list(confirmation_tokens or []),
                     "chat_post_final_tail_ready": post_final_tail_ready,
+                    **({"durable_segment": durable_segment} if durable_segment is not None else {}),
                 },
             )
 
@@ -297,6 +318,8 @@ class ChatTurnOrchestrator:
                 "action": "routing_request", "description": "Определяю способ выполнения",
             }}
         except (asyncio.CancelledError, GeneratorExit):
+            if durable_segment is not None:
+                raise
             turn.force_cancel()
             import anyio
             with anyio.CancelScope(shield=True):
@@ -307,6 +330,8 @@ class ChatTurnOrchestrator:
                 await self.turn_service.session.commit()
             raise
         except Exception:
+            if durable_segment is not None:
+                raise
             await self.turn_service.session.rollback()
             await self.turn_service.fail_turn(turn_id, error_message="Chat context preparation failed")
             await self.turn_service.session.commit()
@@ -376,6 +401,8 @@ class ChatTurnOrchestrator:
                 if event_data.get("type") not in ("final_content", "run_paused", "error"):
                     yield event_data
         except (asyncio.CancelledError, GeneratorExit) as cancel_exc:
+            if durable_segment is not None:
+                raise
             # Persist explicit Stop as cancelled; runner/control failures carry
             # a distinct cancellation message and become failed outcomes.
             owner_failure = (
@@ -409,6 +436,8 @@ class ChatTurnOrchestrator:
                 await self.turn_service.session.commit()
             raise
         except Exception as runtime_exc:
+            if durable_segment is not None:
+                raise
             llm_error = self._normalize_runtime_error(
                 code="unknown_runtime_error",
                 raw_message=str(runtime_exc),
@@ -425,6 +454,8 @@ class ChatTurnOrchestrator:
                     "run_id": runtime_run_id, "stage": "finalizing",
                     "action": "persisting_answer", "description": "Сохраняю ответ",
                 }}
+                if durable_segment is not None:
+                    await durable_segment.fence()
                 assistant_message = await self.persistence_service.create_assistant_message(
                     chat_id=chat_id,
                     content=assistant_content,
@@ -454,11 +485,19 @@ class ChatTurnOrchestrator:
                         turn_id,
                         assistant_message_id=assistant_message.message_id,
                     )
+                if durable_segment is not None:
+                    await durable_segment.finish(
+                        "failed" if execution_failed else "completed",
+                        public_payload={"content": assistant_content, "message_id": str(assistant_message.message_id),
+                                        "sources": rag_sources, "attachments": final_attachments},
+                    )
                 # The optional worker must observe the same committed deterministic
                 # context and assistant message as the immediately following turn.
                 compaction_revision = await self._compaction_origin_revision(chat_id=chat_id, turn_id=str(turn_id))
                 await self.turn_service.session.commit()
             except asyncio.CancelledError:
+                if durable_segment is not None:
+                    raise
                 turn.force_cancel()
                 import anyio
                 with anyio.CancelScope(shield=True):
@@ -469,6 +508,8 @@ class ChatTurnOrchestrator:
                     await self.turn_service.session.commit()
                 raise
             except Exception:
+                if durable_segment is not None:
+                    raise
                 logger.exception("chat_turn_finalization_failed", extra={"chat_id": chat_id, "turn_id": str(turn_id)})
                 turn.force_error()
                 await self.turn_service.session.rollback()
@@ -507,6 +548,10 @@ class ChatTurnOrchestrator:
             else:
                 turn.transition(TurnPhase.COMPLETED)
             terminal_event_emitted = True
+            if durable_segment is not None:
+                tail_task = tool_ctx.extra.get("chat_post_final_tail_task")
+                if isinstance(tail_task, asyncio.Task):
+                    await asyncio.wait({tail_task}, timeout=DURABLE_POST_FINAL_TAIL_TIMEOUT_SECONDS)
             await self._dispatch_context_compaction(
                 chat_id=chat_id, turn_id=str(turn_id), user_id=user_id, tenant_id=tenant_id,
                 recent_dialogue=llm_messages, user_message_id=user_message_id, assistant_content=assistant_content,
@@ -526,7 +571,11 @@ class ChatTurnOrchestrator:
                     "runtime_event_types": runtime_event_types,
                 },
             )
+            if durable_segment is not None:
+                await durable_segment.fence()
             await self.turn_service.fail_turn(turn_id, error_message="Empty response from agent")
+            if durable_segment is not None:
+                await durable_segment.finish("failed", public_payload={"content": "Не удалось получить ответ."})
             await self.turn_service.session.commit()
             yield {"type": "state", "run_id": runtime_run_id, "status": "failed"}
             yield {"type": "error", "error": "Empty response from agent"}
@@ -534,9 +583,22 @@ class ChatTurnOrchestrator:
         elif run_paused:
             from app.runtime.interaction import interaction_from_context
             active_interaction = interaction_from_context(paused_context)
-            pause_id = active_interaction.id if active_interaction else str(uuid.uuid4())
+            pause_id = active_interaction.id if active_interaction else (
+                (paused_context or {}).get("pause_id") or str(uuid.uuid4())
+            )
             paused_action = {**(paused_action or {}), "pause_id": pause_id}
             paused_context = {**(paused_context or {}), "pause_id": pause_id}
+            if durable_segment is not None:
+                if paused_reason is None:
+                    raise ValueError("Durable pause requires a reason")
+                paused_action["transport"] = "messenger"
+                await durable_segment.finish(paused_reason, context=paused_context, action=paused_action)
+                update = active_interaction.question if active_interaction else paused_context.get("user_update")
+                if update:
+                    await self.persistence_service.create_assistant_message(
+                        chat_id=chat_id, content=update,
+                        extra_meta={"runtime_run_id": runtime_run_id, "runtime_status": paused_reason},
+                    )
             await self.turn_service.pause_turn(
                 turn_id,
                 pause_status=paused_reason or "paused",
@@ -551,7 +613,7 @@ class ChatTurnOrchestrator:
             compaction_revision = await self._compaction_origin_revision(chat_id=chat_id, turn_id=str(turn_id))
             await self.turn_service.session.commit()
             yield {"type": "state", "run_id": runtime_run_id,
-                   "status": paused_reason if paused_reason in {"waiting_input", "waiting_confirmation"} else "waiting_input",
+                   "status": paused_reason if paused_reason in {"waiting_input", "waiting_confirmation", "waiting_timer"} else "waiting_input",
                    "pause_reason": paused_reason or "waiting_input"}
             question = ""
             message = ""
@@ -587,6 +649,8 @@ class ChatTurnOrchestrator:
                 "run_id": runtime_run_id, "stage": "finalizing",
                 "action": "persisting_failure", "description": "Сохраняю результат выполнения",
             }}
+            if durable_segment is not None:
+                await durable_segment.fence()
             await self.turn_service.fail_turn(turn_id, error_message=llm_error["operator_message"])
             if assistant_content.strip():
                 partial_message = await self.persistence_service.create_assistant_message(
@@ -613,6 +677,8 @@ class ChatTurnOrchestrator:
                     },
                 )
                 await self.turn_service.attach_assistant_message(turn_id, failed_message.message_id)
+            if durable_segment is not None:
+                await durable_segment.finish("failed", public_payload={"content": llm_error["user_message"]})
             await self.turn_service.session.commit()
             yield {"type": "state", "run_id": runtime_run_id, "status": "failed"}
             if not terminal_event_emitted:

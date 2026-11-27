@@ -14,7 +14,9 @@ import type { Chat, PaginatedResponse } from '@/shared/api/types';
 import { useChatNotificationsStore } from '../model/chatNotifications.store';
 
 const statuses = new Set<ChatLifecycleStatus>([
+  'queued',
   'running',
+  'waiting_timer',
   'waiting_input',
   'waiting_confirmation',
   'completed',
@@ -93,7 +95,9 @@ function notifyCompletedTransitions(
     const before = previousByChat.get(current.chat_id);
     if (
       !before ||
+      before.status === 'queued' ||
       before.status === 'running' ||
+      before.status === 'waiting_timer' ||
       before.status === 'waiting_input' ||
       before.status === 'waiting_confirmation' ||
       before.run_id !== current.run_id ||

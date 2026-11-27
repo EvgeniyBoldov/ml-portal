@@ -50,6 +50,15 @@ class RuntimeHitlProtocolService:
 
     @staticmethod
     def public_pause(payload: Dict[str, Any]) -> Dict[str, Any]:
+        if payload.get("reason") == "waiting_timer":
+            context = payload.get("context") or {}
+            return {
+                "run_id": payload.get("run_id"),
+                "reason": "waiting_timer",
+                "action": {"kind": "cancel", "pause_id": context.get("pause_id")},
+                "context": {key: context[key] for key in ("pause_id", "wake_at") if key in context},
+                "contract_version": RuntimeHitlProtocolService.CONTRACT_VERSION,
+            }
         result = deepcopy(payload)
         context = result.get("context") or {}
         interaction = interaction_from_context(context)
